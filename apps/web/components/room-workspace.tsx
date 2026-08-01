@@ -19,6 +19,7 @@ import {
   VideoCameraSlashIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
@@ -70,6 +71,7 @@ function StreamVideo({ stream }: { stream: MediaStream }) {
 }
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
+  const reduceMotion = useReducedMotion();
   const [panel, setPanel] = useState<Panel>("chat");
   const [messages, setMessages] = useState(initialMessages);
   const [draft, setDraft] = useState("");
@@ -341,65 +343,83 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       </header>
       <div className="room-body">
         <section className="room-main">
-          {mode === "call" ? (
-            <div className="stage">
-              {participant.map((person, index) => {
-                const remoteStream = person.self ? undefined : Object.values(remoteStreams)[index - 1];
-                return (
-                  <article className={`video-tile ${person.self ? "self" : ""}`} key={person.name}>
-                    {person.self && (camera || sharing) && <video ref={videoRef} autoPlay muted playsInline />}
-                    {!person.self && remoteStream && <StreamVideo stream={remoteStream} />}
-                    {!person.self && !remoteStream && (
-                      <div className="video-placeholder">
-                        <span className="avatar">{person.initials}</span>
-                      </div>
-                    )}
-                    {person.self && !camera && !sharing && (
-                      <div className="video-placeholder">
-                        <span className="avatar">{person.initials}</span>
-                      </div>
-                    )}
-                    <div className="tile-label">
-                      <span>{person.label}</span>
-                      {person.self && (
-                        <span className="mic">
-                          {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
-                        </span>
-                      )}
-                    </div>
-                    {person.name === "Lina Novak" && <span className="tile-status">Speaking</span>}
-                    {person.self && sharing && <span className="tile-status">Sharing</span>}
-                  </article>
-                );
-              })}
-            </div>
-          ) : (
-            <div style={{ padding: 15, minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0,1fr)" }}>
-              <div className="notes-head">
-                <strong style={{ fontSize: 13 }}>src/retry-policy.ts</strong>
-                <span>Saved locally · shared editor channel ready</span>
-              </div>
-              <textarea
-                className="board"
-                value={code}
-                onChange={(event) => {
-                  setCode(event.target.value);
-                  publish("editor", { content: event.target.value });
-                }}
-                spellCheck={false}
-                style={{
-                  padding: 16,
-                  resize: "none",
-                  border: "1px solid var(--line)",
-                  color: "#d8e2f0",
-                  fontFamily: '"SFMono-Regular", Consolas, monospace',
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  outline: "none",
-                }}
-              />
-            </div>
-          )}
+          <AnimatePresence initial={false} mode="wait">
+            {mode === "call" ? (
+              <motion.div
+                key="call"
+                className="room-mode"
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.99 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.99 }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+              >
+                <div className="stage">
+                  {participant.map((person, index) => {
+                    const remoteStream = person.self ? undefined : Object.values(remoteStreams)[index - 1];
+                    return (
+                      <article className={`video-tile ${person.self ? "self" : ""}`} key={person.name}>
+                        {person.self && (camera || sharing) && <video ref={videoRef} autoPlay muted playsInline />}
+                        {!person.self && remoteStream && <StreamVideo stream={remoteStream} />}
+                        {!person.self && !remoteStream && (
+                          <div className="video-placeholder">
+                            <span className="avatar">{person.initials}</span>
+                          </div>
+                        )}
+                        {person.self && !camera && !sharing && (
+                          <div className="video-placeholder">
+                            <span className="avatar">{person.initials}</span>
+                          </div>
+                        )}
+                        <div className="tile-label">
+                          <span>{person.label}</span>
+                          {person.self && (
+                            <span className="mic">
+                              {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
+                            </span>
+                          )}
+                        </div>
+                        {person.name === "Lina Novak" && <span className="tile-status">Speaking</span>}
+                        {person.self && sharing && <span className="tile-status">Sharing</span>}
+                      </article>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="editor"
+                className="room-mode room-editor-mode"
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.99 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.99 }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+              >
+                <div className="notes-head">
+                  <strong style={{ fontSize: 13 }}>src/retry-policy.ts</strong>
+                  <span>Saved locally - shared editor channel ready</span>
+                </div>
+                <textarea
+                  className="board"
+                  value={code}
+                  onChange={(event) => {
+                    setCode(event.target.value);
+                    publish("editor", { content: event.target.value });
+                  }}
+                  spellCheck={false}
+                  style={{
+                    padding: 16,
+                    resize: "none",
+                    border: "1px solid var(--line)",
+                    color: "#d8e2f0",
+                    fontFamily: '"SFMono-Regular", Consolas, monospace',
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    outline: "none",
+                  }}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="room-controls">
             <button
               className={`control ${mic ? "active" : ""}`}

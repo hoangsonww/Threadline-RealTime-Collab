@@ -1633,6 +1633,33 @@ textarea:focus-visible {
   padding-bottom: 44px;
 }
 
+.landing-scroll-progress {
+  position: fixed;
+  z-index: 40;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  transform-origin: 0 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 14px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.magnetic-link {
+  display: inline-flex;
+  will-change: transform;
+}
+
+.magnetic-link .button svg,
+.inline-link svg {
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.magnetic-link:hover .button svg,
+.inline-link:hover svg {
+  transform: translateX(3px);
+}
+
 .landing::before {
   position: absolute;
   z-index: -1;
@@ -1720,6 +1747,7 @@ textarea:focus-visible {
 
 .landing-scene {
   position: relative;
+  isolation: isolate;
   min-height: 500px;
   margin: 0;
   overflow: hidden;
@@ -1727,6 +1755,21 @@ textarea:focus-visible {
   border-radius: 24px;
   background: #101722;
   box-shadow: var(--shadow);
+}
+
+.landing-scene::before {
+  position: absolute;
+  z-index: 1;
+  inset: auto auto -30% -22%;
+  width: 65%;
+  aspect-ratio: 1;
+  content: "";
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 26%, transparent), transparent 68%);
+  filter: blur(4px);
+  mix-blend-mode: screen;
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .landing-scene::after {
@@ -1744,6 +1787,14 @@ textarea:focus-visible {
   object-fit: cover;
   object-position: 58% center;
   filter: saturate(0.86) contrast(1.04);
+  transition:
+    transform 1.1s cubic-bezier(0.16, 1, 0.3, 1),
+    filter 600ms ease;
+}
+
+.landing-scene:hover img {
+  transform: scale(1.025);
+  filter: saturate(0.96) contrast(1.05);
 }
 
 .scene-caption {
@@ -1868,12 +1919,47 @@ textarea:focus-visible {
 
 .record-flow article {
   position: relative;
+  isolation: isolate;
   min-height: 190px;
   padding: 26px;
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--surface) 76%, transparent);
   box-shadow: var(--shadow-soft);
+  transition:
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    background 220ms ease;
+}
+
+.record-flow article::after {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  content: "";
+  border-radius: inherit;
+  background: radial-gradient(
+    260px circle at var(--spotlight-x, 50%) var(--spotlight-y, 50%),
+    color-mix(in srgb, var(--accent) 17%, transparent),
+    transparent 58%
+  );
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.record-flow article > * {
+  position: relative;
+  z-index: 1;
+}
+
+.record-flow article:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  box-shadow: var(--shadow);
+}
+
+.record-flow article:hover::after {
+  opacity: 1;
 }
 
 .record-flow article:first-child {
@@ -1937,6 +2023,14 @@ textarea:focus-visible {
   object-fit: cover;
   object-position: 58% center;
   filter: saturate(0.86) contrast(1.04);
+  transition:
+    transform 900ms cubic-bezier(0.16, 1, 0.3, 1),
+    filter 400ms ease;
+}
+
+.detail-image-wrap:hover img {
+  transform: scale(1.035);
+  filter: saturate(0.96) contrast(1.05);
 }
 
 .detail-copy dl {
@@ -2000,6 +2094,18 @@ textarea:focus-visible {
   color: var(--ink);
   font-size: 13px;
   font-weight: 620;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.identity-points span:hover {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: var(--surface-raised);
+  color: var(--accent-strong);
+  transform: translateY(-2px);
 }
 
 .landing-cta {
@@ -2206,7 +2312,8 @@ textarea:focus-visible {
   transition:
     background 150ms ease,
     border-color 150ms ease,
-    color 150ms ease;
+    color 150ms ease,
+    transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .workspace-nav a:hover,
@@ -2214,6 +2321,10 @@ textarea:focus-visible {
   border-color: var(--line-soft);
   background: var(--surface-raised);
   color: var(--ink);
+}
+
+.workspace-nav a:hover {
+  transform: translateX(2px);
 }
 
 .workspace-nav a.active {
@@ -2341,6 +2452,7 @@ textarea:focus-visible {
   border-radius: 15px;
   background: color-mix(in srgb, var(--surface) 77%, transparent);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025);
+  will-change: transform;
 }
 
 .room-card:hover {
@@ -2354,6 +2466,11 @@ textarea:focus-visible {
   border-radius: 12px;
   background: var(--accent-soft);
   color: var(--accent-strong);
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.room-card:hover .room-card-icon {
+  transform: rotate(-5deg) scale(1.05);
 }
 
 .room-card h4 {
@@ -2464,6 +2581,22 @@ textarea:focus-visible {
     var(--canvas-deep);
 }
 
+.room-mode {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.room-mode .stage {
+  height: 100%;
+}
+
+.room-editor-mode {
+  display: grid;
+  min-height: 0;
+  padding: 15px;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
 .stage {
   gap: 13px;
   padding: 20px;
@@ -2474,6 +2607,10 @@ textarea:focus-visible {
   border-radius: 16px;
   background: var(--surface);
   box-shadow: 0 12px 35px rgba(0, 0, 0, 0.13);
+  transition:
+    border-color 220ms ease,
+    box-shadow 220ms ease,
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .video-tile.self {
@@ -2516,6 +2653,10 @@ textarea:focus-visible {
   background: rgba(12, 39, 70, 0.78);
   color: #d6eaff;
   font-weight: 660;
+}
+
+.video-tile:has(.tile-status) {
+  box-shadow: 0 14px 38px color-mix(in srgb, var(--accent) 10%, rgba(0, 0, 0, 0.16));
 }
 
 .room-controls {
@@ -2582,6 +2723,7 @@ textarea:focus-visible {
   border-color: var(--line-soft);
   background: var(--surface-raised);
   color: var(--ink);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
 }
 
 .chat-list,
@@ -2681,6 +2823,61 @@ textarea:focus-visible {
   margin: 5px 0 0 2px;
   background: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.status-dot {
+  position: relative;
+}
+
+@keyframes threadline-status-ping {
+  0% {
+    opacity: 0.55;
+    transform: scale(0.78);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.3);
+  }
+}
+
+@keyframes threadline-scene-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(8%, -7%, 0) scale(1.08);
+  }
+}
+
+@keyframes threadline-badge-breathe {
+  0%,
+  100% {
+    border-color: rgba(138, 193, 255, 0.35);
+  }
+  50% {
+    border-color: rgba(138, 193, 255, 0.68);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-scene::before {
+    animation: threadline-scene-drift 10s ease-in-out infinite;
+  }
+
+  .status-dot::after {
+    position: absolute;
+    inset: -3px;
+    content: "";
+    border: 1px solid var(--accent);
+    border-radius: inherit;
+    animation: threadline-status-ping 2.2s ease-out infinite;
+  }
+
+  .tile-status {
+    animation: threadline-badge-breathe 2.4s ease-in-out infinite;
+  }
 }
 
 .timeline-event p {

@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 type Room = { id: string; name: string; description: string; people: number; updated: string; live?: boolean };
 const defaultRooms: Room[] = [
@@ -47,6 +48,7 @@ const defaultRooms: Room[] = [
 
 export function Dashboard() {
   const router = useRouter();
+  const reduceMotion = useReducedMotion();
   const [rooms, setRooms] = useState(defaultRooms);
   const [modal, setModal] = useState(false);
   const [displayName, setDisplayName] = useState("Avery");
@@ -148,12 +150,18 @@ export function Dashboard() {
               </button>
             </div>
             <div className="room-list">
-              {rooms.map((room) => (
-                <button
+              {rooms.map((room, index) => (
+                <motion.button
                   className="room-card"
                   key={room.id}
+                  layout
                   onClick={() => router.push(`/app/rooms/${room.id}`)}
                   style={{ textAlign: "left" }}
+                  initial={reduceMotion ? false : { opacity: 0, y: 10 }}
+                  animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+                  whileHover={reduceMotion ? undefined : { scale: 1.006, y: -2 }}
+                  whileTap={reduceMotion ? undefined : { scale: 0.992 }}
+                  transition={{ delay: index * 0.045, duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
                 >
                   <span className="room-card-icon">
                     <VideoConferenceIcon size={21} weight="duotone" />
@@ -171,7 +179,7 @@ export function Dashboard() {
                     </span>
                     <ArrowUpRightIcon size={14} />
                   </span>
-                </button>
+                </motion.button>
               ))}
             </div>
           </section>
@@ -239,48 +247,66 @@ export function Dashboard() {
           </aside>
         </div>
       </div>
-      {modal && (
-        <div className="modal-backdrop" role="presentation">
-          <form className="modal" onSubmit={createRoom} aria-modal="true" role="dialog">
-            <div className="modal-head">
-              <div>
-                <h3>Open a room</h3>
-                <p>Create the shared place for the session and its record.</p>
-              </div>
-              <button
-                className="button button-ghost button-icon"
-                type="button"
-                onClick={() => setModal(false)}
-                aria-label="Close"
-              >
-                <XIcon size={17} />
-              </button>
-            </div>
-            <div className="modal-form">
-              <div className="field">
-                <label htmlFor="room-name">Room name</label>
-                <input id="room-name" name="name" autoFocus placeholder="incident-response" required />
-              </div>
-              <div className="field">
-                <label htmlFor="room-description">Purpose</label>
-                <textarea
-                  id="room-description"
-                  name="description"
-                  placeholder="What should this room help the team accomplish?"
-                />
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="button button-ghost" onClick={() => setModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="button button-primary">
-                  Open room
+      <AnimatePresence>
+        {modal && (
+          <motion.div
+            className="modal-backdrop"
+            role="presentation"
+            initial={reduceMotion ? false : { opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <motion.form
+              className="modal"
+              onSubmit={createRoom}
+              aria-modal="true"
+              role="dialog"
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.97, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 10 }}
+              transition={{ type: "spring", stiffness: 330, damping: 27, mass: 0.7 }}
+            >
+              <div className="modal-head">
+                <div>
+                  <h3>Open a room</h3>
+                  <p>Create the shared place for the session and its record.</p>
+                </div>
+                <button
+                  className="button button-ghost button-icon"
+                  type="button"
+                  onClick={() => setModal(false)}
+                  aria-label="Close"
+                >
+                  <XIcon size={17} />
                 </button>
               </div>
-            </div>
-          </form>
-        </div>
-      )}
+              <div className="modal-form">
+                <div className="field">
+                  <label htmlFor="room-name">Room name</label>
+                  <input id="room-name" name="name" autoFocus placeholder="incident-response" required />
+                </div>
+                <div className="field">
+                  <label htmlFor="room-description">Purpose</label>
+                  <textarea
+                    id="room-description"
+                    name="description"
+                    placeholder="What should this room help the team accomplish?"
+                  />
+                </div>
+                <div className="modal-actions">
+                  <button type="button" className="button button-ghost" onClick={() => setModal(false)}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="button button-primary">
+                    Open room
+                  </button>
+                </div>
+              </div>
+            </motion.form>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
