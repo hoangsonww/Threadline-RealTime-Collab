@@ -1,0 +1,17 @@
+{
+  "name": "@threadline/realtime",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "wrangler types && prettier --write worker-configuration.d.ts && tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^6.0.10"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "wrangler": "^4.14.0"
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "threadline",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev:local",
+    "dev:api": "npm run dev --workspace=@threadline/api",
+    "dev:api:local": "cross-env NODE_ENV=development PORT=4000 WEB_ORIGIN=http://localhost:3000 MONGODB_URI= npm run dev --workspace=@threadline/api",
+    "dev:local": "concurrently --kill-others-on-fail --names api,realtime,web --prefix-colors blue,magenta,cyan \"npm run dev:api:local\" \"npm run dev:realtime:local\" \"npm run dev:web:local\"",
+    "dev:realtime": "npm exec --workspace=@threadline/realtime -- wrangler dev",
+    "dev:realtime:local": "npm exec --workspace=@threadline/realtime -- wrangler dev --local --port 8787",
+    "dev:web": "npm run dev --workspace=@threadline/web",
+    "dev:web:local": "cross-env NEXT_PUBLIC_API_ORIGIN=http://localhost:4000 NEXT_PUBLIC_REALTIME_ORIGIN=http://localhost:8787 npm run dev --workspace=@threadline/web",
+    "docker:build": "docker compose build",
+    "docker:down": "docker compose down --remove-orphans",
+    "docker:up": "docker compose up --build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "k8s:validate": "kubectl kustomize infra/kubernetes/overlays/development > /dev/null && kubectl kustomize infra/kubernetes/overlays/production > /dev/null",
+    "lint": "eslint apps --max-warnings=0",
+    "lint:fix": "eslint apps --fix",
+    "prepare": "husky",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml,css}": "prettier --write"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.27.0",
+    "@playwright/test": "^1.52.0",
+    "@types/supertest": "^6.0.2",
+    "concurrently": "^10.0.4",
+    "cross-env": "^10.1.0",
+    "eslint": "^9.27.0",
+    "eslint-config-next": "^16.2.12",
+    "eslint-config-prettier": "^10.1.5",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.2.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.0.0",
+    "prettier": "^3.5.3",
+    "prettier-plugin-packagejson": "^2.5.10",
+    "supertest": "^7.1.1",
+    "typescript-eslint": "^8.32.0",
+    "vitest": "^3.1.4"
+  },
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": ">=20.11"
+  }
+}

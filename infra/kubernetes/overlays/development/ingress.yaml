@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: threadline
+spec:
+  tls:
+    - hosts:
+        - threadline-dev.example.invalid
+        - api.threadline-dev.example.invalid
+      secretName: threadline-tls
+  rules:
+    - host: threadline-dev.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: threadline-web
+                port:
+                  name: http
+    - host: api.threadline-dev.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: threadline-api
+                port:
+                  name: http

@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: threadline
+  labels:
+    app.kubernetes.io/name: threadline
+    app.kubernetes.io/part-of: threadline
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - threadline.example.invalid
+        - api.threadline.example.invalid
+      secretName: threadline-tls
+  rules:
+    - host: threadline.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: threadline-web
+                port:
+                  name: http
+    - host: api.threadline.example.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: threadline-api
+                port:
+                  name: http

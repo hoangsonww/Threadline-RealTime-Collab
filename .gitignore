@@ -1,0 +1,13 @@
+node_modules
+.idea
+.next
+.wrangler
+dist
+.env
+.env.local
+.dev.vars
+infra/kubernetes/overlays/*/secrets*.yaml
+coverage
+*.tsbuildinfo
+.playwright-cli
+output/playwright

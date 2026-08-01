@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threadline-runtime
+data:
+  WEB_ORIGIN: https://threadline-dev.example.invalid
+  OIDC_ISSUER: https://threadline-dev.example.invalid/api/identity
+  AUTH_ACTION_ORIGIN: https://threadline-dev.example.invalid

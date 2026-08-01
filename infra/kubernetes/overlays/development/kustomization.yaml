@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: threadline-development
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+images:
+  - name: threadline-api
+    newName: threadline-api
+    newTag: dev
+  - name: threadline-web
+    newName: threadline-web
+    newTag: dev
+
+patches:
+  - path: replicas.yaml
+  - path: autoscaling.yaml
+  - path: runtime.yaml
+  - path: ingress.yaml

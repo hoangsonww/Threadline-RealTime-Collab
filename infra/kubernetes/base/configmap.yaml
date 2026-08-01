@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: threadline-runtime
+  labels:
+    app.kubernetes.io/name: threadline
+    app.kubernetes.io/part-of: threadline
+data:
+  NODE_ENV: production
+  PORT: "4000"
+  COOKIE_SECURE: "true"
+  WEB_ORIGIN: https://threadline.example.invalid
+  OIDC_ISSUER: https://threadline.example.invalid/api/identity
+  AUTH_ACTION_ORIGIN: https://threadline.example.invalid

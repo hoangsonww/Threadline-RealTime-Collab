@@ -1,0 +1,23 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: threadline-api
+  labels:
+    app.kubernetes.io/part-of: threadline
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: threadline-api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: threadline-web
+  labels:
+    app.kubernetes.io/part-of: threadline
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: threadline-web

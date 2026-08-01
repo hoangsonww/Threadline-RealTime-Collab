@@ -1,0 +1,14 @@
+name = "threadline-realtime"
+main = "src/index.ts"
+compatibility_date = "2026-07-31"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "RoomDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDurableObject"]
+
+[secrets]
+required = ["ROOM_TICKET_SECRET", "PERSISTENCE_SECRET"]
