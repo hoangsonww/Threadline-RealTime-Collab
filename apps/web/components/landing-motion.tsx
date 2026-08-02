@@ -1,12 +1,17 @@
 "use client";
 
 import { ArrowRightIcon, ArrowUpRightIcon, FolderOpenIcon, VideoConferenceIcon } from "@phosphor-icons/react";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Link from "next/link";
 import type { PointerEvent, ReactNode } from "react";
 import { useRef } from "react";
 import { motion, useReducedMotion, useScroll, useSpring } from "motion/react";
 
 const ease = [0.16, 1, 0.3, 1] as const;
+
+gsap.registerPlugin(ScrollTrigger);
 
 type MagneticLinkProps = {
   children: ReactNode;
@@ -113,22 +118,59 @@ const storyCards = [
   {
     description: "Bring the call, screen, editor, and whiteboard into one focused space.",
     icon: VideoConferenceIcon,
+    number: "01",
     title: "Gather live",
   },
   {
     description: "Save decisions and artifacts exactly where the conversation happened.",
     icon: FolderOpenIcon,
+    number: "02",
     title: "Capture the turn",
   },
   {
     description: "Return with the context, ownership, and next move already clear.",
     icon: ArrowUpRightIcon,
+    number: "03",
     title: "Pick it up later",
   },
 ];
 
 export function RoomStory() {
   const reduceMotion = useReducedMotion();
+  const scope = useRef<HTMLDivElement>(null);
+
+  useGSAP(
+    () => {
+      if (reduceMotion || !scope.current) return;
+      const record = scope.current.closest<HTMLElement>(".landing-record");
+      const cards = gsap.utils.toArray<HTMLElement>("article", scope.current);
+      if (!record || cards.length === 0) return;
+
+      const media = gsap.matchMedia();
+      media.add("(min-width: 960px)", () => {
+        cards.forEach((card) => {
+          gsap.fromTo(
+            card,
+            { opacity: 0.34, scale: 0.955 },
+            {
+              opacity: 1,
+              scale: 1,
+              ease: "none",
+              scrollTrigger: {
+                trigger: card,
+                start: "top 78%",
+                end: "top 44%",
+                scrub: 0.55,
+              },
+            },
+          );
+        });
+      });
+
+      return () => media.revert();
+    },
+    { dependencies: [reduceMotion], scope },
+  );
 
   const setSpotlight = (event: PointerEvent<HTMLElement>) => {
     const target = event.currentTarget;
@@ -138,24 +180,21 @@ export function RoomStory() {
   };
 
   return (
-    <div className="record-flow" aria-label="A session becoming a durable record">
-      {storyCards.map((card, index) => {
+    <div ref={scope} className="record-flow" aria-label="A session becoming a durable record">
+      {storyCards.map((card) => {
         const Icon = card.icon;
         return (
           <motion.article
             key={card.title}
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.975, y: 18 }}
             whileHover={reduceMotion ? undefined : { y: -5 }}
-            whileInView={reduceMotion ? undefined : { opacity: 1, scale: 1, y: 0 }}
-            viewport={{ amount: 0.3, once: true }}
-            transition={{ delay: index * 0.08, duration: 0.55, ease }}
+            transition={{ duration: 0.28, ease }}
             onPointerLeave={(event) => {
               event.currentTarget.style.removeProperty("--spotlight-x");
               event.currentTarget.style.removeProperty("--spotlight-y");
             }}
             onPointerMove={setSpotlight}
           >
-            <span>{String(index + 1).padStart(2, "0")}</span>
+            <span>{card.number}</span>
             <Icon size={24} weight="duotone" />
             <h3>{card.title}</h3>
             <p>{card.description}</p>

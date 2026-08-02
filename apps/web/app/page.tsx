@@ -9,6 +9,7 @@ import {
   VideoConferenceIcon,
 } from "@phosphor-icons/react/dist/ssr";
 import { Brand } from "../components/brand";
+import { LandingAtmosphere } from "../components/landing-atmosphere";
 import {
   LandingHeroCopy,
   LandingReveal,
@@ -17,18 +18,17 @@ import {
   RoomStory,
 } from "../components/landing-motion";
 import { LandingScene } from "../components/landing-scene";
-import { ThemeToggle } from "../components/theme-toggle";
 
 export default function Home() {
   return (
     <main id="main-content" className="landing shell">
       <LandingScrollProgress />
+      <LandingAtmosphere />
       <nav className="landing-nav" aria-label="Primary navigation">
         <Brand />
         <div className="landing-nav-links">
           <a href="#record">The record</a>
           <a href="#identity">Identity</a>
-          <ThemeToggle compact />
           <Link className="button button-secondary" href="/login">
             Sign in
           </Link>
