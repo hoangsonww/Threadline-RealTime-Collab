@@ -2,6 +2,7 @@
   "name": "@threadline/api",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "generate:oidc-key": "tsx scripts/generate-oidc-key.ts",

@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { createApp } from "./app";
-import { MemoryRepository } from "./repository";
-import { OidcSigner } from "./security";
+import { createApp } from "./application.js";
+import { MemoryRepository } from "./repository.js";
+import { OidcSigner } from "./security.js";
 
-async function createTestApp() {
+async function createTestApp(additionalWebOrigins?: string[], secureCookies = false) {
   const signer = await OidcSigner.create();
   const delivered: Array<{ type: string; actionUrl: string }> = [];
   const app = createApp({
     repository: new MemoryRepository(),
     issuer: "https://id.threadline.test",
     webOrigin: "https://app.threadline.test",
-    secureCookies: false,
+    additionalWebOrigins,
+    secureCookies,
     ticketSecret: "test-ticket-secret",
     ingestSecret: "test-ingest-secret",
     signer,
@@ -26,6 +27,73 @@ async function createTestApp() {
 }
 
 describe("Threadline identity API", () => {
+  it("redirects the API root to CDN-backed Swagger and ReDoc documentation", async () => {
+    const { app } = await createTestApp();
+    const root = await request(app).get("/");
+    expect(root.status).toBe(302);
+    expect(root.headers.location).toBe("/api-docs");
+
+    const swagger = await request(app).get("/api-docs");
+    expect(swagger.status).toBe(200);
+    expect(swagger.headers["content-security-policy"]).toContain("https://cdn.jsdelivr.net");
+    expect(swagger.text).toContain("swagger-ui-dist@5");
+    expect(swagger.text).toContain("twitter/twemoji@14.0.2");
+
+    const redoc = await request(app).get("/api-docs/redoc");
+    expect(redoc.status).toBe(200);
+    expect(redoc.text).toContain("redoc@2");
+
+    const specification = await request(app).get("/openapi.json");
+    expect(specification.status).toBe(200);
+    expect(specification.body.openapi).toBe("3.1.1");
+    expect(specification.body.servers[0].url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(Object.keys(specification.body.paths)).toEqual(
+      expect.arrayContaining([
+        "/v1/auth/register",
+        "/v1/orgs/{orgId}/rooms",
+        "/v1/rooms/{roomId}/ticket",
+        "/v1/pats",
+        "/oauth/authorize",
+        "/oauth/token",
+        "/v1/internal/room-events",
+      ]),
+    );
+  });
+
+  it("permits an explicitly configured local development origin and rejects unknown origins", async () => {
+    const { app } = await createTestApp(["http://localhost:3000"]);
+    const allowed = await request(app).get("/health").set("origin", "http://localhost:3000");
+    expect(allowed.headers["access-control-allow-origin"]).toBe("http://localhost:3000");
+    const rejected = await request(app).get("/health").set("origin", "https://untrusted.example");
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("keeps production cookies secure except through an explicitly allowed loopback proxy", async () => {
+    const { app } = await createTestApp(["http://localhost:3000"], true);
+    const localRegistration = await request(app).post("/v1/auth/register").set("origin", "http://localhost:3000").send({
+      email: "local-proxy@example.com",
+      username: "local-proxy",
+      displayName: "Local Proxy",
+      password: "correct-horse-battery",
+      organizationName: "Local Engineering",
+    });
+    expect(localRegistration.status).toBe(201);
+    expect(localRegistration.headers["set-cookie"][0]).not.toContain("Secure");
+
+    const productionRegistration = await request(app)
+      .post("/v1/auth/register")
+      .set("origin", "https://app.threadline.test")
+      .send({
+        email: "production@example.com",
+        username: "production",
+        displayName: "Production User",
+        password: "correct-horse-battery",
+        organizationName: "Production Engineering",
+      });
+    expect(productionRegistration.status).toBe(201);
+    expect(productionRegistration.headers["set-cookie"][0]).toContain("Secure");
+  });
+
   it("creates a session, PAT, room, and short-lived room ticket", async () => {
     const { app } = await createTestApp();
     const agent = request.agent(app);
@@ -77,8 +145,8 @@ describe("Threadline identity API", () => {
     expect(ingestion.status).toBe(202);
     const events = await agent.get(`/v1/rooms/${room.body.room.id}/events`);
     expect(events.status).toBe(200);
-    expect(events.body.events).toHaveLength(1);
-    expect(events.body.events[0].type).toBe("chat");
+    expect(events.body.events).toHaveLength(2);
+    expect(events.body.events.at(-1).type).toBe("chat");
   });
 
   it("performs an authorization-code-with-PKCE exchange and serves userinfo", async () => {
@@ -154,5 +222,138 @@ describe("Threadline identity API", () => {
       .send({ email: "reset@example.com", password: "a-new-correct-horse-battery" });
     expect(newLogin.status).toBe(200);
     expect((await agent.get("/v1/auth/me")).status).toBe(401);
+  });
+
+  it("tracks email verification state through registration, resend, and confirmation", async () => {
+    const { app, delivered } = await createTestApp();
+    const agent = request.agent(app);
+    await agent.post("/v1/auth/register").send({
+      email: "verify@example.com",
+      username: "verify-user",
+      displayName: "Verify User",
+      password: "correct-horse-battery",
+      organizationName: "Northstar Engineering",
+    });
+    expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(false);
+
+    const resend = await agent.post("/v1/auth/email-verification/request");
+    expect(resend.status).toBe(202);
+    const delivery = [...delivered].reverse().find((item) => item.type === "email_verification");
+    const token = new URL(delivery?.actionUrl ?? "https://invalid.test").searchParams.get("token");
+    expect(token).toBeTruthy();
+
+    const confirm = await request(app).post("/v1/auth/email-verification/confirm").send({ token });
+    expect(confirm.status).toBe(204);
+    expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(true);
+  });
+
+  it("tracks rate limits per route, not globally across every rate-limited endpoint", async () => {
+    const { app } = await createTestApp();
+    // Login and register are mounted at distinct exact paths, so a naive key built
+    // from request.path alone (which Express rebases to "/" inside an exact-path
+    // app.use middleware) would collide the two into one shared counter.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await request(app)
+        .post("/v1/auth/login")
+        .send({ email: "nobody@example.com", password: "wrong-password" });
+      expect(response.status).toBe(401);
+    }
+    const loginBlocked = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "nobody@example.com", password: "wrong-password" });
+    expect(loginBlocked.status).toBe(429);
+
+    // Register has its own, separate budget and must still succeed.
+    const registration = await request(app).post("/v1/auth/register").send({
+      email: "unaffected-by-login-limit@example.com",
+      username: "unaffected",
+      displayName: "Unaffected User",
+      password: "correct-horse-battery",
+      organizationName: "Unaffected Org",
+    });
+    expect(registration.status).toBe(201);
+  });
+
+  it("enforces organization and restricted-room ABAC for reads, writes, tickets, and activity", async () => {
+    const { app } = await createTestApp();
+    const owner = request.agent(app);
+    const member = request.agent(app);
+    const ownerRegistration = await owner.post("/v1/auth/register").send({
+      email: "owner@example.com",
+      username: "owner",
+      displayName: "Owner User",
+      password: "correct-horse-battery",
+      organizationName: "Owner Organization",
+    });
+    const memberRegistration = await member.post("/v1/auth/register").send({
+      email: "member@example.com",
+      username: "member",
+      displayName: "Member User",
+      password: "correct-horse-battery",
+      organizationName: "Member Organization",
+    });
+    const ownerOrg = (await owner.get("/v1/auth/me")).body.organizations[0].id as string;
+    const restricted = await owner.post(`/v1/orgs/${ownerOrg}/rooms`).send({
+      name: "private-incident",
+      visibility: "restricted",
+      classification: "confidential",
+    });
+    expect(restricted.status).toBe(201);
+
+    // A member of another organization cannot enumerate, fetch, or join it.
+    expect((await member.get(`/v1/orgs/${ownerOrg}/rooms`)).status).toBe(403);
+    expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(403);
+    expect((await member.get(`/v1/rooms/${restricted.body.room.id}/events`)).status).toBe(403);
+
+    // Once added to the organization, a standard member still cannot see a
+    // restricted room or create one without an explicit delegated attribute.
+    const added = await owner
+      .post(`/v1/orgs/${ownerOrg}/members`)
+      .send({ email: "member@example.com", role: "member" });
+    expect(added.status).toBe(201);
+    expect((await member.get(`/v1/orgs/${ownerOrg}/rooms`)).body.rooms).toHaveLength(0);
+    expect((await member.post(`/v1/orgs/${ownerOrg}/rooms`).send({ name: "not-permitted" })).status).toBe(403);
+    expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(403);
+
+    // An explicit room membership grants read/join only. Viewer writes are
+    // rejected by the API ingress even if a client tries to forge an event.
+    const addToRoom = await owner.post(`/v1/rooms/${restricted.body.room.id}/members`).send({
+      userId: memberRegistration.body.user.id,
+      role: "viewer",
+    });
+    expect(addToRoom.status).toBe(201);
+    expect((await member.get(`/v1/rooms/${restricted.body.room.id}/events`)).status).toBe(200);
+    expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(200);
+    expect(
+      (
+        await request(app)
+          .post("/v1/internal/room-events")
+          .set("x-threadline-ingest", "test-ingest-secret")
+          .send({
+            roomId: restricted.body.room.id,
+            event: {
+              type: "chat",
+              payload: { text: "forged" },
+              from: memberRegistration.body.user.id,
+              at: new Date().toISOString(),
+            },
+          })
+      ).status,
+    ).toBe(403);
+
+    // Activity and calendars are organization scoped as well.
+    expect((await member.get(`/v1/orgs/${ownerOrg}/activity`)).status).toBe(200);
+    expect((await request(app).get(`/v1/orgs/${ownerOrg}/calendar`)).status).toBe(401);
+    expect(
+      (
+        await member.post(`/v1/orgs/${ownerOrg}/calendar`).send({
+          title: "Private review",
+          startsAt: new Date(Date.now() + 60_000).toISOString(),
+          endsAt: new Date(Date.now() + 120_000).toISOString(),
+          roomId: restricted.body.room.id,
+        })
+      ).status,
+    ).toBe(403);
+    expect(ownerRegistration.status).toBe(201);
   });
 });

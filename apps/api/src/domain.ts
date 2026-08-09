@@ -54,14 +54,38 @@ export interface Membership {
   orgId: string;
   userId: string;
   role: "owner" | "admin" | "member";
+  /** Explicit, auditable delegation beyond the base organization role. */
+  attributes?: {
+    canCreateRooms?: boolean;
+    canManageMembers?: boolean;
+    canSchedule?: boolean;
+  };
   createdAt: Date;
 }
+
+export type RoomVisibility = "organization" | "restricted";
+export type RoomClassification = "internal" | "confidential";
 
 export interface Room {
   id: string;
   orgId: string;
   name: string;
   description?: string;
+  visibility: RoomVisibility;
+  classification: RoomClassification;
+  createdBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CalendarEvent {
+  id: string;
+  orgId: string;
+  roomId?: string;
+  title: string;
+  description?: string;
+  startsAt: Date;
+  endsAt: Date;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -143,4 +167,10 @@ export interface RoomEvent {
   payload: unknown;
   actorId?: string;
   createdAt: Date;
+}
+
+export interface RateLimitEntry {
+  key: string;
+  count: number;
+  resetAt: Date;
 }

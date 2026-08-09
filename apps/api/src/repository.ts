@@ -1,6 +1,7 @@
 import { MongoClient, type Collection } from "mongodb";
 import type {
   AuditLog,
+  CalendarEvent,
   AuthorizationCode,
   AccountActionToken,
   Credential,
@@ -8,13 +9,14 @@ import type {
   OAuthClient,
   Organization,
   PersonalAccessToken,
+  RateLimitEntry,
   RefreshToken,
   Room,
   RoomEvent,
   RoomMembership,
   Session,
   User,
-} from "./domain";
+} from "./domain.js";
 
 function firstPartyWebClient(redirectUri = "http://localhost:3000/oidc/callback"): OAuthClient {
   return {
@@ -49,15 +51,22 @@ export interface Repository {
   getOrganizationsForUser(userId: string): Promise<Organization[]>;
   createOrganization(org: Organization, owner: Membership): Promise<void>;
   getMembership(orgId: string, userId: string): Promise<Membership | undefined>;
+  listMemberships(orgId: string): Promise<Membership[]>;
+  createMembership(membership: Membership): Promise<void>;
   getRoom(roomId: string): Promise<Room | undefined>;
   listRooms(orgId: string): Promise<Room[]>;
   createRoom(room: Room, member: RoomMembership): Promise<void>;
   getRoomMembership(roomId: string, userId: string): Promise<RoomMembership | undefined>;
+  listRoomMemberships(roomId: string): Promise<RoomMembership[]>;
+  createRoomMembership(membership: RoomMembership): Promise<void>;
+  createCalendarEvent(event: CalendarEvent): Promise<void>;
+  listCalendarEvents(orgId: string, from?: Date, to?: Date): Promise<CalendarEvent[]>;
   createPat(token: PersonalAccessToken): Promise<void>;
   listPats(userId: string): Promise<PersonalAccessToken[]>;
   getPatByHash(hash: string): Promise<PersonalAccessToken | undefined>;
   updatePat(token: PersonalAccessToken): Promise<void>;
   getOAuthClient(clientId: string): Promise<OAuthClient | undefined>;
+  listOAuthClients(): Promise<OAuthClient[]>;
   createAuthorizationCode(code: AuthorizationCode): Promise<void>;
   consumeAuthorizationCode(codeHash: string): Promise<AuthorizationCode | undefined>;
   createRefreshToken(token: RefreshToken): Promise<void>;
@@ -66,7 +75,10 @@ export interface Repository {
   consumeAccountActionToken(hash: string, type: AccountActionToken["type"]): Promise<AccountActionToken | undefined>;
   writeRoomEvent(event: RoomEvent): Promise<void>;
   listRoomEvents(roomId: string): Promise<RoomEvent[]>;
+  listRoomEventsForRooms(roomIds: string[]): Promise<RoomEvent[]>;
   writeAudit(log: AuditLog): Promise<void>;
+  /** Atomically increments the counter for `key`, resetting it if the window has elapsed. */
+  incrementRateLimit(key: string, windowMs: number): Promise<RateLimitEntry>;
 }
 
 export class MemoryRepository implements Repository {
@@ -83,7 +95,9 @@ export class MemoryRepository implements Repository {
   private authCodes = new Map<string, AuthorizationCode>();
   private refreshTokens = new Map<string, RefreshToken>();
   private roomEvents: RoomEvent[] = [];
+  private calendarEvents = new Map<string, CalendarEvent>();
   private audits: AuditLog[] = [];
+  private rateLimits = new Map<string, RateLimitEntry>();
 
   constructor() {
     this.clients.set("threadline-web", firstPartyWebClient());
@@ -137,6 +151,14 @@ export class MemoryRepository implements Repository {
       (membership) => membership.orgId === orgId && membership.userId === userId,
     );
   }
+  async listMemberships(orgId: string) {
+    return [...this.memberships.values()]
+      .filter((membership) => membership.orgId === orgId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+  async createMembership(membership: Membership) {
+    this.memberships.set(membership.id, membership);
+  }
   async getRoom(roomId: string) {
     return this.rooms.get(roomId);
   }
@@ -154,6 +176,22 @@ export class MemoryRepository implements Repository {
       (membership) => membership.roomId === roomId && membership.userId === userId,
     );
   }
+  async listRoomMemberships(roomId: string) {
+    return [...this.roomMemberships.values()]
+      .filter((membership) => membership.roomId === roomId)
+      .sort((a, b) => a.joinedAt.getTime() - b.joinedAt.getTime());
+  }
+  async createRoomMembership(membership: RoomMembership) {
+    this.roomMemberships.set(membership.id, membership);
+  }
+  async createCalendarEvent(event: CalendarEvent) {
+    this.calendarEvents.set(event.id, event);
+  }
+  async listCalendarEvents(orgId: string, from?: Date, to?: Date) {
+    return [...this.calendarEvents.values()]
+      .filter((event) => event.orgId === orgId && (!from || event.endsAt >= from) && (!to || event.startsAt <= to))
+      .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  }
   async createPat(token: PersonalAccessToken) {
     this.pats.set(token.id, token);
   }
@@ -170,6 +208,11 @@ export class MemoryRepository implements Repository {
   }
   async getOAuthClient(clientId: string) {
     return this.clients.get(clientId);
+  }
+  async listOAuthClients() {
+    return [...this.clients.values()]
+      .filter((client) => client.isFirstParty)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
   async createAuthorizationCode(code: AuthorizationCode) {
     this.authCodes.set(code.codeHash, code);
@@ -203,8 +246,25 @@ export class MemoryRepository implements Repository {
       .filter((event) => event.roomId === roomId)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
+  async listRoomEventsForRooms(roomIds: string[]) {
+    const allowed = new Set(roomIds);
+    return this.roomEvents
+      .filter((event) => allowed.has(event.roomId))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
   async writeAudit(log: AuditLog) {
     this.audits.push(log);
+  }
+  async incrementRateLimit(key: string, windowMs: number) {
+    const current = this.rateLimits.get(key);
+    const timestamp = Date.now();
+    const entry =
+      !current || current.resetAt.getTime() <= timestamp
+        ? { key, count: 0, resetAt: new Date(timestamp + windowMs) }
+        : current;
+    entry.count += 1;
+    this.rateLimits.set(key, entry);
+    return entry;
   }
 }
 
@@ -220,12 +280,14 @@ export class MongoRepository implements Repository {
     private memberships: Collection<Membership>,
     private rooms: Collection<Room>,
     private roomMemberships: Collection<RoomMembership>,
+    private calendarEvents: Collection<CalendarEvent>,
     private pats: Collection<PersonalAccessToken>,
     private clients: Collection<OAuthClient>,
     private authCodes: Collection<AuthorizationCode>,
     private refreshTokens: Collection<RefreshToken>,
     private roomEvents: Collection<RoomEvent>,
     private audits: Collection<AuditLog>,
+    private rateLimits: Collection<RateLimitEntry>,
   ) {}
 
   static async connect(uri: string, webRedirectUri?: string) {
@@ -242,9 +304,21 @@ export class MongoRepository implements Repository {
         .collection<AccountActionToken>("account_action_tokens")
         .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       db.collection<RoomEvent>("room_events").createIndex({ roomId: 1, createdAt: -1 }),
-      db
-        .collection<OAuthClient>("oauth_clients")
-        .updateOne({ id: "threadline-web" }, { $setOnInsert: firstPartyWebClient(webRedirectUri) }, { upsert: true }),
+      db.collection<CalendarEvent>("calendar_events").createIndex({ orgId: 1, startsAt: 1 }),
+      db.collection<Membership>("memberships").createIndex({ orgId: 1, userId: 1 }, { unique: true }),
+      db.collection<RoomMembership>("room_members").createIndex({ roomId: 1, userId: 1 }, { unique: true }),
+      db.collection<OAuthClient>("oauth_clients").updateOne(
+        { id: "threadline-web" },
+        // redirectUris (and the rest) must stay in sync with the current WEB_ORIGIN on
+        // every boot — $setOnInsert only writes them once, so a later WEB_ORIGIN change
+        // (e.g. moving off a local/staging domain) would silently strand this seeded
+        // client on its original, now-wrong, redirect URI forever.
+        (({ createdAt, ...rest }) => ({ $set: rest, $setOnInsert: { createdAt } }))(
+          firstPartyWebClient(webRedirectUri),
+        ),
+        { upsert: true },
+      ),
+      db.collection<RateLimitEntry>("rate_limits").createIndex({ resetAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
     return new MongoRepository(
       client,
@@ -256,12 +330,14 @@ export class MongoRepository implements Repository {
       db.collection("memberships"),
       db.collection("rooms"),
       db.collection("room_members"),
+      db.collection("calendar_events"),
       db.collection("personal_access_tokens"),
       db.collection("oauth_clients"),
       db.collection("auth_codes"),
       db.collection("refresh_tokens"),
       db.collection("room_events"),
       db.collection("audit_logs"),
+      db.collection("rate_limits"),
     );
   }
 
@@ -307,6 +383,12 @@ export class MongoRepository implements Repository {
   async getMembership(orgId: string, userId: string) {
     return (await this.memberships.findOne({ orgId, userId })) ?? undefined;
   }
+  async listMemberships(orgId: string) {
+    return this.memberships.find({ orgId }).sort({ createdAt: 1 }).toArray();
+  }
+  async createMembership(membership: Membership) {
+    await this.memberships.insertOne(membership);
+  }
   async getRoom(roomId: string) {
     return (await this.rooms.findOne({ id: roomId })) ?? undefined;
   }
@@ -319,6 +401,21 @@ export class MongoRepository implements Repository {
   }
   async getRoomMembership(roomId: string, userId: string) {
     return (await this.roomMemberships.findOne({ roomId, userId })) ?? undefined;
+  }
+  async listRoomMemberships(roomId: string) {
+    return this.roomMemberships.find({ roomId }).sort({ joinedAt: 1 }).toArray();
+  }
+  async createRoomMembership(membership: RoomMembership) {
+    await this.roomMemberships.insertOne(membership);
+  }
+  async createCalendarEvent(event: CalendarEvent) {
+    await this.calendarEvents.insertOne(event);
+  }
+  async listCalendarEvents(orgId: string, from?: Date, to?: Date) {
+    const filter: { orgId: string; startsAt?: { $lte: Date }; endsAt?: { $gte: Date } } = { orgId };
+    if (to) filter.startsAt = { $lte: to };
+    if (from) filter.endsAt = { $gte: from };
+    return this.calendarEvents.find(filter).sort({ startsAt: 1 }).toArray();
   }
   async createPat(token: PersonalAccessToken) {
     await this.pats.insertOne(token);
@@ -334,6 +431,9 @@ export class MongoRepository implements Repository {
   }
   async getOAuthClient(id: string) {
     return (await this.clients.findOne({ id })) ?? undefined;
+  }
+  async listOAuthClients() {
+    return this.clients.find({ isFirstParty: true }).sort({ name: 1 }).toArray();
   }
   async createAuthorizationCode(code: AuthorizationCode) {
     await this.authCodes.insertOne(code);
@@ -362,8 +462,36 @@ export class MongoRepository implements Repository {
   async listRoomEvents(roomId: string) {
     return this.roomEvents.find({ roomId }).sort({ createdAt: 1 }).toArray();
   }
+  async listRoomEventsForRooms(roomIds: string[]) {
+    if (!roomIds.length) return [];
+    return this.roomEvents
+      .find({ roomId: { $in: roomIds } })
+      .sort({ createdAt: -1 })
+      .toArray();
+  }
   async writeAudit(log: AuditLog) {
     await this.audits.insertOne(log);
+  }
+  async incrementRateLimit(key: string, windowMs: number): Promise<RateLimitEntry> {
+    const timestamp = new Date();
+    const freshResetAt = new Date(timestamp.getTime() + windowMs);
+    const result = await this.rateLimits.findOneAndUpdate(
+      { key },
+      [
+        {
+          $set: {
+            resetAt: {
+              $cond: [{ $lte: ["$resetAt", timestamp] }, freshResetAt, { $ifNull: ["$resetAt", freshResetAt] }],
+            },
+            count: { $cond: [{ $lte: ["$resetAt", timestamp] }, 1, { $add: [{ $ifNull: ["$count", 0] }, 1] }] },
+          },
+        },
+      ],
+      { upsert: true, returnDocument: "after" },
+    );
+    // Upsert always returns the post-update document; the fallback is unreachable in
+    // practice but keeps this typed without an assertion.
+    return result ?? { key, count: 1, resetAt: freshResetAt };
   }
   async close() {
     await this.client.close();

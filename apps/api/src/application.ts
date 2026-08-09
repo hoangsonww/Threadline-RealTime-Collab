@@ -5,10 +5,13 @@ import express, { type NextFunction, type Request, type Response } from "express
 import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { z } from "zod";
-import { scopes, type Scope, type Session, type User } from "./domain";
-import type { Repository } from "./repository";
-import { digest, hashPassword, id, now, opaqueToken, pkceChallenge, publicUser, verifyPassword } from "./security";
-import type { OidcSigner } from "./security";
+import { apiDocsCsp, renderRedocDocs, renderSwaggerDocs } from "./api-docs.js";
+import { scopes, type Scope, type Session, type User } from "./domain.js";
+import { createOpenApiDocument } from "./openapi.js";
+import { canOrganization, canRoom, effectiveRoomRole } from "./policy.js";
+import type { Repository } from "./repository.js";
+import { digest, hashPassword, id, now, opaqueToken, pkceChallenge, publicUser, verifyPassword } from "./security.js";
+import type { OidcSigner } from "./security.js";
 
 const sessionCookie = "threadline_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
@@ -24,6 +27,7 @@ type AppOptions = {
   repository: Repository;
   issuer: string;
   webOrigin: string;
+  additionalWebOrigins?: string[];
   secureCookies: boolean;
   ticketSecret: string;
   ingestSecret: string;
@@ -52,11 +56,27 @@ function clientError(response: Response, status: number, error: string, message:
   return response.status(status).json({ error, message });
 }
 
-export function createApp(options: AppOptions) {
-  const app = express();
+function isLoopbackHttpOrigin(origin: string) {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Build the configured Express application without starting a network listener. */
+export function createApp(options: AppOptions, app = express()) {
+  const allowedWebOrigins = new Set([options.webOrigin, ...(options.additionalWebOrigins ?? [])]);
+  const insecureLoopbackOrigins = new Set([...allowedWebOrigins].filter(isLoopbackHttpOrigin));
   app.set("trust proxy", 1);
   app.use(helmet({ crossOriginResourcePolicy: false }));
-  app.use(cors({ origin: options.webOrigin, credentials: true }));
+  app.use(
+    cors({
+      origin: (origin, callback) => callback(null, !origin || allowedWebOrigins.has(origin)),
+      credentials: true,
+    }),
+  );
   app.use(
     pinoHttp({
       enabled: options.enableHttpLogs ?? true,
@@ -67,27 +87,35 @@ export function createApp(options: AppOptions) {
   app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
 
-  const attempts = new Map<string, { count: number; resetAt: number }>();
-  const rateLimit = (limit: number, windowMs: number) => (request: Request, response: Response, next: NextFunction) => {
-    const key = `${request.path}:${ipHash(request)}`;
-    const current = attempts.get(key);
-    const timestamp = Date.now();
-    const bucket = !current || current.resetAt <= timestamp ? { count: 0, resetAt: timestamp + windowMs } : current;
-    bucket.count += 1;
-    attempts.set(key, bucket);
-    if (bucket.count > limit) {
-      response.set("Retry-After", String(Math.ceil((bucket.resetAt - timestamp) / 1000)));
-      return clientError(response, 429, "rate_limited", "Too many attempts. Please try again shortly.");
-    }
-    next();
-  };
+  // Backed by the repository (not local memory) because serverless deployments run
+  // many concurrent, short-lived instances that would otherwise each keep their own
+  // uncoordinated counters, making an in-process Map an unreliable, easily-bypassed limit.
+  const rateLimit =
+    (limit: number, windowMs: number) => async (request: Request, response: Response, next: NextFunction) => {
+      try {
+        // request.path is relative to this middleware's mount point (Express rebases
+        // it inside app.use), so an exact-path mount always sees "/" here regardless
+        // of which route matched — baseUrl is the literal mounted path instead, which
+        // is what actually distinguishes one rate-limited route from another.
+        const key = `${request.baseUrl}:${ipHash(request)}`;
+        const bucket = await options.repository.incrementRateLimit(key, windowMs);
+        if (bucket.count > limit) {
+          response.set("Retry-After", String(Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000)));
+          return clientError(response, 429, "rate_limited", "Too many attempts. Please try again shortly.");
+        }
+        next();
+      } catch (error) {
+        next(error);
+      }
+    };
   app.use("/v1/auth/login", rateLimit(12, 15 * 60 * 1000));
   app.use("/v1/auth/register", rateLimit(8, 60 * 60 * 1000));
   app.use("/v1/auth/password-reset/request", rateLimit(5, 60 * 60 * 1000));
+  app.use("/v1/auth/email-verification/request", rateLimit(5, 60 * 60 * 1000));
   app.use((request, response, next) => {
     const isUnsafe = !["GET", "HEAD", "OPTIONS"].includes(request.method);
     const origin = request.get("origin");
-    if (isUnsafe && request.cookies[sessionCookie] && origin && origin !== options.webOrigin)
+    if (isUnsafe && request.cookies[sessionCookie] && origin && !allowedWebOrigins.has(origin))
       return clientError(response, 403, "csrf_rejected", "This browser request did not originate from Threadline.");
     next();
   });
@@ -135,12 +163,19 @@ export function createApp(options: AppOptions) {
     return context;
   };
 
-  const setSessionCookie = (response: Response, token: string) =>
+  const shouldUseSecureCookie = (request: Request) =>
+    options.secureCookies && !insecureLoopbackOrigins.has(request.get("origin") ?? "");
+
+  const sessionCookieOptions = (request: Request) => ({
+    httpOnly: true,
+    secure: shouldUseSecureCookie(request),
+    sameSite: "lax" as const,
+    path: "/",
+  });
+
+  const setSessionCookie = (request: Request, response: Response, token: string) =>
     response.cookie(sessionCookie, token, {
-      httpOnly: true,
-      secure: options.secureCookies,
-      sameSite: "lax",
-      path: "/",
+      ...sessionCookieOptions(request),
       maxAge: sessionLifetimeMs,
     });
 
@@ -178,6 +213,44 @@ export function createApp(options: AppOptions) {
       });
   };
 
+  const roomAccess = async (roomId: string, userId: string) => {
+    const room = await options.repository.getRoom(roomId);
+    if (!room) return undefined;
+    const [membership, roomMembership] = await Promise.all([
+      options.repository.getMembership(room.orgId, userId),
+      options.repository.getRoomMembership(room.id, userId),
+    ]);
+    return { room, membership, roomMembership };
+  };
+
+  const organizationsForUser = async (userId: string) => {
+    const organizations = await options.repository.getOrganizationsForUser(userId);
+    return Promise.all(
+      organizations.map(async (organization) => {
+        const membership = await options.repository.getMembership(organization.id, userId);
+        return membership
+          ? { ...organization, role: membership.role, attributes: membership.attributes }
+          : organization;
+      }),
+    );
+  };
+
+  const apiOrigin = (request: Request) => `${request.protocol}://${request.get("host")}`;
+  const sendDocs = (response: Response, html: string) =>
+    response
+      .set("Content-Security-Policy", apiDocsCsp)
+      .set("Cache-Control", "public, max-age=300")
+      .type("html")
+      .send(html);
+
+  app.get("/", (_request, response) => response.redirect(302, "/api-docs"));
+  app.get("/api-docs", (_request, response) => sendDocs(response, renderSwaggerDocs()));
+  app.get("/api-docs/redoc", (_request, response) => sendDocs(response, renderRedocDocs()));
+  app.get("/openapi.json", (request, response) =>
+    response
+      .set("Cache-Control", "no-store")
+      .json(createOpenApiDocument({ serverUrl: apiOrigin(request), issuer: options.issuer })),
+  );
   app.get("/health", (_request, response) => response.json({ status: "ok", service: "threadline-api" }));
 
   app.post("/v1/auth/register", async (request, response, next) => {
@@ -237,7 +310,7 @@ export function createApp(options: AppOptions) {
         createdAt: now(),
       });
       await issueAccountAction("email_verification", user);
-      setSessionCookie(response, rawToken)
+      setSessionCookie(request, response, rawToken)
         .status(201)
         .json({ user: publicUser(user), organization: org });
     } catch (error) {
@@ -260,7 +333,7 @@ export function createApp(options: AppOptions) {
         targetType: "session",
         createdAt: now(),
       });
-      setSessionCookie(response, rawToken).json({ user: publicUser(user) });
+      setSessionCookie(request, response, rawToken).json({ user: publicUser(user) });
     } catch (error) {
       next(error);
     }
@@ -273,10 +346,7 @@ export function createApp(options: AppOptions) {
         context.session.revokedAt = now();
         await options.repository.updateSession(context.session);
       }
-      response
-        .clearCookie(sessionCookie, { httpOnly: true, secure: options.secureCookies, sameSite: "lax", path: "/" })
-        .status(204)
-        .end();
+      response.clearCookie(sessionCookie, sessionCookieOptions(request)).status(204).end();
     } catch (error) {
       next(error);
     }
@@ -413,9 +483,10 @@ export function createApp(options: AppOptions) {
     try {
       const context = await requireUser(request, response);
       if (!context) return;
+      const credential = await options.repository.getCredential(context.user.id);
       response.json({
-        user: publicUser(context.user),
-        organizations: await options.repository.getOrganizationsForUser(context.user.id),
+        user: { ...publicUser(context.user), emailVerified: Boolean(credential?.emailVerifiedAt) },
+        organizations: await organizationsForUser(context.user.id),
       });
     } catch (error) {
       next(error);
@@ -456,7 +527,7 @@ export function createApp(options: AppOptions) {
   app.get("/v1/orgs", async (request, response, next) => {
     try {
       const context = await requireScope(request, response, "orgs:read");
-      if (context) response.json({ organizations: await options.repository.getOrganizationsForUser(context.user.id) });
+      if (context) response.json({ organizations: await organizationsForUser(context.user.id) });
     } catch (error) {
       next(error);
     }
@@ -466,9 +537,17 @@ export function createApp(options: AppOptions) {
     try {
       const context = await requireScope(request, response, "rooms:read");
       if (!context) return;
-      if (!(await options.repository.getMembership(request.params.orgId, context.user.id)))
+      const membership = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(membership, "read"))
         return clientError(response, 403, "forbidden", "You do not belong to this organization.");
-      response.json({ rooms: await options.repository.listRooms(request.params.orgId) });
+      const rooms = await options.repository.listRooms(request.params.orgId);
+      const visible = await Promise.all(
+        rooms.map(async (room) => {
+          const roomMembership = await options.repository.getRoomMembership(room.id, context.user.id);
+          return canRoom(membership, room, roomMembership, "read") ? room : undefined;
+        }),
+      );
+      response.json({ rooms: visible.filter((room): room is NonNullable<typeof room> => Boolean(room)) });
     } catch (error) {
       next(error);
     }
@@ -479,16 +558,23 @@ export function createApp(options: AppOptions) {
       const context = await requireScope(request, response, "rooms:write");
       if (!context) return;
       const membership = await options.repository.getMembership(request.params.orgId, context.user.id);
-      if (!membership || (membership.role === "member" && false))
+      if (!canOrganization(membership, "create_room"))
         return clientError(response, 403, "forbidden", "You do not have permission to create rooms.");
       const input = z
-        .object({ name: z.string().trim().min(2).max(100), description: z.string().trim().max(300).optional() })
+        .object({
+          name: z.string().trim().min(2).max(100),
+          description: z.string().trim().max(300).optional(),
+          visibility: z.enum(["organization", "restricted"]).default("organization"),
+          classification: z.enum(["internal", "confidential"]).default("internal"),
+        })
         .parse(request.body);
       const room = {
         id: id(),
         orgId: request.params.orgId,
         name: input.name,
         description: input.description,
+        visibility: input.visibility,
+        classification: input.classification,
         createdBy: context.user.id,
         createdAt: now(),
         updatedAt: now(),
@@ -506,6 +592,15 @@ export function createApp(options: AppOptions) {
         action: "room.create",
         targetType: "room",
         targetId: room.id,
+        metadata: { orgId: room.orgId, visibility: room.visibility, classification: room.classification },
+        createdAt: now(),
+      });
+      await options.repository.writeRoomEvent({
+        id: id(),
+        roomId: room.id,
+        type: "room.created",
+        payload: { name: room.name, visibility: room.visibility },
+        actorId: context.user.id,
         createdAt: now(),
       });
       response.status(201).json({ room });
@@ -518,20 +613,35 @@ export function createApp(options: AppOptions) {
     try {
       const context = await requireUser(request, response);
       if (!context) return;
-      const room = await options.repository.getRoom(request.params.roomId);
-      if (!room) return clientError(response, 404, "not_found", "Room was not found.");
-      const orgMembership = await options.repository.getMembership(room.orgId, context.user.id);
-      const roomMembership = await options.repository.getRoomMembership(room.id, context.user.id);
-      if (!orgMembership && !roomMembership)
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "join_live"))
         return clientError(response, 403, "forbidden", "You do not have access to this room.");
       const ticket = await options.signer.signRoomTicket({
         issuer: options.issuer,
         secret: new TextEncoder().encode(options.ticketSecret),
         user: context.user,
-        roomId: room.id,
-        role: roomMembership?.role ?? "member",
+        roomId: access.room.id,
+        role: effectiveRoomRole(access.membership, access.room, access.roomMembership) ?? "viewer",
       });
-      response.json({ ticket, roomId: room.id, expiresIn: 120 });
+      response.json({ ticket, roomId: access.room.id, expiresIn: 120 });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/rooms/:roomId", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "rooms:read");
+      if (!context) return;
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "read"))
+        return clientError(response, 403, "forbidden", "You do not have access to this room.");
+      response.json({
+        room: access.room,
+        role: effectiveRoomRole(access.membership, access.room, access.roomMembership),
+      });
     } catch (error) {
       next(error);
     }
@@ -541,11 +651,11 @@ export function createApp(options: AppOptions) {
     try {
       const context = await requireScope(request, response, "rooms:read");
       if (!context) return;
-      const room = await options.repository.getRoom(request.params.roomId);
-      if (!room) return clientError(response, 404, "not_found", "Room was not found.");
-      if (!(await options.repository.getMembership(room.orgId, context.user.id)))
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "read"))
         return clientError(response, 403, "forbidden", "You do not have access to this room.");
-      response.json({ events: await options.repository.listRoomEvents(room.id) });
+      response.json({ events: await options.repository.listRoomEvents(access.room.id) });
     } catch (error) {
       next(error);
     }
@@ -566,6 +676,9 @@ export function createApp(options: AppOptions) {
           }),
         })
         .parse(request.body);
+      const access = input.event.from ? await roomAccess(input.roomId, input.event.from) : undefined;
+      if (!access || !canRoom(access.membership, access.room, access.roomMembership, "write"))
+        return clientError(response, 403, "forbidden", "The event actor cannot write to this room.");
       await options.repository.writeRoomEvent({
         id: id(),
         roomId: input.roomId,
@@ -575,6 +688,255 @@ export function createApp(options: AppOptions) {
         createdAt: new Date(input.event.at),
       });
       response.status(202).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/orgs/:orgId/members", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:read");
+      if (!context) return;
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(caller, "read"))
+        return clientError(response, 403, "forbidden", "You do not belong to this organization.");
+      const memberships = await options.repository.listMemberships(request.params.orgId);
+      const members = await Promise.all(
+        memberships.map(async (membership) => {
+          const user = await options.repository.getUserById(membership.userId);
+          return user
+            ? {
+                ...publicUser(user),
+                role: membership.role,
+                attributes: membership.attributes,
+                joinedAt: membership.createdAt,
+              }
+            : undefined;
+        }),
+      );
+      response.json({ members: members.filter(Boolean) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/orgs/:orgId/members", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(caller, "manage_members"))
+        return clientError(response, 403, "forbidden", "You do not have permission to manage members.");
+      const input = z
+        .object({
+          email: emailSchema,
+          role: z.enum(["admin", "member"]).default("member"),
+          attributes: z
+            .object({
+              canCreateRooms: z.boolean().optional(),
+              canManageMembers: z.boolean().optional(),
+              canSchedule: z.boolean().optional(),
+            })
+            .optional(),
+        })
+        .parse(request.body);
+      if (input.role === "admin" && caller?.role !== "owner")
+        return clientError(response, 403, "forbidden", "Only an organization owner can assign administrator access.");
+      const user = await options.repository.getUserByEmail(input.email);
+      if (!user)
+        return clientError(
+          response,
+          404,
+          "not_found",
+          "That person needs a Threadline account before they can be added.",
+        );
+      if (await options.repository.getMembership(request.params.orgId, user.id))
+        return clientError(response, 409, "already_member", "That person already belongs to this organization.");
+      const membership = {
+        id: id(),
+        orgId: request.params.orgId,
+        userId: user.id,
+        role: input.role,
+        attributes: input.attributes,
+        createdAt: now(),
+      };
+      await options.repository.createMembership(membership);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.member_add",
+        targetType: "membership",
+        targetId: membership.id,
+        metadata: { orgId: membership.orgId, userId: user.id, role: membership.role },
+        createdAt: now(),
+      });
+      response.status(201).json({
+        member: {
+          ...publicUser(user),
+          role: membership.role,
+          attributes: membership.attributes,
+          joinedAt: membership.createdAt,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/rooms/:roomId/members", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "rooms:read");
+      if (!context) return;
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "read"))
+        return clientError(response, 403, "forbidden", "You do not have access to this room.");
+      const memberships = await options.repository.listRoomMemberships(access.room.id);
+      const members = await Promise.all(
+        memberships.map(async (membership) => {
+          const user = await options.repository.getUserById(membership.userId);
+          return user ? { ...publicUser(user), role: membership.role, joinedAt: membership.joinedAt } : undefined;
+        }),
+      );
+      response.json({ members: members.filter(Boolean) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/rooms/:roomId/members", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "rooms:write");
+      if (!context) return;
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "manage"))
+        return clientError(response, 403, "forbidden", "You do not have permission to manage this room.");
+      const input = z
+        .object({ userId: z.string().uuid(), role: z.enum(["host", "member", "viewer"]).default("member") })
+        .parse(request.body);
+      const targetOrgMembership = await options.repository.getMembership(access.room.orgId, input.userId);
+      if (!targetOrgMembership)
+        return clientError(response, 403, "forbidden", "Only organization members can be added to a room.");
+      if (await options.repository.getRoomMembership(access.room.id, input.userId))
+        return clientError(response, 409, "already_member", "That person already belongs to this room.");
+      const membership = { id: id(), roomId: access.room.id, userId: input.userId, role: input.role, joinedAt: now() };
+      await options.repository.createRoomMembership(membership);
+      response.status(201).json({ membership });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/orgs/:orgId/calendar", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:read");
+      if (!context) return;
+      const membership = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(membership, "read"))
+        return clientError(response, 403, "forbidden", "You do not belong to this organization.");
+      const query = z
+        .object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() })
+        .parse(request.query);
+      const events = await options.repository.listCalendarEvents(
+        request.params.orgId,
+        query.from ? new Date(query.from) : undefined,
+        query.to ? new Date(query.to) : undefined,
+      );
+      const visible = await Promise.all(
+        events.map(async (event) => {
+          if (!event.roomId) return event;
+          const room = await options.repository.getRoom(event.roomId);
+          const roomMembership = room
+            ? await options.repository.getRoomMembership(room.id, context.user.id)
+            : undefined;
+          return room && canRoom(membership, room, roomMembership, "read") ? event : undefined;
+        }),
+      );
+      response.json({ events: visible.filter((event): event is NonNullable<typeof event> => Boolean(event)) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/orgs/:orgId/calendar", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const membership = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(membership, "schedule"))
+        return clientError(response, 403, "forbidden", "You do not have permission to schedule this event.");
+      const input = z
+        .object({
+          title: z.string().trim().min(2).max(160),
+          description: z.string().trim().max(1000).optional(),
+          startsAt: z.string().datetime(),
+          endsAt: z.string().datetime(),
+          roomId: z.string().uuid().optional(),
+        })
+        .parse(request.body);
+      const startsAt = new Date(input.startsAt);
+      const endsAt = new Date(input.endsAt);
+      if (endsAt <= startsAt)
+        return clientError(response, 400, "invalid_schedule", "The event must end after it starts.");
+      if (input.roomId) {
+        const access = await roomAccess(input.roomId, context.user.id);
+        if (
+          !access ||
+          access.room.orgId !== request.params.orgId ||
+          !canRoom(access.membership, access.room, access.roomMembership, "read")
+        )
+          return clientError(response, 403, "forbidden", "You cannot schedule an event in that room.");
+      }
+      const event = {
+        id: id(),
+        orgId: request.params.orgId,
+        roomId: input.roomId,
+        title: input.title,
+        description: input.description,
+        startsAt,
+        endsAt,
+        createdBy: context.user.id,
+        createdAt: now(),
+        updatedAt: now(),
+      };
+      await options.repository.createCalendarEvent(event);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "calendar.create",
+        targetType: "calendar_event",
+        targetId: event.id,
+        metadata: { orgId: event.orgId, roomId: event.roomId },
+        createdAt: now(),
+      });
+      response.status(201).json({ event });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/orgs/:orgId/activity", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "rooms:read");
+      if (!context) return;
+      const membership = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(membership, "read"))
+        return clientError(response, 403, "forbidden", "You do not belong to this organization.");
+      const rooms = await options.repository.listRooms(request.params.orgId);
+      const visibleRooms = (
+        await Promise.all(
+          rooms.map(async (room) => {
+            const roomMembership = await options.repository.getRoomMembership(room.id, context.user.id);
+            return canRoom(membership, room, roomMembership, "read") ? room : undefined;
+          }),
+        )
+      ).filter((room): room is NonNullable<typeof room> => Boolean(room));
+      const events = (await options.repository.listRoomEventsForRooms(visibleRooms.map((room) => room.id))).slice(
+        0,
+        100,
+      );
+      response.json({ events, rooms: visibleRooms.map((room) => ({ id: room.id, name: room.name })) });
     } catch (error) {
       next(error);
     }
@@ -647,6 +1009,26 @@ export function createApp(options: AppOptions) {
         createdAt: now(),
       });
       response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/oidc/clients", async (request, response, next) => {
+    try {
+      const context = await requireUser(request, response);
+      if (!context) return;
+      const clients = await options.repository.listOAuthClients();
+      response.json({
+        clients: clients.map(({ id: clientId, name, redirectUris, allowedScopes, isFirstParty, createdAt }) => ({
+          id: clientId,
+          name,
+          redirectUris,
+          allowedScopes,
+          isFirstParty,
+          createdAt,
+        })),
+      });
     } catch (error) {
       next(error);
     }

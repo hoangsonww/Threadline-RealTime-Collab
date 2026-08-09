@@ -1,7 +1,7 @@
 import argon2 from "argon2";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, importJWK, jwtVerify, SignJWT } from "jose";
-import type { Scope, User } from "./domain";
+import type { Scope, User } from "./domain.js";
 
 export const now = () => new Date();
 export const id = () => randomUUID();
@@ -92,7 +92,12 @@ export class OidcSigner {
   }
 
   async signRoomTicket(input: { issuer: string; secret: Uint8Array; user: User; roomId: string; role: string }) {
-    return new SignJWT({ room_id: input.roomId, role: input.role, username: input.user.username })
+    return new SignJWT({
+      room_id: input.roomId,
+      role: input.role,
+      username: input.user.username,
+      display_name: input.user.displayName,
+    })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
       .setIssuer(input.issuer)
       .setSubject(input.user.id)
