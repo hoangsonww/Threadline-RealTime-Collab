@@ -23,10 +23,12 @@ This exact codebase runs at these URLs — the pattern described in [Zero-cost p
 | Component       | Live URL                                                                                                 |
 | --------------- | -------------------------------------------------------------------------------------------------------- |
 | `apps/web`      | [`threadline-rtc.vercel.app`](https://threadline-rtc.vercel.app)                                         |
-| `apps/api`      | [`threadline-api-liard.vercel.app`](https://threadline-api-liard.vercel.app)                             |
+| `apps/api`      | [`threadline-app-api.vercel.app`](https://threadline-app-api.vercel.app)                                 |
 | `apps/realtime` | [`threadline-realtime.threadline-dn.workers.dev`](https://threadline-realtime.threadline-dn.workers.dev) |
 
 Since `apps/api` here is also Vercel (not an always-on host), it runs as serverless functions rather than the long-lived Node process the rest of this doc assumes — everything else (the same-origin rewrite, the ABAC model, the ticket/webhook secrets) is unchanged.
+
+The `apps/realtime` URL above isn't a page to open in a browser — Cloudflare Workers serves it, but the only route it exposes to a plain GET is `/health`; everything else is the WebSocket upgrade the web app performs with a signed room ticket (see [Trust model](../ARCHITECTURE.md#trust-model)). It's listed here for completeness, not as something a reader should click through.
 
 ## Production checklist
 

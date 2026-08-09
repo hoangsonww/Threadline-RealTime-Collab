@@ -380,7 +380,7 @@ graph TB
 
     subgraph vercel["Vercel"]
         webApp["threadline-rtc.vercel.app<br/>apps/web (Next.js)"]
-        apiApp["threadline-api-liard.vercel.app<br/>apps/api (Express, serverless functions)"]
+        apiApp["threadline-app-api.vercel.app<br/>apps/api (Express, serverless functions)"]
     end
 
     subgraph cf["Cloudflare"]

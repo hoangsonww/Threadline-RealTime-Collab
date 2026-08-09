@@ -67,8 +67,9 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 ## Live deployment
 
 - **Web app:** [threadline-rtc.vercel.app](https://threadline-rtc.vercel.app) — create a real account and try it.
-- **Swagger UI:** [threadline-api-liard.vercel.app/api-docs](https://threadline-api-liard.vercel.app/api-docs) — interactive, try-it-out against the live API.
-- **ReDoc:** [threadline-api-liard.vercel.app/api-docs/redoc](https://threadline-api-liard.vercel.app/api-docs/redoc) — three-pane reference.
+- **Swagger UI:** [threadline-app-api.vercel.app/api-docs](https://threadline-app-api.vercel.app/api-docs) — interactive, try-it-out against the live API.
+- **ReDoc:** [threadline-app-api.vercel.app/api-docs/redoc](https://threadline-app-api.vercel.app/api-docs/redoc) — three-pane reference.
+- **Realtime:** [threadline-realtime.threadline-dn.workers.dev](https://threadline-realtime.threadline-dn.workers.dev) — the Cloudflare Worker that hosts `RoomDurableObject`. There's nothing to browse here: it's a WebSocket/signaling endpoint the web app connects to with a signed room ticket, not a page meant to be opened directly.
 - **What's actually running there:** the same code in this repository, deployed with `apps/web` and `apps/api` both on Vercel (as two separate projects) and `apps/realtime` on Cloudflare Workers — the exact topology diagrammed in [Live deployment topology](ARCHITECTURE.md#live-deployment-topology) and detailed in [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
 
 ## What's included

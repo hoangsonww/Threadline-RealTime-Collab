@@ -18,7 +18,7 @@ All three are generated from `apps/api/src/openapi.ts`, which is kept in sync wi
 
 ## Interactive documentation
 
-Live on the deployed API: [Swagger UI](https://threadline-api-liard.vercel.app/api-docs) &middot; [ReDoc](https://threadline-api-liard.vercel.app/api-docs/redoc) &middot; [raw OpenAPI document](https://threadline-api-liard.vercel.app/openapi.json).
+Live on the deployed API: [Swagger UI](https://threadline-app-api.vercel.app/api-docs) &middot; [ReDoc](https://threadline-app-api.vercel.app/api-docs/redoc) &middot; [raw OpenAPI document](https://threadline-app-api.vercel.app/openapi.json).
 
 <table>
 <tr>
