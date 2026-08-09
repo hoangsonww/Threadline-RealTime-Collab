@@ -120,7 +120,7 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 | Swagger / OpenAPI    | Live, interactive API documentation generated from `apps/api/src/openapi.ts`                                                                                               |
 | Docker               | Local Compose stack (web, API, MongoDB, Wrangler's local Worker emulation) and production container images                                                                 |
 | Kubernetes           | Self-hosted production alternative to Vercel/Render for the stateless web and API tier — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md)      |
-| GitHub Actions       | CI pipeline: format check, lint, typecheck, test, build, on every PR                                                                                                       |
+| GitHub Actions       | Multi-stage CI/CD pipeline: format check, lint, typecheck, test, build, and container/Kubernetes validation on every PR, plus image builds published to GHCR on `main`     |
 | Vitest               | Test runner for both `apps/api` (Node environment, `supertest`) and `apps/realtime` (real Workers runtime via `@cloudflare/vitest-pool-workers`)                           |
 | Playwright           | Browser automation used throughout development for live, two-independent-browser-context manual verification — see [Testing and quality gates](#testing-and-quality-gates) |
 | ESLint               | Lint gate across all three workspaces, zero warnings allowed                                                                                                               |
