@@ -7,6 +7,15 @@ Threadline has two portable, supported deployment modes:
 
 The latter distinction is intentional. Durable Objects provide single-instance, globally coordinated room state. The `realtime` Docker image is a local development emulator, not a second production implementation that could diverge from Cloudflare's Durable Object behavior.
 
+## Table of contents
+
+- [Docker Compose](#docker-compose)
+- [Image contracts](#image-contracts)
+- [Kubernetes prerequisites](#kubernetes-prerequisites)
+- [Prepare a cluster](#prepare-a-cluster)
+- [Validate and deploy](#validate-and-deploy)
+- [More than one cluster](#more-than-one-cluster)
+
 ## Docker Compose
 
 Install Docker Desktop, then run this from the repository root:
@@ -16,6 +25,25 @@ npm run docker:up
 ```
 
 Open `http://localhost:3000`. Compose starts all four services and waits for MongoDB and the API health checks before starting dependent services.
+
+```mermaid
+graph TB
+    subgraph compose["docker compose"]
+        web["web<br/>Next.js, production build"]
+        api["api<br/>Express"]
+        realtime["realtime<br/>wrangler dev (local Worker + DO)"]
+        mongo[("mongo<br/>named volume: mongo-data")]
+    end
+    Browser -->|"localhost:3000"| web
+    web -->|"/api/identity/* rewrite"| api
+    Browser -->|"WebSocket"| realtime
+    api -->|"healthcheck gate"| mongo
+    realtime -.->|"ingest webhook,<br/>dev secrets only"| api
+
+    style mongo fill:#123524,stroke:#52e0a2,color:#fff
+```
+
+`depends_on` with `condition: service_healthy` is what makes "waits for health checks" literal — `web` and `realtime` don't start until `api`'s `/health` responds, and `api` doesn't start until Mongo accepts connections. This is the same topology as production (three planes, one Mongo), just with the Cloudflare Worker's local emulator standing in for the deployed one.
 
 | Service  | Address                        | Purpose                                                          |
 | -------- | ------------------------------ | ---------------------------------------------------------------- |
@@ -149,3 +177,39 @@ Threadline can use multiple clusters for web/API capacity, but the clusters must
 5. Use the same TLS certificate strategy and ensure every cluster receives secret rotations before switching the Worker secret.
 
 This is active-active for the stateless web/API plane. The Cloudflare Durable Object remains the single authoritative owner for each room, so no cross-cluster room-leader election or Redis synchronization is required.
+
+```mermaid
+graph TB
+    Browser["Browser"]
+    GLB["Global traffic manager<br/>(web hostname)"]
+    GW["Global load balancer / API gateway<br/>(one public API URL)"]
+
+    subgraph c1["Cluster 1"]
+        w1["web pods"]
+        a1["api pods"]
+    end
+    subgraph c2["Cluster 2"]
+        w2["web pods"]
+        a2["api pods"]
+    end
+
+    Atlas[("Shared MongoDB Atlas")]
+    Worker["Cloudflare Worker<br/>(one deployment, all clusters)"]
+
+    Browser --> GLB
+    GLB --> w1
+    GLB --> w2
+    w1 -->|"local rewrite"| a1
+    w2 -->|"local rewrite"| a2
+    a1 --> Atlas
+    a2 --> Atlas
+    Browser -->|"WebSocket, ticket signed<br/>with the shared ROOM_TICKET_SECRET"| Worker
+    Worker -->|"PERSISTENCE_WEBHOOK<br/>points at GW, not either cluster directly"| GW
+    GW --> a1
+    GW --> a2
+
+    style Worker fill:#2b2140,stroke:#8a63ff,color:#fff
+    style Atlas fill:#123524,stroke:#52e0a2,color:#fff
+```
+
+The Worker only ever knows about one API URL — the gateway's — never a cluster-local Kubernetes `Service` name, which Cloudflare's edge cannot resolve or route to. Every cluster shares the same `ROOM_TICKET_SECRET` and `INTERNAL_INGEST_SECRET` for exactly the reason in the diagram: a ticket issued by cluster 1 must verify correctly against the one Worker deployment, and an ingest webhook the Worker sends might land on either cluster through the gateway.
