@@ -46,7 +46,7 @@ flowchart TD
 
 **Fix:** Check the platform's deployment/runtime logs for the actual thrown error (Vercel: `vercel inspect <deployment> --logs`) — it names the exact env var and the exact reason. `OIDC_ISSUER`/`WEB_ORIGIN` must be a bare origin, no path, no trailing slash. Redeploy after fixing; changing an env var alone does not retroactively fix an already-built serverless function.
 
-## "Threadline API is not configured. Set NEXT_PUBLIC_API_ORIGIN before opening the workspace." (on a _deployed_ site, not local dev)
+## "Threadline API is not configured. Set NEXT_PUBLIC_API_ORIGIN before opening the workspace." (on a deployed site, not local dev)
 
 **Cause:** This is the same error as the next entry below, but on a real deployment rather than local dev — meaning the Vercel project for `apps/web` has no `NEXT_PUBLIC_API_ORIGIN` (and usually no `NEXT_PUBLIC_REALTIME_ORIGIN`) configured at all. `NEXT_PUBLIC_*` variables are baked in at _build_ time, not read at runtime, so this can go unnoticed indefinitely: the build succeeds, the site returns `200`, the landing page renders fine — everything looks deployed and healthy right up until someone actually tries to register or log in, where the client-side check that would normally hit the API fails before a request is even sent. A `vercel ls` / `curl /health` on the _web_ project tells you nothing about this; it isn't an API problem.
 

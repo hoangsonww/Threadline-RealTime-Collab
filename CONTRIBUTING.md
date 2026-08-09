@@ -27,24 +27,23 @@ flowchart LR
     Hook --> Fix["eslint --fix +<br/>prettier --write<br/>(staged files only)"]
     Fix --> Push["git push"]
     Push --> PR["Open a pull request"]
-    PR --> CI["GitHub Actions: Quality workflow"]
-    CI --> V["verify job:<br/>format:check → lint → typecheck → test → build"]
-    CI --> C["containers job:<br/>docker compose build"]
-    CI --> K["kubernetes job:<br/>npm run k8s:validate"]
-    V --> Gate{"all three jobs green?"}
-    C --> Gate
-    K --> Gate
+    PR --> CI["GitHub Actions:<br/>CI / CD Pipeline workflow"]
+    CI --> Static["Lint & Format + Typecheck<br/>+ Security Audit (parallel)"]
+    Static --> Test["Test Suites job:<br/>apps/api + apps/realtime"]
+    Test --> Build["Build job:<br/>npm run build"]
+    Build --> Targets["Validate Container Images +<br/>Validate Kubernetes Overlays (parallel)"]
+    Targets --> Gate{"every required<br/>job green?"}
     Gate -- yes --> Merge["Ready to merge"]
     Gate -- no --> Fail["Fix and push again —<br/>same commit, not a new PR"]
 ```
 
-The pre-commit hook only touches files you've staged, and only fixes formatting/lint-autofixable issues — it does not run tests, typecheck, or the build, so passing it is necessary but not sufficient. Run the full local check before pushing, the same one CI's `verify` job runs:
+The pre-commit hook only touches files you've staged, and only fixes formatting/lint-autofixable issues — it does not run tests, typecheck, or the build, so passing it is necessary but not sufficient. Run the full local check before pushing, the same sequence of steps CI's `lint-format`, `typecheck`, `test`, and `build` jobs run:
 
 ```bash
 npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
 ```
 
-See [`docs/testing.md`](docs/testing.md#full-local-check-mirrors-what-should-gate-a-merge) for what each of those five steps actually verifies, and [`docs/testing.md`](docs/testing.md#api-integration-tests) / [`docs/testing.md`](docs/testing.md#durable-object-tests) for how to write a new test in `apps/api` or `apps/realtime` respectively. `apps/web` has no automated suite yet — see [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover) for why, and verify UI changes by hand against a locally-running app before opening a PR. Changes to `docker-compose.yml`, either Dockerfile, or `infra/kubernetes/**` also need the `containers`/`kubernetes` CI jobs above to pass — `docker compose build` and `npm run k8s:validate` reproduce both locally.
+See [`docs/testing.md`](docs/testing.md#full-local-check-mirrors-what-should-gate-a-merge) for what each of those five steps actually verifies, and [`docs/testing.md`](docs/testing.md#api-integration-tests) / [`docs/testing.md`](docs/testing.md#durable-object-tests) for how to write a new test in `apps/api` or `apps/realtime` respectively. `apps/web` has no automated suite yet — see [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover) for why, and verify UI changes by hand against a locally-running app before opening a PR. Changes to `docker-compose.yml`, either Dockerfile, or `infra/kubernetes/**` also need the `containers`/`kubernetes` CI jobs above to pass — `docker compose build` and `npm run k8s:validate` reproduce both locally. On a push to `main`, three additional jobs (`docker-web`, `docker-api`, `docker-realtime`) build and publish images to the GitHub Container Registry — they don't run on pull requests and don't gate merging a PR.
 
 ## Coding conventions
 

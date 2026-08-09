@@ -1,33 +1,126 @@
-name: Quality
+name: CI / CD Pipeline
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: 22
 
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Lint, test, and build
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 1 — Setup
+  # ──────────────────────────────────────────────────────────────
+  preflight:
+    name: "🧭 Preflight"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: |
+          echo "Node.js version: $(node -v)"
+          echo "npm version: $(npm -v)"
+          echo "Workspaces:"
+          ls apps
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 2 — Static checks (parallel)
+  # ──────────────────────────────────────────────────────────────
+  lint-format:
+    name: "🧹 Lint & Format"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+
+  typecheck:
+    name: "🔎 Typecheck"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+  security-audit:
+    name: "🔒 Security Audit"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high || true
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 3 — Test
+  # ──────────────────────────────────────────────────────────────
+  test:
+    name: "🧪 Test Suites"
+    needs: [lint-format, typecheck]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm run format:check
-      - run: npm run lint
-      - run: npm run typecheck
       - run: npm test
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 4 — Build
+  # ──────────────────────────────────────────────────────────────
+  build:
+    name: "🏗️ Build"
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
       - run: npm run build
 
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 5 — Deployment target validation (parallel)
+  # ──────────────────────────────────────────────────────────────
   containers:
-    name: Validate container images
+    name: "🐳 Validate Container Images"
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,15 +129,182 @@ jobs:
       - run: docker compose build
 
   kubernetes:
-    name: Validate Kubernetes overlays
+    name: "☸️ Validate Kubernetes Overlays"
+    needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
       - uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
       - run: npm run k8s:validate
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 6 — Publish images to GHCR (main branch / manual only)
+  # ──────────────────────────────────────────────────────────────
+  docker-web:
+    name: "🌐 Web → GHCR"
+    needs: [containers]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/threadline-web:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/threadline-web:latest
+
+  docker-api:
+    name: "🚂 API → GHCR"
+    needs: [containers]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/threadline-api:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/threadline-api:latest
+
+  docker-realtime:
+    name: "⚡ Realtime → GHCR"
+    needs: [containers]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/realtime/Dockerfile
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/threadline-realtime:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/threadline-realtime:latest
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 7 — Image vulnerability scan (informational only)
+  # ──────────────────────────────────────────────────────────────
+  image-scan:
+    name: "🔍 Image Vulnerability Scan"
+    needs: [docker-web, docker-api, docker-realtime]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: aquasecurity/setup-trivy@v0.2.6
+        with:
+          version: v0.69.3
+          cache: true
+      - name: Scan web image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/threadline-web:latest
+          format: sarif
+          exit-code: 0
+          skip-setup-trivy: true
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/threadline-api:latest
+          format: sarif
+          exit-code: 0
+          skip-setup-trivy: true
+      - name: Scan realtime image
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/threadline-realtime:latest
+          format: sarif
+          exit-code: 0
+          skip-setup-trivy: true
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 8 — Pipeline summary
+  # ──────────────────────────────────────────────────────────────
+  done:
+    name: "🎉 Pipeline Summary"
+    if: always()
+    needs:
+      - lint-format
+      - typecheck
+      - security-audit
+      - test
+      - build
+      - containers
+      - kubernetes
+      - docker-web
+      - docker-api
+      - docker-realtime
+      - image-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## 🎉 Threadline CI / CD Pipeline"
+            echo ""
+            echo "| Stage | Result |"
+            echo "| --- | --- |"
+            echo "| Lint & Format | ${{ needs.lint-format.result }} |"
+            echo "| Typecheck | ${{ needs.typecheck.result }} |"
+            echo "| Security Audit | ${{ needs.security-audit.result }} |"
+            echo "| Test Suites | ${{ needs.test.result }} |"
+            echo "| Build | ${{ needs.build.result }} |"
+            echo "| Container Images | ${{ needs.containers.result }} |"
+            echo "| Kubernetes Overlays | ${{ needs.kubernetes.result }} |"
+            echo "| Web → GHCR | ${{ needs.docker-web.result }} |"
+            echo "| API → GHCR | ${{ needs.docker-api.result }} |"
+            echo "| Realtime → GHCR | ${{ needs.docker-realtime.result }} |"
+            echo "| Image Vulnerability Scan | ${{ needs.image-scan.result }} |"
+            echo ""
+            echo "**Completed at** $(date -u +"%Y-%m-%dT%H:%M:%SZ") UTC"
+          } >> "$GITHUB_STEP_SUMMARY"
