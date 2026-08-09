@@ -10,5 +10,8 @@ class_name = "RoomDurableObject"
 tag = "v1"
 new_sqlite_classes = ["RoomDurableObject"]
 
+[vars]
+PERSISTENCE_WEBHOOK = "https://threadline-api-liard.vercel.app/v1/internal/room-events"
+
 [secrets]
 required = ["ROOM_TICKET_SECRET", "PERSISTENCE_SECRET"]

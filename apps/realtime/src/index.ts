@@ -79,6 +79,13 @@ export class RoomDurableObject implements DurableObject {
       )
     )
       return;
+    // Tickets are issued from the API after ABAC evaluation. A viewer may
+    // receive media/signalling and presence but cannot mutate shared state.
+    if (
+      participant.role === "viewer" &&
+      ["chat", "editor", "whiteboard", "screen-share", "timeline"].includes(event.type)
+    )
+      return socket.close(1008, "Room role does not permit writing");
     if (event.type === "heartbeat") return send(socket, { type: "heartbeat", at: new Date().toISOString() });
     if (event.type === "screen-share")
       participant.screenSharing = Boolean((event.payload as { active?: boolean })?.active);
@@ -97,7 +104,11 @@ export class RoomDurableObject implements DurableObject {
     const participant = socket.deserializeAttachment() as Participant | null;
     socket.close();
     if (!participant) return;
-    this.restoreParticipants();
+    // state.getWebSockets() can still report this socket for a moment after the
+    // platform has invoked this very close handler for it, so rebuilding from that
+    // enumeration alone would re-add the participant we're supposed to be removing.
+    // We know for certain this socket is gone, so exclude it explicitly.
+    this.restoreParticipants(socket);
     this.broadcast({ type: "presence", payload: [...this.participants.values()] });
     await this.record({
       type: "participant.left",
@@ -119,7 +130,9 @@ export class RoomDurableObject implements DurableObject {
   }
 
   private async acceptSocket(socket: WebSocket, participant: Participant) {
-    socket.accept();
+    // Hibernatable sockets preserve their attachment and lifecycle handlers
+    // without keeping the Durable Object resident between messages.
+    this.state.acceptWebSocket(socket);
     socket.serializeAttachment(participant);
     this.participants.set(participant.userId, participant);
     send(socket, {
@@ -138,13 +151,22 @@ export class RoomDurableObject implements DurableObject {
   private broadcast(message: ServerMessage, recipient?: string) {
     for (const socket of this.state.getWebSockets()) {
       const participant = socket.deserializeAttachment() as Participant | null;
-      if (!recipient || participant?.userId === recipient) send(socket, message);
+      if (recipient && participant?.userId !== recipient) continue;
+      try {
+        send(socket, message);
+      } catch {
+        // The socket closed between getWebSockets() and send() (e.g. it's the
+        // very socket whose close just triggered this broadcast). Skip it so
+        // one stale socket can't abort delivery to everyone else, or abort
+        // the caller before it finishes recording the close event.
+      }
     }
   }
 
-  private restoreParticipants() {
+  private restoreParticipants(excludeSocket?: WebSocket) {
     this.participants = new Map();
     for (const socket of this.state.getWebSockets()) {
+      if (socket === excludeSocket) continue;
       const participant = socket.deserializeAttachment() as Participant | null;
       if (participant) this.participants.set(participant.userId, participant);
     }
@@ -172,7 +194,8 @@ export class RoomDurableObject implements DurableObject {
       });
       if (!response.ok) throw new Error(`Persistence returned ${response.status}.`);
       await this.state.storage.delete(key);
-    } catch {
+    } catch (error) {
+      console.error(`Room event delivery failed for ${this.roomId}, retrying in 30s.`, error);
       await this.state.storage.setAlarm(Date.now() + 30_000);
     }
   }
@@ -191,7 +214,7 @@ export class RoomDurableObject implements DurableObject {
         return undefined;
       return {
         userId: payload.sub,
-        username: payload.username,
+        username: typeof payload.display_name === "string" ? payload.display_name.slice(0, 80) : payload.username,
         role: payload.role,
         joinedAt: new Date().toISOString(),
         screenSharing: false,
