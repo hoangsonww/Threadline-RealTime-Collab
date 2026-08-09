@@ -11,3 +11,4 @@ coverage
 *.tsbuildinfo
 .playwright-cli
 output/playwright
+.playwright-mcp

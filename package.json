@@ -24,7 +24,7 @@
     "lint": "eslint apps --max-warnings=0",
     "lint:fix": "eslint apps --fix",
     "prepare": "husky",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --passWithNoTests && npm run test --workspace=@threadline/realtime",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

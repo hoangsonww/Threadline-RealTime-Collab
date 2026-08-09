@@ -10,6 +10,7 @@ export default tseslint.config(
     ignores: [
       "**/node_modules/**",
       "**/.next/**",
+      "**/.vercel/**",
       "**/dist/**",
       "**/.wrangler/**",
       "**/generated/**",
