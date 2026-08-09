@@ -1,14 +1,272 @@
 # Threadline
 
-Threadline is a room-centered collaboration workspace for distributed engineering teams. A room is both the live session and its durable record: people meet, share context, capture decisions, and retain the artifacts after the call.
+![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
+![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square&logo=nodedotjs&logoColor=white)
+![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white)
+![Cloudflare Workers](https://img.shields.io/badge/Cloudflare_Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![Durable Objects](https://img.shields.io/badge/Durable_Objects-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
+![WebRTC](https://img.shields.io/badge/WebRTC-333333?style=flat-square&logo=webrtc&logoColor=white)
+![WebSocket](https://img.shields.io/badge/WebSocket-black?style=flat-square)
+![OAuth2%20%2F%20OIDC](https://img.shields.io/badge/OAuth2%20%2F%20OIDC-F78C40?style=flat-square&logo=openid&logoColor=white)
+![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
+![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)
+![Swagger%20%2F%20OpenAPI](https://img.shields.io/badge/Swagger%20%2F%20OpenAPI-85EA2D?style=flat-square&logo=swagger&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
+![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white)
+![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
+![ESLint](https://img.shields.io/badge/ESLint-4B32C3?style=flat-square&logo=eslint&logoColor=white)
+![Prettier](https://img.shields.io/badge/Prettier-F7B93E?style=flat-square&logo=prettier&logoColor=black)
 
-## What is included
+Threadline is a room-centered collaboration workspace for engineering teams. A room is both a live session (video, audio, screen share, whiteboard, chat, shared editor) and a durable record of what happened in it — nothing is thrown away when the call ends. The whole system is three independently deployable services, each with a single job, none of them trusting the others' enforcement — that split, and what it costs and buys, is the actual subject of this repository.
 
-- A polished Next.js workspace with authentication screens, a room dashboard, room creation, chat, shared notes, a drawable whiteboard, file metadata, an activity timeline, and browser media/screen-share controls.
-- An Express service that exposes identity, sessions, room access tickets, PAT management, and a first-party OIDC authorization-code-with-PKCE provider.
-- A Cloudflare Worker with one Durable Object per room for room presence, signaling, live events, and batched durable event hand-off.
+## Table of contents
 
-## Local setup
+- [Overview](#overview)
+- [Why Threadline exists](#why-threadline-exists)
+- [Live deployment](#live-deployment)
+- [What's included](#whats-included)
+- [Technology stack](#technology-stack)
+- [How the three services fit together](#how-the-three-services-fit-together)
+- [Trust model](#trust-model)
+- [Engineering principles](#engineering-principles)
+- [Real incidents found operating this](#real-incidents-found-operating-this)
+- [Testing and quality gates](#testing-and-quality-gates)
+- [What the interface looks like](#what-the-interface-looks-like)
+- [Project structure](#project-structure)
+- [Running it locally](#running-it-locally)
+- [Environment variables](#environment-variables)
+- [Commands](#commands)
+- [Deploying it yourself](#deploying-it-yourself)
+- [Documentation index](#documentation-index)
+- [License](#license)
+
+## Overview
+
+- **What a room is:** a live WebRTC call (video, audio, screen share) plus a shared whiteboard, shared notes, a shared code editor, direct peer-to-peer file transfer, and chat — all synced in real time across every connected participant.
+- **What persists:** chat messages, document edits, whiteboard updates, and who joined/left are written into a durable, permission-filtered timeline you can revisit after the call ends. Live-only signals (cursor position, WebRTC offers/answers/ICE candidates, individual whiteboard strokes) are deliberately never persisted — they're too high-frequency to be a meaningful record.
+- **What it's built to demonstrate:** a production-quality realtime collaboration app split across three independent, mostly-serverless runtimes, each owning exactly one responsibility, with independent authorization checks at every boundary rather than a single shared trust domain.
+- **Three services, three jobs:**
+  - `apps/web` — Next.js UI and the browser-side WebRTC mesh, deployed to Vercel.
+  - `apps/api` — Express API owning identity, attribute-based access control, rooms, calendar, and the durable event record, backed by MongoDB Atlas.
+  - `apps/realtime` — one Cloudflare Durable Object per room, owning live presence and WebRTC signaling relay.
+- **Who this is for:** engineers evaluating how to structure a realtime product across a serverless web tier, a serverless API tier, and a genuinely stateful coordination tier, and wanting to see the actual trade-offs (not just the happy path) written down.
+
+## Why Threadline exists
+
+- **The product problem it solves:** most teams run a live call in one tool (a video conferencing app) and keep the record of what happened in a completely different one (a wiki page, a chat thread, a shared doc someone remembers to update afterward). Threadline treats the room itself as the unit that owns both — the live session and its durable history are the same object, not two things a human has to reconcile by hand.
+- **The engineering problem it's built to explore:** a single conventional server handles "many stateless requests" well and "one coordinator per active room, globally consistent, cheap when idle" poorly. Threadline exists to work through that specific mismatch honestly — one plane (`apps/realtime`) is intentionally not stateless, and the rest of the system is designed around that fact rather than around pretending everything can be a normal REST service.
+- **Why it's a real, running deployment rather than a diagram:** every claim in this repository's documentation — the trust boundaries, the failure modes, the incidents — is backed by a system you can actually open, register an account on, and break in the same ways it was broken during development. [Real incidents found operating this](#real-incidents-found-operating-this) and [`docs/operations.md`](docs/operations.md) exist because this was operated, not just designed.
+- **What it deliberately does not try to be:** a broadcast/streaming platform (no SFU, no one-to-many fan-out — see [Known limitations](ARCHITECTURE.md#known-limitations)), a general-purpose project management tool, or a fully managed multi-tenant SaaS with billing. It is scoped to small, focused working sessions for a single organization at a time.
+
+## Live deployment
+
+- **Web app:** [threadline-rtc.vercel.app](https://threadline-rtc.vercel.app) — create a real account and try it.
+- **Swagger UI:** [threadline-api-liard.vercel.app/api-docs](https://threadline-api-liard.vercel.app/api-docs) — interactive, try-it-out against the live API.
+- **ReDoc:** [threadline-api-liard.vercel.app/api-docs/redoc](https://threadline-api-liard.vercel.app/api-docs/redoc) — three-pane reference.
+- **What's actually running there:** the same code in this repository, deployed with `apps/web` and `apps/api` both on Vercel (as two separate projects) and `apps/realtime` on Cloudflare Workers — the exact topology diagrammed in [Live deployment topology](ARCHITECTURE.md#live-deployment-topology) and detailed in [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
+
+## What's included
+
+- **Web app (`apps/web`):**
+  - Registration, login, password recovery, and email verification.
+  - Organization dashboard: recent rooms, recent activity, a room-creation modal.
+  - A dedicated rooms directory listing every room the caller can see.
+  - A live room view with five panels — chat, shared notes, a drawable whiteboard, direct peer-to-peer file transfer, and a durable event timeline — plus a separate shared code editor mode and camera/mic/screen-share controls.
+  - An organization-wide calendar for scheduling sessions, and an org-wide activity feed aggregating durable events across every visible room.
+  - Organization membership management and per-room membership management (granting explicit access to restricted rooms).
+  - Account settings: appearance/theme, active browser sessions (list and revoke), personal access tokens (create, scope, revoke), first-party OIDC clients, and email verification status.
+  - A custom, branded 404 page rather than a framework default.
+- **API (`apps/api`):**
+  - Identity and session management, with three independent authentication surfaces: browser session cookies, personal access tokens, and first-party OIDC.
+  - Organizations, rooms, room membership, and a calendar resource, all protected by attribute-based access control re-derived on every request.
+  - Personal access token issuance, scoping, listing, and revocation.
+  - A first-party OpenID Connect provider implementing Authorization Code + PKCE — no implicit grant, no password grant, no public third-party client registration.
+  - An internal ingest endpoint that accepts durable events forwarded by the Durable Object, independently re-checking authorization for the event's acting user rather than trusting the forwarding secret alone.
+  - Fully documented as an OpenAPI 3.1 specification, served live at `/api-docs` (Swagger UI) and `/api-docs/redoc` (ReDoc).
+- **Realtime (`apps/realtime`):**
+  - One Cloudflare Durable Object per room, created on demand and addressed deterministically from the room's ID.
+  - Presence tracking and WebRTC signaling relay (SDP offers/answers, ICE candidates) over hibernatable WebSockets, so an idle-but-connected room costs no ongoing compute.
+  - SQLite-backed storage for the retry queue behind the durable-event hand-off.
+  - Retried, alarm-scheduled delivery of durable events back to the API — a failed hand-off doesn't drop the event, it queues and tries again.
+- **WebRTC client (`apps/web/lib/peer-mesh.ts`):**
+  - A hand-rolled full-mesh client — one `RTCPeerConnection` and one data channel per remote participant, with no third-party WebRTC SDK.
+  - Camera and microphone streaming, screen sharing, and peer-to-peer chunked file transfer over the data channel.
+  - No media server anywhere in the stack — once signaling completes, audio/video/screen/file bytes never touch a Threadline-operated server again.
+
+## Technology stack
+
+| Technology           | Role in this project                                                                                                                                                       |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Next.js (App Router) | `apps/web` framework — client components for every authenticated page, no server-side data fetching for authenticated content                                              |
+| React                | UI library underneath `apps/web`                                                                                                                                           |
+| TypeScript           | Strict typing across all three workspaces (`apps/web`, `apps/api`, `apps/realtime`)                                                                                        |
+| Node.js              | Runtime for `apps/api`; also the local dev runtime for tooling                                                                                                             |
+| Express              | REST framework for `apps/api`, wrapped in a pure `createApp()` factory so the same code boots identically in tests, Docker, Kubernetes, and Vercel                         |
+| MongoDB (Atlas)      | Durable datastore in production, behind the `Repository` interface — never imported directly by route handlers                                                             |
+| Cloudflare Workers   | Hosts `apps/realtime`'s fetch handler, which routes WebSocket upgrades to the right Durable Object                                                                         |
+| Durable Objects      | One authoritative, in-memory instance per room for presence and signaling — the one piece of state that can't just be "more instances of a stateless server"               |
+| Vercel               | Hosts `apps/web`, and in this project's own live deployment, `apps/api` as well                                                                                            |
+| WebRTC               | Peer-to-peer audio, video, screen share, and file transfer, mesh topology, no media server                                                                                 |
+| WebSocket            | Transport for presence and signaling, using Cloudflare's hibernatable WebSocket API                                                                                        |
+| OAuth2 / OIDC        | Threadline's first-party identity provider, Authorization Code + PKCE only                                                                                                 |
+| JWT                  | Signs room tickets (HS256, 120-second single-purpose tokens) and OIDC access tokens (RS256, 15-minute expiry)                                                              |
+| Zod                  | Request validation throughout `apps/api`                                                                                                                                   |
+| Swagger / OpenAPI    | Live, interactive API documentation generated from `apps/api/src/openapi.ts`                                                                                               |
+| Docker               | Local Compose stack (web, API, MongoDB, Wrangler's local Worker emulation) and production container images                                                                 |
+| Kubernetes           | Self-hosted production alternative to Vercel/Render for the stateless web and API tier — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md)      |
+| GitHub Actions       | CI pipeline: format check, lint, typecheck, test, build, on every PR                                                                                                       |
+| Vitest               | Test runner for both `apps/api` (Node environment, `supertest`) and `apps/realtime` (real Workers runtime via `@cloudflare/vitest-pool-workers`)                           |
+| Playwright           | Browser automation used throughout development for live, two-independent-browser-context manual verification — see [Testing and quality gates](#testing-and-quality-gates) |
+| ESLint               | Lint gate across all three workspaces, zero warnings allowed                                                                                                               |
+| Prettier             | Formatting gate, enforced in CI and via a pre-commit hook                                                                                                                  |
+
+## How the three services fit together
+
+```mermaid
+graph LR
+    Browser["Browser"] -->|"session cookie / PAT"| Web["apps/web<br/>Next.js on Vercel"]
+    Web --> API["apps/api<br/>Express"]
+    Browser -->|"signed room ticket<br/>WebSocket"| RT["apps/realtime<br/>Cloudflare Durable Objects"]
+    API --> DB[("MongoDB Atlas")]
+    RT -->|"durable event webhook"| API
+    Browser <-.->|"WebRTC: audio, video,<br/>screen share, files"| Browser
+```
+
+- The browser talks to `apps/web` over HTTPS with a session cookie or PAT.
+- `apps/web` proxies the API through a same-origin rewrite, so the session cookie stays first-party even though the API is a separate Vercel project.
+- The browser opens a WebSocket **directly** to the Cloudflare Worker, authenticated by a short-lived, single-purpose signed ticket — not the session cookie.
+- The Durable Object never talks to MongoDB. It only hands events to the API over an authenticated webhook, retrying if that fails.
+- WebRTC media (audio/video/screen/files) flows peer-to-peer once signaling completes — never through a server.
+- Full breakdown: [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`docs/architecture.md`](docs/architecture.md).
+
+## Trust model
+
+- No plane trusts another plane's enforcement — every one independently re-verifies who's allowed to do what, using its own credential, on every request.
+- The Durable Object verifies its own signed room ticket (signature and room ID) before accepting a WebSocket upgrade.
+- The API re-checks attribute-based access control on every request, including events forwarded by the Durable Object over its internal webhook — a valid shared ingest secret proves the request came from the trusted Worker, not that the acting user embedded in the event may actually write to that room.
+- Session cookies, personal access tokens, and OIDC tokens are three genuinely different credential types with different lifetimes and capabilities — a PAT, even one scoped `admin:*`, is explicitly barred from session-only routes such as creating another PAT or listing browser sessions.
+- Two secrets are shared across two different platforms (Vercel and Cloudflare) with nothing in the code enforcing they match: `ROOM_TICKET_SECRET` and the `INTERNAL_INGEST_SECRET`/`PERSISTENCE_SECRET` pair. Getting either wrong fails silently at runtime — every ticket rejected, or every durable event silently never persisted — not at deploy time.
+- Full secrets inventory, with a diagram of exactly which secret crosses which boundary and what it authorizes: [`docs/security.md`](docs/security.md#secrets-inventory).
+
+## Engineering principles
+
+- **Independent re-verification, not shared trust.** Every plane re-derives authorization from scratch on every request rather than caching a decision or trusting what an upstream plane already claims to have checked.
+- **One `Repository` interface, two implementations.** `MemoryRepository` backs local dev and the real HTTP-level test suite with zero database connection; `MongoRepository` backs production. Route handlers in `apps/api/src/application.ts` only ever call the interface — this is what lets `createApp()` boot identically on a test runner, Docker, Kubernetes, or Vercel. Rationale: [ADR-0003](docs/decisions/0003-repository-interface.md).
+- **Attribute-based access control, computed fresh every time.** Every permission decision is derived from the caller's organization role, explicitly delegated attributes, and — for rooms — the room's own visibility and classification, re-evaluated on every request rather than inferred from an ID or cached from a previous check.
+- **Fail closed on misconfiguration, at boot, not at request time.** `apps/api/src/index.ts` refuses to start in production with an insecure or incomplete configuration — short secrets, non-HTTPS origins, a missing signing key — rather than starting with a silently weaker default. See [Boot-time validation](docs/security.md#boot-time-validation).
+- **Secrets are single-purpose and never reused across trust boundaries.** The value that authorizes a WebSocket connection is not the value that authorizes a durable-event webhook call, which is not the value that signs an OIDC access token. A leak of one does not compromise what the others protect.
+- **No media server, by design.** WebRTC media takes the shortest path available — peer-to-peer — rather than routing through infrastructure Threadline would have to run, secure, and pay for per minute of call time. The cost of that choice (mesh bandwidth scales with participant count) is written down, not hidden: [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md).
+- **Honesty over polish in the documentation itself.** The incidents, known limitations, and roadmap gaps below are real and current, not a marketing summary — see [Real incidents found operating this](#real-incidents-found-operating-this) and [`docs/roadmap.md`](docs/roadmap.md).
+
+## Real incidents found operating this
+
+This deployment has broken for real, more than once. Every incident — what broke, why, how it was found, how it was fixed — is written up in full in [`docs/operations.md`](docs/operations.md#incidents). All ten, briefly:
+
+- A WebRTC negotiation bug where two participants could join the same room and simply never connect, because neither side happened to offer first.
+- A Durable Object hibernation quirk where a participant who'd just disconnected kept appearing "present" to everyone else, indefinitely, because the departing socket still counted itself present in the same broadcast that announced its own departure.
+- A rate limiter silently sharing one counter across four different endpoints, because of how Express rebases request paths inside route mounts — hammering `/login` measurably ate into `/register`'s budget.
+- Durable events (chat, joins, document edits) never persisting at all, because `apps/realtime/wrangler.toml` was missing its `[vars]` block entirely, so the persistence webhook URL was `undefined` and delivery was silently never attempted.
+- A room-ticket signing mismatch between `apps/api` and `apps/realtime`, causing every WebSocket connection to be rejected with no visible error beyond "bad response from the server."
+- A persistence-secret mismatch on the same webhook, after the URL itself was fixed — the two independently configured platform secrets simply didn't match.
+- A production web app deployed with **zero environment variables**, meaning registration and login were completely broken for every real user despite the build succeeding and the site returning `200`.
+- `WEB_ORIGIN` pointed at `localhost:3000` in a production deployment, silently rejecting every real cross-origin request as a CSRF violation.
+- `OIDC_ISSUER` set to a URL that included a path, which crashed the _entire_ API at boot — every route, not just the OIDC ones — because `parseOrigin()` rejects any value that isn't a bare origin.
+- A seeded first-party OIDC client whose redirect URI never updated when the web app's domain changed, breaking login through that specific flow until the seed logic was made self-healing.
+
+## Testing and quality gates
+
+- **Two real automated test suites exist**, each running against the actual runtime it targets rather than a mock of it: `apps/api`'s HTTP-level integration suite (`supertest` against a real `createApp()` and a real `MemoryRepository`, zero mocking of Express or the repository) and `apps/realtime`'s Durable Object suite (real hibernatable WebSocket handlers and SQLite storage inside an actual Workers runtime via `@cloudflare/vitest-pool-workers`).
+- **`apps/web` has no automated test suite yet.** Every UI bug found in this project — including the WebRTC mesh initiator bug, the stale-presence-after-disconnect race, and the whiteboard off-tab stroke loss — was found and verified through live manual testing against the running app, including genuine two-independent-browser-context sessions (two separate cookie jars, two separately registered real users), not an automated regression suite. This is the single largest testing gap in the repository, written down honestly rather than glossed over: [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover).
+- **The full local check, mirroring what gates a merge in CI:**
+  ```bash
+  npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
+  ```
+- Full test-suite structure, exactly what's covered, and every known coverage gap: [`docs/testing.md`](docs/testing.md).
+
+## What the interface looks like
+
+All screenshots below are taken directly against the live deployment. The chat and whiteboard screenshots use two independently authenticated browser sessions connected to the same room at the same time — real, live two-person sync, not a mockup.
+
+<p align="center">
+  <img src="docs/screenshots/landing.png" alt="Threadline landing page" width="100%" />
+  <br />
+  <sub>Landing page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Threadline workspace dashboard" width="100%" />
+  <br />
+  <sub>Workspace dashboard</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/room-chat.png" alt="Room chat, two independently connected participants" width="100%" />
+  <br />
+  <sub>Room chat — two participants, live</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/room-whiteboard.png" alt="Whiteboard stroke synced live between two participants" width="100%" />
+  <br />
+  <sub>Whiteboard — synced live between participants</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-general.png" alt="Threadline account settings" width="100%" />
+  <br />
+  <sub>Account settings</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/calendar.png" alt="Threadline organization calendar" width="100%" />
+  <br />
+  <sub>Organization calendar</sub>
+</p>
+
+- Full surface-by-surface set (notes, code editor, file transfer, timeline, membership, every settings page, 404): [`docs/frontend.md`](docs/frontend.md#screens).
+- Swagger UI / ReDoc screenshots: [`docs/api.md`](docs/api.md#interactive-documentation).
+
+## Project structure
+
+```text
+Threadline/
+├── apps/
+│   ├── web/                  Next.js App Router UI (Vercel)
+│   │   ├── app/               routes: landing, auth screens, /app/** workspace
+│   │   ├── components/        React client components
+│   │   ├── lib/                apiFetch() HTTP client, PeerMesh WebRTC client
+│   │   └── public/            static assets
+│   ├── api/                   Express REST API (Vercel / any Node 22 host)
+│   │   └── src/
+│   │       ├── domain.ts       entity types (User, Room, Session, PAT, ...)
+│   │       ├── repository.ts   Repository interface + Memory/Mongo implementations
+│   │       ├── policy.ts       ABAC decision logic
+│   │       ├── application.ts  createApp() factory, routes, middleware
+│   │       ├── security.ts     hashing, tokens, cookies
+│   │       └── openapi.ts      OpenAPI 3.1 document
+│   └── realtime/               Cloudflare Worker + Durable Object
+│       └── src/index.ts        RoomDurableObject
+├── docs/                      Deep-dive documentation
+│   ├── decisions/               Architecture Decision Records
+│   └── screenshots/             Curated UI screenshots used across the docs
+├── infra/
+│   ├── docker/                  Dockerfiles and docker-compose.yml
+│   └── kubernetes/               Kustomize base + overlays
+├── ARCHITECTURE.md            Root-level architecture reference (this repo's single-file overview)
+└── .github/workflows/         CI pipeline (format, lint, typecheck, test, build)
+```
+
+- Full monorepo layout, one level deeper, with what each file is responsible for: [`docs/architecture.md`](docs/architecture.md#monorepo-layout).
+
+## Running it locally
+
+**Prerequisites:** Node.js 22 or newer, and `npm` (this is an npm-workspaces monorepo — one `npm install` at the root installs all three workspaces).
 
 ```bash
 npm install
@@ -16,29 +274,80 @@ cp apps/realtime/.dev.vars.example apps/realtime/.dev.vars
 npm run dev
 ```
 
-Open `http://localhost:3000`. `npm run dev` starts all three local services with their correct connections:
+Open `http://localhost:3000`. `npm run dev` starts all three services, wired to talk to each other correctly:
 
-| Service  | URL                     | Local behavior                                                           |
-| -------- | ----------------------- | ------------------------------------------------------------------------ |
-| Web      | `http://localhost:3000` | Next.js UI, connected to the local API and Worker                        |
-| API      | `http://localhost:4000` | Express identity and room API using the in-memory development repository |
-| Realtime | `http://localhost:8787` | Wrangler's local Worker and Durable Object runtime                       |
+| Service  | URL                     | What's running there                                                    |
+| -------- | ----------------------- | ----------------------------------------------------------------------- |
+| Web      | `http://localhost:3000` | Next.js UI, connected to the local API and Worker                       |
+| API      | `http://localhost:4000` | Express API, using an in-memory development database                    |
+| Realtime | `http://localhost:8787` | Wrangler's local emulation of the Worker and its Durable Object runtime |
 
-The local Worker receives the matching development secrets from `apps/realtime/.dev.vars`; that file is ignored by Git. Stop the combined stack with `Ctrl+C`. To run individual services, use `npm run dev:api:local`, `npm run dev:realtime:local`, or `npm run dev:web:local`.
+- The local Worker reads its dev secrets from `apps/realtime/.dev.vars` (gitignored).
+- Without `MONGODB_URI` set, `apps/api` uses an in-memory repository — zero database setup needed to run locally, but every restart of the API process (including `tsx watch` restarts on save) clears it.
+- Stop everything with `Ctrl+C`.
+- Run one service alone: `npm run dev:api:local`, `npm run dev:realtime:local`, or `npm run dev:web:local`.
+- Prefer containers? `npm run docker:up` starts web + API + a real local MongoDB + the local Durable Object runtime together, so state survives restarts. Full guide: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
 
-Prefer containers? `npm run docker:up` starts the web app, API, MongoDB, and Wrangler's local Durable Object runtime together. The complete Docker and Kubernetes operating guide is in [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
+## Environment variables
 
-## Architecture
+The three services need different configuration, summarized here — the full table with every variable, its purpose, and production requirements lives in [`docs/deployment.md`](docs/deployment.md).
 
-| Plane                | Runtime                    | Job                                                         |
-| -------------------- | -------------------------- | ----------------------------------------------------------- |
-| User interface       | Next.js on Vercel          | Session-aware UI and browser collaboration tools            |
-| Identity and records | Express + MongoDB Atlas    | Auth, OIDC, PATs, room permissions, durable artifacts       |
-| Live coordination    | Cloudflare Durable Objects | Presence, signaling, ephemeral room state, broadcast events |
-| Peer media           | WebRTC                     | Audio, video, screen share, and direct data transfer        |
+| Service         | Needs                                                                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time)                                                                        |
+| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` |
+| `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                               |
 
-The API accepts `MONGODB_URI` when Atlas is ready. The in-memory repository is deliberate for local bootstrapping and is replaced at one boundary in `apps/api/src/repository.ts`.
+- `ROOM_TICKET_SECRET` must be identical on `apps/api` and `apps/realtime`. `PERSISTENCE_SECRET` (Worker) must be identical to `INTERNAL_INGEST_SECRET` (API) — different names, same value. Nothing in the code enforces either match; getting one wrong is exactly what caused two of the [real incidents](#real-incidents-found-operating-this) above.
+- Never put MongoDB, OIDC, room-ticket, email-delivery, or TURN credentials in `NEXT_PUBLIC_*` variables — those are shipped to every browser that loads the page.
+- Local defaults exist for everything except `MONGODB_URI`, so local dev needs no secrets configured at all beyond copying `.dev.vars.example`. Production has no such fallback — see [Boot-time validation](docs/security.md#boot-time-validation).
 
-For production, the API validates its mandatory settings at boot: Atlas, HTTPS origins, stable RSA signing JWK, separate room and ingestion secrets, and an authenticated delivery webhook for recovery/verification email. Generate a signing JWK once with `npm run generate:oidc-key --workspace=@threadline/api`; deployment details are in [`docs/deployment.md`](docs/deployment.md).
+## Commands
 
-For a zero-cost public preview, use the Vercel same-origin API rewrite described in the deployment guide. It lets browser authentication work across free Vercel, Render, MongoDB Atlas, and Cloudflare URLs without purchasing a domain.
+| Command                             | Description                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------- |
+| `npm run dev`                       | Web + API + realtime together, wired for local development                      |
+| `npm test`                          | API's HTTP-level integration suite + realtime worker's Durable Object suite     |
+| `npm run typecheck`                 | `tsc --noEmit` across all three workspaces                                      |
+| `npm run lint`                      | ESLint, zero warnings allowed                                                   |
+| `npm run format` / `format:check`   | Prettier write / check                                                          |
+| `npm run build`                     | Production build (`apps/web` only — API and Worker have no separate build step) |
+| `npm run docker:up` / `docker:down` | Full Docker Compose stack, including a real local MongoDB                       |
+| `npm run k8s:validate`              | Renders both Kustomize overlays without a live cluster                          |
+
+- Before opening a PR: `npm run format:check && npm run lint && npm run typecheck && npm test && npm run build` — the same chain CI runs. Details: [`docs/testing.md`](docs/testing.md).
+- Contributing a change? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Deploying it yourself
+
+- The API validates every mandatory production setting **at boot** — Atlas connection, HTTPS-only origins, a stable RSA signing key, separate room-ticket/ingest secrets, an authenticated email-delivery webhook. It refuses to boot half-configured.
+- Generate the OIDC signing key once: `npm run generate:oidc-key --workspace=@threadline/api`. Rotating it invalidates every OIDC token issued under the old key, so it isn't done casually.
+- `apps/web` and `apps/api` can both run on Vercel, as this project's own deployment does, or `apps/api` can run on any always-on Node 22 host (Render, Docker, Kubernetes) — the same `createApp()` boots identically either way.
+- `apps/realtime` deploys to Cloudflare Workers with `wrangler deploy`; its two shared secrets are set with `wrangler secret put` and must match the corresponding API values exactly.
+- Zero-cost preview path (free tiers of Vercel + MongoDB Atlas + Cloudflare, no domain purchase): see [`docs/deployment.md`](docs/deployment.md#zero-cost-public-preview).
+- Self-hosting the stateless web/API tier on Kubernetes instead of Vercel/Render, while Cloudflare remains the production owner of room Durable Objects: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
+- Exactly which URLs this project's own live deployment runs at, and how that maps onto the general deployment guide: [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
+
+## Documentation index
+
+| Document                                                                 | Covers                                                                                                    |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md)                                     | Root-level architecture reference — every plane, every trust boundary, every major flow                   |
+| [`docs/architecture.md`](docs/architecture.md)                           | System topology, monorepo layout, full ER diagram, request-lifecycle and event hand-off sequence diagrams |
+| [`docs/frontend.md`](docs/frontend.md)                                   | `apps/web` route tree, `WorkspaceGate`, shell composition, theme system, HTTP client, component inventory |
+| [`docs/api.md`](docs/api.md)                                             | REST endpoint reference, the three auth surfaces, ABAC policy, OIDC Authorization Code + PKCE flow        |
+| [`docs/realtime.md`](docs/realtime.md)                                   | Durable Object internals, WebSocket protocol, WebRTC mesh negotiation, screen sharing, known limitations  |
+| [`docs/security.md`](docs/security.md)                                   | Trust boundaries, secrets inventory, session/PAT/OIDC token lifecycle, rate limits, CSRF                  |
+| [`docs/testing.md`](docs/testing.md)                                     | Test suite structure, what's actually covered, known coverage gaps                                        |
+| [`docs/glossary.md`](docs/glossary.md)                                   | Alphabetical reference for every domain term used across these docs                                       |
+| [`docs/troubleshooting.md`](docs/troubleshooting.md)                     | Real problems hit building and operating this, with fixes                                                 |
+| [`docs/roadmap.md`](docs/roadmap.md)                                     | Known gaps, honestly — what's not done and why                                                            |
+| [`docs/decisions/`](docs/decisions/README.md)                            | ADRs for the major decisions behind this design                                                           |
+| [`docs/deployment.md`](docs/deployment.md)                               | Production deployment across Vercel, Cloudflare, and Atlas; zero-cost preview setup                       |
+| [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md) | Docker Compose local stack and Kubernetes production deployment                                           |
+| [`docs/operations.md`](docs/operations.md)                               | Runbook: health checks, incident triage, full record of every real incident                               |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md)                                     | PR process, coding conventions, what gates a merge                                                        |
+
+## License
+
+MIT. See [LICENSE](LICENSE) for details.
