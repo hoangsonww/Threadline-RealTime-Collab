@@ -1,5 +1,12 @@
+import type { Metadata } from "next";
 import { Brand } from "../../components/brand";
 import { ForgotPasswordForm } from "../../components/password-recovery";
+
+export const metadata: Metadata = {
+  title: "Reset your password",
+  description: "Request a single-use, short-lived link to reset your Threadline account password.",
+  robots: { index: false, follow: false },
+};
 
 export default function ForgotPasswordPage() {
   return (

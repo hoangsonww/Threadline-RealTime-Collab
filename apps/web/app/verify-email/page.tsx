@@ -1,6 +1,12 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { Brand } from "../../components/brand";
 import { VerifyEmailForm } from "../../components/password-recovery";
+
+export const metadata: Metadata = {
+  title: "Verify your email",
+  robots: { index: false, follow: false },
+};
 
 export default function VerifyEmailPage() {
   return (

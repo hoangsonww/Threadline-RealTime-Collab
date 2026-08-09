@@ -1,6 +1,12 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import { Brand } from "../../components/brand";
 import { ResetPasswordForm } from "../../components/password-recovery";
+
+export const metadata: Metadata = {
+  title: "Set a new password",
+  robots: { index: false, follow: false },
+};
 
 export default function ResetPasswordPage() {
   return (

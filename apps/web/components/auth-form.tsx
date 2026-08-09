@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { apiFetch } from "../lib/api";
 
 type Mode = "login" | "register";
 
@@ -32,42 +33,27 @@ export function AuthForm({ mode }: { mode: Mode }) {
       return;
     }
     try {
-      const api = process.env.NEXT_PUBLIC_API_ORIGIN;
-      if (api) {
-        const payload =
-          mode === "register"
-            ? {
-                email,
-                password,
-                displayName: String(form.get("displayName")).trim(),
-                organizationName: String(form.get("organizationName")).trim(),
-                username: email
-                  .split("@")[0]
-                  .toLowerCase()
-                  .replace(/[^a-z0-9-]/g, "-")
-                  .slice(0, 32),
-              }
-            : { email, password };
-        const response = await fetch(`${api}/v1/auth/${mode === "register" ? "register" : "login"}`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message ?? "Unable to sign in.");
-        localStorage.setItem("threadline-user", JSON.stringify(data.user));
-      } else {
-        localStorage.setItem(
-          "threadline-user",
-          JSON.stringify({
-            displayName: mode === "register" ? String(form.get("displayName")).trim() : "Avery Chen",
-            email,
-          }),
-        );
-        await new Promise((resolve) => window.setTimeout(resolve, 350));
-      }
-      router.push("/app");
+      const payload =
+        mode === "register"
+          ? {
+              email,
+              password,
+              displayName: String(form.get("displayName")).trim(),
+              organizationName: String(form.get("organizationName")).trim(),
+              // Threadline has no user-facing handle; this only fills an internal/OIDC
+              // field, so it just needs to satisfy the API's 3-32 char shape.
+              username: `${email
+                .split("@")[0]
+                .toLowerCase()
+                .replace(/[^a-z0-9-]/g, "-")}000`.slice(0, 32),
+            }
+          : { email, password };
+      await apiFetch(`/v1/auth/${mode === "register" ? "register" : "login"}`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const returnTo = new URLSearchParams(window.location.search).get("returnTo");
+      router.push(returnTo?.startsWith("/app") ? returnTo : "/app");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to sign in. Please try again.");
       setBusy(false);
