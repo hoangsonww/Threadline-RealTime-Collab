@@ -1,11 +1,13 @@
 "use client";
 
 import { BuildingsIcon, UserCircleIcon } from "@phosphor-icons/react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ThemeToggle } from "./theme-toggle";
+import { useSearchParams } from "next/navigation";
+import { apiFetch, selectedOrganization, type IdentityResponse } from "../lib/api";
 
 type Identity = { title: string; subtitle: string; initials: string };
-const defaultIdentity: Identity = { title: "Your workspace", subtitle: "Personal workspace", initials: "TL" };
+const defaultIdentity: Identity = { title: "Loading workspace", subtitle: "Securing your session", initials: "··" };
 
 const initialsFor = (name: string) =>
   name
@@ -17,34 +19,21 @@ const initialsFor = (name: string) =>
 
 export function WorkspaceTopbar() {
   const [identity, setIdentity] = useState(defaultIdentity);
+  const selectedOrgId = useSearchParams().get("org");
   useEffect(() => {
-    const api = process.env.NEXT_PUBLIC_API_ORIGIN;
-    if (api) {
-      void fetch(`${api}/v1/auth/me`, { credentials: "include" })
-        .then(async (response) => (response.ok ? response.json() : Promise.reject(new Error("session unavailable"))))
-        .then((data) => {
-          const name = data.user.displayName as string;
-          setIdentity({
-            title: data.organizations[0]?.name ?? "Your workspace",
-            subtitle: name ? `${name} · personal workspace` : "Personal workspace",
-            initials: initialsFor(name),
-          });
-        })
-        .catch(() => undefined);
-      return;
-    }
-    try {
-      const user = JSON.parse(localStorage.getItem("threadline-user") ?? "{}") as { displayName?: string };
-      if (user.displayName)
+    void apiFetch<IdentityResponse>("/v1/auth/me")
+      .then((data) => {
+        const name = data.user.displayName as string;
         setIdentity({
-          title: "Your workspace",
-          subtitle: `${user.displayName} · personal workspace`,
-          initials: initialsFor(user.displayName),
+          title: selectedOrganization(data, selectedOrgId)?.name ?? "Your workspace",
+          subtitle: name ? `${name} · personal workspace` : "Personal workspace",
+          initials: initialsFor(name),
         });
-    } catch {
-      // The unauthenticated fallback is intentionally generic.
-    }
-  }, []);
+      })
+      .catch(() =>
+        setIdentity({ title: "Session unavailable", subtitle: "Sign in to access your workspace", initials: "TL" }),
+      );
+  }, [selectedOrgId]);
   return (
     <header className="topbar">
       <div className="topbar-context">
@@ -55,14 +44,15 @@ export function WorkspaceTopbar() {
         </div>
       </div>
       <div className="topbar-actions">
-        <ThemeToggle compact />
-        <button className="button button-ghost button-icon" aria-label="Organization settings">
+        <Link className="button button-ghost button-icon" href="/app/rooms" aria-label="Open rooms">
           <BuildingsIcon size={18} />
-        </button>
-        <button className="button button-ghost button-icon" aria-label="Personal profile">
+        </Link>
+        <Link className="button button-ghost button-icon" href="/app/settings" aria-label="Personal settings">
           <UserCircleIcon size={19} />
-        </button>
-        <span className="avatar">{identity.initials}</span>
+        </Link>
+        <Link className="avatar topbar-profile" href="/app/settings" aria-label="Open personal settings">
+          {identity.initials}
+        </Link>
       </div>
     </header>
   );
