@@ -15,52 +15,61 @@ import {
   PaperPlaneTiltIcon,
   PhoneDisconnectIcon,
   SidebarSimpleIcon,
+  UsersThreeIcon,
   VideoCameraIcon,
   VideoCameraSlashIcon,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
-type Message = { id: number; person: string; initials: string; text: string; time: string };
+type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
+type RoomEvent = {
+  id?: string;
+  type: string;
+  payload: unknown;
+  actorId?: string;
+  from?: string;
+  createdAt?: string;
+  at?: string;
+};
+type Message = { id: string; person: string; initials: string; text: string; time: string };
 type FileEntry = { name: string; size: string; status: string };
 
-const participant = [
-  { name: "Avery Chen", initials: "AC", label: "You", self: true },
-  { name: "Lina Novak", initials: "LN", label: "Lina" },
-  { name: "Mateo Costa", initials: "MC", label: "Mateo" },
-  { name: "Sora Kim", initials: "SK", label: "Sora" },
-];
-const initialMessages: Message[] = [
-  {
-    id: 1,
-    person: "Lina Novak",
-    initials: "LN",
-    text: "I added the rollback criteria to the shared notes. The error rate is falling now.",
-    time: "10:24",
-  },
-  {
-    id: 2,
-    person: "Mateo Costa",
-    initials: "MC",
-    text: "The retry worker fix is ready to review. I am sharing the diff in a moment.",
-    time: "10:27",
-  },
-  {
-    id: 3,
-    person: "Sora Kim",
-    initials: "SK",
-    text: "I captured the decision and assigned the follow-up owner.",
-    time: "10:31",
-  },
-];
-const starterNotes = `# Incident checkpoint\n\n## Decision\nKeep the rollback guard enabled until the payment retry error rate remains below the alert threshold.\n\n## Follow-up\n- Mateo: merge and monitor retry worker change\n- Lina: add a regression check to the runbook\n- Avery: post the room summary\n`;
-const starterCode = `export async function shouldRetry(payment: Payment) {\n  if (payment.retryCount >= MAX_RETRIES) return false;\n  if (payment.state === "rollback_pending") return false;\n\n  return isRetryable(payment.lastError);\n}\n`;
-
-function formatSize(bytes: number) {
-  return bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
-}
+const initialsFor = (name: string) =>
+  name
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "TL";
+const formatSize = (bytes: number) =>
+  bytes < 1_000_000 ? `${Math.max(1, Math.round(bytes / 1000))} KB` : `${(bytes / 1_000_000).toFixed(1)} MB`;
+const eventAt = (event: RoomEvent) => event.createdAt ?? event.at ?? new Date().toISOString();
+const eventToMessage = (event: RoomEvent): Message | undefined => {
+  if (event.type !== "chat") return undefined;
+  const payload = event.payload as { text?: string; username?: string };
+  if (!payload.text) return undefined;
+  const person = payload.username || "Room member";
+  return {
+    id: event.id ?? `${event.from ?? event.actorId ?? "member"}-${eventAt(event)}-${payload.text}`,
+    person,
+    initials: initialsFor(person),
+    text: payload.text,
+    time: new Date(eventAt(event)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+  };
+};
+const describeEvent = (event: RoomEvent) => {
+  if (event.type === "room.created") return "Room created";
+  if (event.type === "participant.joined") return "Participant joined";
+  if (event.type === "participant.left") return "Participant left";
+  if (event.type === "chat") return "Message posted";
+  if (event.type === "editor") return "Shared document updated";
+  if (event.type === "whiteboard") return "Whiteboard updated";
+  if (event.type === "screen-share") return "Screen sharing updated";
+  return event.type.replace(/[-.]/g, " ");
+};
 
 function StreamVideo({ stream }: { stream: MediaStream }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -71,18 +80,24 @@ function StreamVideo({ stream }: { stream: MediaStream }) {
 }
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
-  const reduceMotion = useReducedMotion();
   const [panel, setPanel] = useState<Panel>("chat");
-  const [messages, setMessages] = useState(initialMessages);
-  const [draft, setDraft] = useState("");
-  const [notes, setNotes] = useState(starterNotes);
+  const [mode, setMode] = useState<"call" | "editor">("call");
+  const [showPanel, setShowPanel] = useState(true);
+  const [room, setRoom] = useState<Room>();
+  const [identity, setIdentity] = useState<WorkspaceUser>();
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [timeline, setTimeline] = useState<RoomEvent[]>([]);
+  const [notes, setNotes] = useState("");
+  const [code, setCode] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
+  const [draft, setDraft] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const [roomError, setRoomError] = useState("");
   const [mic, setMic] = useState(true);
   const [camera, setCamera] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [mode, setMode] = useState<"call" | "editor">("call");
-  const [connected, setConnected] = useState(false);
-  const [code, setCode] = useState(starterCode);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -91,47 +106,92 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const meshRef = useRef<PeerMesh | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const localIdRef = useRef("");
+  const knownPeersRef = useRef<Set<string>>(new Set());
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const addEvent = useCallback((event: RoomEvent) => {
+    setTimeline((items) =>
+      items.some((item) => item.id && item.id === event.id) ? items : [...items, event].slice(-200),
+    );
+    const message = eventToMessage(event);
+    if (message) setMessages((items) => (items.some((item) => item.id === message.id) ? items : [...items, message]));
+  }, []);
 
   useEffect(() => {
-    const stored = localStorage.getItem(`threadline-notes-${roomId}`);
-    if (stored) setNotes(stored);
-    const storedCode = localStorage.getItem(`threadline-code-${roomId}`);
-    if (storedCode) setCode(storedCode);
-  }, [roomId]);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [identityData, roomData, eventData] = await Promise.all([
+          apiFetch<{ user: WorkspaceUser }>("/v1/auth/me"),
+          apiFetch<{ room: Room }>(`/v1/rooms/${roomId}`),
+          apiFetch<{ events: RoomEvent[] }>(`/v1/rooms/${roomId}/events`),
+        ]);
+        if (cancelled) return;
+        setIdentity(identityData.user);
+        setRoom(roomData.room);
+        eventData.events.forEach(addEvent);
+        eventData.events.forEach((event) => {
+          if (event.type !== "editor") return;
+          const payload = event.payload as { document?: string; content?: string };
+          if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
+          if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
+        });
+      } catch (error) {
+        if (!cancelled) setRoomError(error instanceof Error ? error.message : "Unable to load this room.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [addEvent, roomId]);
+
   useEffect(() => {
-    const timer = window.setTimeout(() => localStorage.setItem(`threadline-notes-${roomId}`, notes), 250);
-    return () => window.clearTimeout(timer);
-  }, [notes, roomId]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => localStorage.setItem(`threadline-code-${roomId}`, code), 250);
-    return () => window.clearTimeout(timer);
-  }, [code, roomId]);
+    if (room?.name) document.title = `# ${room.name} | Threadline`;
+  }, [room?.name]);
+
   useEffect(
     () => () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
       socketRef.current?.close();
+      socketRef.current = null;
       meshRef.current?.close();
     },
     [],
   );
 
   const publish = useCallback((type: string, payload: unknown) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify({ type, payload }));
+    if (socketRef.current?.readyState !== WebSocket.OPEN) return false;
+    socketRef.current.send(JSON.stringify({ type, payload }));
+    return true;
   }, []);
+
+  const drawLine = useCallback((from: { x: number; y: number }, to: { x: number; y: number }) => {
+    const canvas = boardRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    context.strokeStyle = "#52e0a2";
+    context.lineWidth = 2.5;
+    context.lineCap = "round";
+    context.beginPath();
+    context.moveTo(from.x, from.y);
+    context.lineTo(to.x, to.y);
+    context.stroke();
+  }, []);
+
   const connectRoom = useCallback(async () => {
-    const api = process.env.NEXT_PUBLIC_API_ORIGIN;
     const realtime = process.env.NEXT_PUBLIC_REALTIME_ORIGIN;
-    if (!api || !realtime || socketRef.current) {
-      setConnected(true);
-      return;
+    if (socketRef.current?.readyState === WebSocket.OPEN) return true;
+    if (!apiOrigin || !realtime) {
+      setRoomError("Realtime is not configured. Set both NEXT_PUBLIC_API_ORIGIN and NEXT_PUBLIC_REALTIME_ORIGIN.");
+      return false;
     }
     try {
-      const ticketResponse = await fetch(`${api}/v1/rooms/${roomId}/ticket`, {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!ticketResponse.ok) throw new Error("ticket unavailable");
-      const { ticket } = await ticketResponse.json();
+      const { ticket } = await apiFetch<{ ticket: string }>(`/v1/rooms/${roomId}/ticket`, { method: "POST" });
       const socket = new WebSocket(
         `${realtime.replace(/^http/, "ws")}/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`,
       );
@@ -140,51 +200,99 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
         onFile: (_peerId, file) =>
           setFiles((items) => [
-            { name: file.name, size: formatSize(file.size), status: "Received via direct transfer" },
+            { name: file.name, size: formatSize(file.size), status: "Received by direct transfer" },
             ...items,
           ]),
       });
-      socket.onopen = () => setConnected(true);
-      socket.onclose = () => setConnected(false);
-      socket.onmessage = (event) => {
-        const message = JSON.parse(event.data) as { type: string; payload?: unknown; from?: string };
-        if (message.type === "chat" && message.from !== "local") {
-          const payload = message.payload as { text?: string; username?: string };
-          const text = payload.text;
-          if (text)
-            setMessages((items) => [
-              ...items,
-              {
-                id: Date.now(),
-                person: payload.username ?? "Room member",
-                initials: "RM",
-                text,
-                time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-              },
-            ]);
-        }
-        if (message.type === "signal" && message.from)
-          void meshRef.current?.receiveSignal(message.from, message.payload as SignalPayload);
-        if (message.type === "room.ready") {
-          const payload = message.payload as {
-            participant?: { userId: string };
-            participants?: Array<{ userId: string }>;
-          };
-          const localId = payload.participant?.userId;
-          if (localId)
-            payload.participants
-              ?.filter((person) => person.userId !== localId)
-              .forEach((person) => void meshRef.current?.connect(person.userId, localId < person.userId));
+      socket.onopen = () => {
+        reconnectAttemptRef.current = 0;
+        setConnected(true);
+        setReconnecting(false);
+        setRoomError("");
+      };
+      socket.onclose = () => {
+        setConnected(false);
+        // Only auto-reconnect if this socket is still the active one — a call to
+        // leave() nulls socketRef.current first, and a newer connectRoom() call
+        // has already replaced it with a different socket, so either way this
+        // close is not the "still trying to be in this room" case.
+        if (socketRef.current !== socket) return;
+        const attempt = reconnectAttemptRef.current + 1;
+        reconnectAttemptRef.current = attempt;
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 15_000);
+        setReconnecting(true);
+        reconnectTimerRef.current = setTimeout(() => {
+          if (socketRef.current === socket) void connectRoom();
+        }, delay);
+      };
+      socket.onerror = () =>
+        setRoomError("The room coordinator could not be reached. Check the realtime deployment and try again.");
+      const connectToNewPeers = (people: Participant[]) => {
+        const localId = localIdRef.current;
+        if (!localId) return;
+        for (const person of people) {
+          if (person.userId === localId || knownPeersRef.current.has(person.userId)) continue;
+          knownPeersRef.current.add(person.userId);
+          void meshRef.current?.connect(person.userId, localId < person.userId);
         }
       };
+      socket.onmessage = (wire) => {
+        const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
+        if (event.type === "presence") {
+          const people = (event.payload as Participant[]) ?? [];
+          setParticipants(people);
+          // Presence broadcasts (someone else joining) only reach sockets that
+          // were already connected, so this side must also offer to connect —
+          // room.ready alone only tells the newcomer about existing peers, not
+          // the other way around.
+          connectToNewPeers(people);
+          return;
+        }
+        if (event.type === "room.ready") {
+          const payload = event.payload as {
+            participants?: Participant[];
+            recentEvents?: RoomEvent[];
+            participant?: Participant;
+          };
+          setParticipants(payload.participants ?? []);
+          payload.recentEvents?.forEach(addEvent);
+          if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
+          connectToNewPeers(payload.participants ?? []);
+          return;
+        }
+        if (event.type === "signal" && event.from) {
+          void meshRef.current?.receiveSignal(event.from, event.payload as SignalPayload);
+          return;
+        }
+        if (event.type === "editor") {
+          const payload = event.payload as { document?: string; content?: string };
+          if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
+          if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
+        }
+        if (event.type === "whiteboard") {
+          const payload = event.payload as {
+            from?: { x: number; y: number };
+            to?: { x: number; y: number };
+            clear?: boolean;
+          };
+          if (payload.clear)
+            boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
+          else if (payload.from && payload.to) drawLine(payload.from, payload.to);
+        }
+        if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
+      };
       socketRef.current = socket;
-    } catch {
+      return true;
+    } catch (error) {
       setConnected(false);
+      setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
+      return false;
     }
-  }, [roomId]);
+  }, [addEvent, drawLine, roomId]);
 
   const startCamera = async () => {
     try {
+      if (!(await connectRoom())) return;
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = stream;
@@ -192,9 +300,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       if (videoRef.current) videoRef.current.srcObject = stream;
       setCamera(true);
       setMic(true);
-      connectRoom();
     } catch {
-      setCamera(false);
+      setRoomError("Camera and microphone access was not granted.");
     }
   };
   const toggleMic = () => {
@@ -205,41 +312,60 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     setMic(next);
   };
   const toggleCamera = () => {
-    if (!camera) {
-      void startCamera();
-      return;
-    }
-    const next = false;
-    streamRef.current?.getVideoTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setCamera(next);
-  };
-  const shareScreen = async () => {
-    try {
-      const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const track = screen.getVideoTracks()[0];
-      track.addEventListener("ended", () => {
-        setSharing(false);
-        publish("screen-share", { active: false });
+    if (!camera) void startCamera();
+    else {
+      streamRef.current?.getVideoTracks().forEach((track) => {
+        track.enabled = false;
       });
+      setCamera(false);
+    }
+  };
+  const stopScreenShare = useCallback(() => {
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    setSharing(false);
+    publish("screen-share", { active: false });
+    // Restore whatever the camera stream was already sending (on, off-but-muted, or
+    // never started) rather than assuming it should come back on.
+    meshRef.current?.setLocalStream(streamRef.current);
+    if (videoRef.current) videoRef.current.srcObject = camera ? streamRef.current : null;
+  }, [camera, publish]);
+  const toggleScreenShare = async () => {
+    if (sharing) return stopScreenShare();
+    try {
+      if (!(await connectRoom())) return;
+      const screen = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const videoTrack = screen.getVideoTracks()[0];
+      videoTrack.addEventListener("ended", stopScreenShare);
+      screenStreamRef.current = screen;
+      // Keep the mic flowing to peers while sharing: publish the screen's video
+      // alongside the existing microphone track rather than replacing it.
+      const audioTrack = streamRef.current?.getAudioTracks()[0];
+      meshRef.current?.setLocalStream(audioTrack ? new MediaStream([videoTrack, audioTrack]) : screen);
       if (videoRef.current) videoRef.current.srcObject = screen;
-      meshRef.current?.setLocalStream(screen);
       setSharing(true);
       publish("screen-share", { active: true });
-      connectRoom();
     } catch {
-      setSharing(false);
+      setRoomError("Screen share was not started.");
     }
   };
   const leave = () => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    reconnectAttemptRef.current = 0;
+    setReconnecting(false);
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
     socketRef.current?.close();
     socketRef.current = null;
     meshRef.current?.close();
     meshRef.current = null;
+    knownPeersRef.current.clear();
+    localIdRef.current = "";
     setRemoteStreams({});
+    setParticipants([]);
     setCamera(false);
     setSharing(false);
     setConnected(false);
@@ -248,178 +374,160 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     event.preventDefault();
     const text = draft.trim();
     if (!text) return;
-    const entry: Message = {
-      id: Date.now(),
-      person: "Avery Chen",
-      initials: "AC",
-      text,
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
-    setMessages((items) => [...items, entry]);
-    publish("chat", { text, username: "Avery Chen" });
+    if (!publish("chat", { text, username: identity?.displayName || identity?.username || "Room member" })) {
+      setRoomError("Join the live room before sending a message.");
+      return;
+    }
     setDraft("");
   };
-  const pointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const pointFor = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = boardRef.current;
-    if (!canvas) return null;
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     return {
       x: (event.clientX - rect.left) * (canvas.width / rect.width),
       y: (event.clientY - rect.top) * (canvas.height / rect.height),
     };
   };
-  const startDraw = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const point = pointer(event);
-    if (!point) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    drawingRef.current = true;
-    lastPoint.current = point;
-  };
   const draw = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!drawingRef.current) return;
-    const point = pointer(event);
-    const canvas = boardRef.current;
+    const point = pointFor(event);
     const previous = lastPoint.current;
-    if (!point || !canvas || !previous) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    context.strokeStyle = "#52e0a2";
-    context.lineWidth = 2.5;
-    context.lineCap = "round";
-    context.beginPath();
-    context.moveTo(previous.x, previous.y);
-    context.lineTo(point.x, point.y);
-    context.stroke();
-    lastPoint.current = point;
+    if (!point || !previous) return;
+    drawLine(previous, point);
     publish("whiteboard", { from: previous, to: point });
+    lastPoint.current = point;
   };
   const clearBoard = () => {
     const canvas = boardRef.current;
     if (!canvas) return;
     canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    publish("whiteboard", { clear: true });
   };
   const uploadFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
-    const next = selected.map((file) => ({
+    const items = selected.map((file) => ({
       name: file.name,
       size: formatSize(file.size),
-      status: meshRef.current ? "Sending by direct transfer" : "Ready for peer transfer",
+      status: meshRef.current ? "Sending by direct transfer" : "Connect to send",
     }));
-    setFiles((items) => [...next, ...items]);
+    setFiles((existing) => [...items, ...existing]);
     void Promise.all(selected.map((file) => meshRef.current?.sendFile(file)));
-    publish("timeline", { type: "file.staged", files: next.map((file) => file.name) });
     event.target.value = "";
   };
+  const visibleParticipants = participants.length
+    ? participants
+    : identity
+      ? [{ userId: identity.id, username: identity.displayName, role: "member", joinedAt: "", screenSharing: false }]
+      : [];
 
   return (
     <main id="main-content" className="room-layout">
       <header className="room-topbar">
         <div className="room-breadcrumb">
-          <Link href="/app" aria-label="Back to rooms">
+          <Link href="/app/rooms" aria-label="Back to rooms">
             <ArrowLeftIcon size={17} />
           </Link>
           <span style={{ color: "var(--subtle)" }}>/</span>
-          <strong># {roomId}</strong>
+          <strong># {room?.name || "Loading room"}</strong>
           <span className="room-state">
-            <span className="status-dot" /> {connected ? "Connected" : "Room ready"}
+            <span className={connected ? "status-dot" : "room-state-dot"} />
+            {connected ? "Connected" : reconnecting ? "Reconnecting…" : "Not connected"}
           </span>
         </div>
         <div className="room-actions">
-          <button className="button button-secondary" onClick={() => setMode(mode === "call" ? "editor" : "call")}>
+          <button
+            className="button button-secondary"
+            onClick={() => setMode(mode === "call" ? "editor" : "call")}
+            aria-label={mode === "call" ? "Open editor" : "Open call"}
+          >
             {mode === "call" ? (
               <>
-                <CodeIcon size={16} /> Open editor
+                <CodeIcon size={16} /> <span className="button-label">Open editor</span>
               </>
             ) : (
               <>
-                <DesktopIcon size={16} /> Open call
+                <DesktopIcon size={16} /> <span className="button-label">Open call</span>
               </>
             )}
           </button>
-          <button className="button button-ghost button-icon" aria-label="Toggle room panel">
+          <Link
+            className="button button-ghost button-icon"
+            href={`/app/rooms/${roomId}/members`}
+            aria-label="Room members"
+          >
+            <UsersThreeIcon size={18} />
+          </Link>
+          <button
+            className="button button-ghost button-icon"
+            onClick={() => setShowPanel((value) => !value)}
+            aria-label={showPanel ? "Hide room panel" : "Show room panel"}
+          >
             <SidebarSimpleIcon size={18} />
           </button>
         </div>
       </header>
-      <div className="room-body">
+      {roomError && <p className="room-error">{roomError}</p>}
+      <div className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}>
         <section className="room-main">
-          <AnimatePresence initial={false} mode="wait">
-            {mode === "call" ? (
-              <motion.div
-                key="call"
-                className="room-mode"
-                initial={reduceMotion ? false : { opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              >
-                <div className="stage">
-                  {participant.map((person, index) => {
-                    const remoteStream = person.self ? undefined : Object.values(remoteStreams)[index - 1];
-                    return (
-                      <article className={`video-tile ${person.self ? "self" : ""}`} key={person.name}>
-                        {person.self && (camera || sharing) && <video ref={videoRef} autoPlay muted playsInline />}
-                        {!person.self && remoteStream && <StreamVideo stream={remoteStream} />}
-                        {!person.self && !remoteStream && (
-                          <div className="video-placeholder">
-                            <span className="avatar">{person.initials}</span>
-                          </div>
-                        )}
-                        {person.self && !camera && !sharing && (
-                          <div className="video-placeholder">
-                            <span className="avatar">{person.initials}</span>
-                          </div>
-                        )}
-                        <div className="tile-label">
-                          <span>{person.label}</span>
-                          {person.self && (
-                            <span className="mic">
-                              {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
-                            </span>
-                          )}
+          {mode === "call" ? (
+            <div className="room-mode">
+              <div className="stage">
+                {visibleParticipants.map((person) => {
+                  const self = person.userId === identity?.id;
+                  const stream = self ? undefined : remoteStreams[person.userId];
+                  return (
+                    <article className={`video-tile ${self ? "self" : ""}`} key={person.userId}>
+                      {self && (camera || sharing) && <video ref={videoRef} autoPlay muted playsInline />}
+                      {!self && stream && <StreamVideo stream={stream} />}{" "}
+                      {((!stream && !self) || (self && !camera && !sharing)) && (
+                        <div className="video-placeholder">
+                          <span className="avatar">{initialsFor(person.username)}</span>
                         </div>
-                        {person.name === "Lina Novak" && <span className="tile-status">Speaking</span>}
-                        {person.self && sharing && <span className="tile-status">Sharing</span>}
-                      </article>
-                    );
-                  })}
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div
-                key="editor"
-                className="room-mode room-editor-mode"
-                initial={reduceMotion ? false : { opacity: 0, scale: 0.99 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.99 }}
-                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              >
-                <div className="notes-head">
-                  <strong style={{ fontSize: 13 }}>src/retry-policy.ts</strong>
-                  <span>Saved locally - shared editor channel ready</span>
-                </div>
-                <textarea
-                  className="board"
-                  value={code}
-                  onChange={(event) => {
-                    setCode(event.target.value);
-                    publish("editor", { content: event.target.value });
-                  }}
-                  spellCheck={false}
-                  style={{
-                    padding: 16,
-                    resize: "none",
-                    border: "1px solid var(--line)",
-                    color: "#d8e2f0",
-                    fontFamily: '"SFMono-Regular", Consolas, monospace',
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    outline: "none",
-                  }}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+                      )}
+                      <div className="tile-label">
+                        <span>{self ? `${person.username} (you)` : person.username}</span>
+                        {self && (
+                          <span className="mic">
+                            {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
+                          </span>
+                        )}
+                      </div>
+                      {person.screenSharing && <span className="tile-status">Sharing</span>}
+                    </article>
+                  );
+                })}
+                {!visibleParticipants.length && <div className="room-empty">Load the authenticated room to begin.</div>}
+              </div>
+            </div>
+          ) : (
+            <div className="room-mode room-editor-mode">
+              <div className="notes-head">
+                <strong>Shared editor</strong>
+                <span>{connected ? "Synced through the room" : "Join the room to sync"}</span>
+              </div>
+              <textarea
+                className="board"
+                value={code}
+                onChange={(event) => {
+                  setCode(event.target.value);
+                  publish("editor", { document: "code", content: event.target.value });
+                }}
+                spellCheck={false}
+                placeholder="Start writing shared code…"
+                style={{
+                  padding: 16,
+                  resize: "none",
+                  border: "1px solid var(--line)",
+                  color: "#d8e2f0",
+                  fontFamily: '"SFMono-Regular", Consolas, monospace',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  outline: "none",
+                }}
+              />
+            </div>
+          )}
           <div className="room-controls">
             <button
               className={`control ${mic ? "active" : ""}`}
@@ -437,12 +545,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             </button>
             <button
               className={`control ${sharing ? "active" : ""}`}
-              onClick={() => void shareScreen()}
-              aria-label="Share screen"
+              onClick={() => void toggleScreenShare()}
+              aria-label={sharing ? "Stop sharing screen" : "Share screen"}
             >
               <MonitorArrowUpIcon size={18} />
             </button>
-            <button className="control" onClick={() => void connectRoom()} aria-label="Connect to room coordinator">
+            <button
+              className={`control ${connected ? "active" : ""}`}
+              onClick={() => void connectRoom()}
+              aria-label="Connect to room coordinator"
+            >
               <BroadcastIcon size={18} />
             </button>
             <button className="control danger" onClick={leave} aria-label="Leave media session">
@@ -450,71 +562,81 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             </button>
           </div>
         </section>
-        <aside className="room-panel">
-          <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
-            {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
-              <button
-                key={item}
-                className={panel === item ? "active" : ""}
-                onClick={() => setPanel(item)}
-                role="tab"
-                aria-selected={panel === item}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-          <div className="panel-content">
-            {panel === "chat" && (
-              <div className="chat">
-                <div className="chat-list">
-                  {messages.map((message) => (
-                    <article className="message" key={message.id}>
-                      <span className="avatar">{message.initials}</span>
-                      <div className="message-body">
-                        <div className="message-meta">
-                          <strong>{message.person}</strong>
-                          <time>{message.time}</time>
+        {showPanel && (
+          <aside className="room-panel">
+            <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
+              {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
+                <button
+                  key={item}
+                  className={panel === item ? "active" : ""}
+                  onClick={() => setPanel(item)}
+                  role="tab"
+                  aria-selected={panel === item}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <div className="panel-content">
+              {panel === "chat" && (
+                <div className="chat">
+                  <div className="chat-list">
+                    {messages.map((message) => (
+                      <article className="message" key={message.id}>
+                        <span className="avatar">{message.initials}</span>
+                        <div className="message-body">
+                          <div className="message-meta">
+                            <strong>{message.person}</strong>
+                            <time>{message.time}</time>
+                          </div>
+                          <p>{message.text}</p>
                         </div>
-                        <p>{message.text}</p>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    ))}
+                    {!messages.length && <p className="panel-empty">No messages have been recorded in this room.</p>}
+                  </div>
+                  <form className="chat-compose" onSubmit={sendMessage}>
+                    <input
+                      value={draft}
+                      onChange={(event) => setDraft(event.target.value)}
+                      placeholder={connected ? "Message the room" : "Connect to message"}
+                      aria-label="Message the room"
+                      disabled={!connected}
+                    />
+                    <button className="button button-primary" disabled={!connected} aria-label="Send message">
+                      <PaperPlaneTiltIcon size={15} weight="fill" />
+                    </button>
+                  </form>
                 </div>
-                <form className="chat-compose" onSubmit={sendMessage}>
-                  <input
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    placeholder="Message the room"
-                    aria-label="Message the room"
+              )}
+              {panel === "notes" && (
+                <div className="notes">
+                  <div className="notes-head">
+                    <strong>Shared notes</strong>
+                    <span>{connected ? "Live sync" : "Connect to save"}</span>
+                  </div>
+                  <textarea
+                    value={notes}
+                    onChange={(event) => {
+                      setNotes(event.target.value);
+                      publish("editor", { document: "notes", content: event.target.value });
+                    }}
+                    aria-label="Shared notes"
+                    placeholder="Capture decisions, context, and follow-up work…"
                   />
-                  <button className="button button-primary" aria-label="Send message">
-                    <PaperPlaneTiltIcon size={15} weight="fill" />
-                  </button>
-                </form>
-              </div>
-            )}
-            {panel === "notes" && (
-              <div className="notes">
-                <div className="notes-head">
-                  <strong>Shared notes</strong>
-                  <span>Autosaved</span>
                 </div>
-                <textarea
-                  value={notes}
-                  onChange={(event) => {
-                    setNotes(event.target.value);
-                    publish("timeline", { type: "notes.changed" });
-                  }}
-                  aria-label="Shared notes"
-                />
-              </div>
-            )}
-            {panel === "board" && (
-              <div className="whiteboard">
+              )}
+              {
+                // Kept mounted (not conditionally rendered like the other panels) even
+                // when a different tab is active: incoming whiteboard strokes are drawn
+                // straight onto the canvas imperatively, with no separate stroke-history
+                // state to replay later, so unmounting it while off-tab would silently
+                // and permanently drop anything a teammate drew in the meantime.
+              }
+              <div className="whiteboard" style={panel === "board" ? undefined : { display: "none" }}>
                 <div className="whiteboard-head">
                   <strong>Whiteboard</strong>
-                  <button className="button button-ghost" onClick={clearBoard}>
+                  <button className="button button-ghost" onClick={clearBoard} disabled={!connected}>
                     <EraserIcon size={14} /> Clear
                   </button>
                 </div>
@@ -523,7 +645,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   className="board"
                   width={560}
                   height={630}
-                  onPointerDown={startDraw}
+                  onPointerDown={(event) => {
+                    const point = pointFor(event);
+                    if (!point || !connected) return;
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    drawingRef.current = true;
+                    lastPoint.current = point;
+                  }}
                   onPointerMove={draw}
                   onPointerUp={() => {
                     drawingRef.current = false;
@@ -535,76 +663,65 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   }}
                 />
               </div>
-            )}
-            {panel === "files" && (
-              <div className="files">
-                <div className="files-head">
-                  <strong>Files</strong>
-                  <span>{files.length} staged</span>
+              {panel === "files" && (
+                <div className="files">
+                  <div className="files-head">
+                    <strong>Files</strong>
+                    <span>{files.length} transfers</span>
+                  </div>
+                  <label className="file-drop" htmlFor="room-file">
+                    <FileArrowUpIcon size={20} />
+                    <strong>Send directly to connected peers</strong>Files move over encrypted WebRTC data channels and
+                    are not silently stored by the UI.
+                    <input id="room-file" type="file" multiple onChange={uploadFiles} hidden />
+                  </label>
+                  <div className="file-list">
+                    {files.length ? (
+                      files.map((file, index) => (
+                        <div className="file-row" key={`${file.name}-${index}`}>
+                          <FileIcon size={18} weight="duotone" />
+                          <div>
+                            <strong>{file.name}</strong>
+                            <span>
+                              {file.size} · {file.status}
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="field-help">No files have been transferred in this session.</p>
+                    )}
+                  </div>
                 </div>
-                <label className="file-drop" htmlFor="room-file">
-                  <FileArrowUpIcon size={20} />
-                  <strong>Stage a file for the room</strong>Files are prepared for direct peer transfer when a recipient
-                  connects.
-                  <input id="room-file" type="file" multiple onChange={uploadFiles} hidden />
-                </label>
-                <div className="file-list">
-                  {files.length === 0 ? (
-                    <p className="field-help">No files staged in this room yet.</p>
-                  ) : (
-                    files.map((file, index) => (
-                      <div className="file-row" key={`${file.name}-${index}`}>
-                        <FileIcon size={18} weight="duotone" />
+              )}
+              {panel === "timeline" && (
+                <div className="timeline">
+                  <div className="timeline-head">
+                    <strong>Room timeline</strong>
+                    <span>Durable record</span>
+                  </div>
+                  {timeline
+                    .slice()
+                    .reverse()
+                    .map((event, index) => (
+                      <div className="timeline-event" key={event.id ?? `${event.type}-${index}-${eventAt(event)}`}>
+                        <i />
                         <div>
-                          <strong>{file.name}</strong>
-                          <span>
-                            {file.size} · {file.status}
-                          </span>
+                          <p>{describeEvent(event)}</p>
+                          <time>
+                            {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+                              new Date(eventAt(event)),
+                            )}
+                          </time>
                         </div>
                       </div>
-                    ))
-                  )}
+                    ))}
+                  {!timeline.length && <p className="panel-empty">This room has no durable events yet.</p>}
                 </div>
-              </div>
-            )}
-            {panel === "timeline" && (
-              <div className="timeline">
-                <div className="timeline-head">
-                  <strong>Room timeline</strong>
-                  <span>Durable record</span>
-                </div>
-                <div className="timeline-event">
-                  <i />
-                  <div>
-                    <p>Lina saved an action item: “Add retry regression coverage.”</p>
-                    <time>10:31</time>
-                  </div>
-                </div>
-                <div className="timeline-event">
-                  <i />
-                  <div>
-                    <p>Mateo marked the retry worker change ready for review.</p>
-                    <time>10:27</time>
-                  </div>
-                </div>
-                <div className="timeline-event">
-                  <i />
-                  <div>
-                    <p>Screen share started by Avery.</p>
-                    <time>10:19</time>
-                  </div>
-                </div>
-                <div className="timeline-event">
-                  <i />
-                  <div>
-                    <p>Room opened for incident response.</p>
-                    <time>10:14</time>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </aside>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
     </main>
   );
