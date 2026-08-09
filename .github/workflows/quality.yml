@@ -274,6 +274,7 @@ jobs:
     name: "🎉 Pipeline Summary"
     if: always()
     needs:
+      - preflight
       - lint-format
       - typecheck
       - security-audit
@@ -287,24 +288,89 @@ jobs:
       - image-scan
     runs-on: ubuntu-latest
     steps:
-      - name: Write summary
+      - name: Write pipeline summary
         run: |
+          icon() {
+            case "$1" in
+              success)   echo "✅ success" ;;
+              failure)   echo "❌ failure" ;;
+              cancelled) echo "🚫 cancelled" ;;
+              skipped)   echo "⏭️ skipped" ;;
+              *)         echo "❔ $1" ;;
+            esac
+          }
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+
+          echo "::group::🎉 Threadline CI / CD Pipeline summary"
+
           {
-            echo "## 🎉 Threadline CI / CD Pipeline"
+            echo "# 🎉 Threadline CI / CD Pipeline"
             echo ""
-            echo "| Stage | Result |"
+            echo "| Field | Value |"
             echo "| --- | --- |"
-            echo "| Lint & Format | ${{ needs.lint-format.result }} |"
-            echo "| Typecheck | ${{ needs.typecheck.result }} |"
-            echo "| Security Audit | ${{ needs.security-audit.result }} |"
-            echo "| Test Suites | ${{ needs.test.result }} |"
-            echo "| Build | ${{ needs.build.result }} |"
-            echo "| Container Images | ${{ needs.containers.result }} |"
-            echo "| Kubernetes Overlays | ${{ needs.kubernetes.result }} |"
-            echo "| Web → GHCR | ${{ needs.docker-web.result }} |"
-            echo "| API → GHCR | ${{ needs.docker-api.result }} |"
-            echo "| Realtime → GHCR | ${{ needs.docker-realtime.result }} |"
-            echo "| Image Vulnerability Scan | ${{ needs.image-scan.result }} |"
+            echo "| Workflow run | [\`${{ github.workflow }}\` #${{ github.run_number }}]($RUN_URL) (attempt ${{ github.run_attempt }}) |"
+            echo "| Event | \`${{ github.event_name }}\` |"
+            echo "| Branch / ref | \`${{ github.ref_name }}\` |"
+            echo "| Commit | [\`${{ github.sha }}\`]($COMMIT_URL) |"
+            echo "| Triggered by | @${{ github.actor }} |"
             echo ""
-            echo "**Completed at** $(date -u +"%Y-%m-%dT%H:%M:%SZ") UTC"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "## Stage results"
+            echo ""
+            echo "<details open>"
+            echo "<summary><strong>Setup &amp; static checks</strong></summary>"
+            echo ""
+            echo "| Job | Status |"
+            echo "| --- | --- |"
+            echo "| 🧭 Preflight | $(icon "${{ needs.preflight.result }}") |"
+            echo "| 🧹 Lint & Format | $(icon "${{ needs.lint-format.result }}") |"
+            echo "| 🔎 Typecheck | $(icon "${{ needs.typecheck.result }}") |"
+            echo "| 🔒 Security Audit _(non-blocking)_ | $(icon "${{ needs.security-audit.result }}") |"
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details open>"
+            echo "<summary><strong>Test, build &amp; deployment-target validation</strong></summary>"
+            echo ""
+            echo "| Job | Status |"
+            echo "| --- | --- |"
+            echo "| 🧪 Test Suites | $(icon "${{ needs.test.result }}") |"
+            echo "| 🏗️ Build | $(icon "${{ needs.build.result }}") |"
+            echo "| 🐳 Validate Container Images | $(icon "${{ needs.containers.result }}") |"
+            echo "| ☸️ Validate Kubernetes Overlays | $(icon "${{ needs.kubernetes.result }}") |"
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "<details open>"
+            echo "<summary><strong>GHCR publish &amp; image scan (main branch / manual only)</strong></summary>"
+            echo ""
+            echo "| Job | Status |"
+            echo "| --- | --- |"
+            echo "| 🌐 Web → GHCR | $(icon "${{ needs.docker-web.result }}") |"
+            echo "| 🚂 API → GHCR | $(icon "${{ needs.docker-api.result }}") |"
+            echo "| ⚡ Realtime → GHCR | $(icon "${{ needs.docker-realtime.result }}") |"
+            echo "| 🔍 Image Vulnerability Scan _(non-blocking)_ | $(icon "${{ needs.image-scan.result }}") |"
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "**Completed at** \`$(date -u +"%Y-%m-%dT%H:%M:%SZ")\` UTC"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          echo "::endgroup::"
+
+      - name: Report overall pipeline result
+        run: |
+          all_ok=true
+          for r in ${{ needs.preflight.result }} ${{ needs.lint-format.result }} ${{ needs.typecheck.result }} ${{ needs.test.result }} ${{ needs.build.result }} ${{ needs.containers.result }} ${{ needs.kubernetes.result }}; do
+            if [ "$r" != "success" ]; then
+              all_ok=false
+            fi
+          done
+
+          if [ "$all_ok" = false ]; then
+            echo "::error title=Threadline CI / CD Pipeline::One or more required stages did not pass for ${{ github.sha }} — see the job summary above for details."
+            exit 1
+          fi
+
+          echo "::notice title=Threadline CI / CD Pipeline::All required stages passed for ${{ github.sha }}."
