@@ -10,11 +10,15 @@ type PeerMeshOptions = {
   iceServers?: RTCIceServer[];
 };
 
+type TrackKind = "audio" | "video";
+const trackKinds: TrackKind[] = ["audio", "video"];
+
 type Peer = {
   connection: RTCPeerConnection;
   channel?: RTCDataChannel;
   fileParts: ArrayBuffer[];
   incomingFile?: { name: string; type: string };
+  senders: Partial<Record<TrackKind, RTCRtpSender>>;
 };
 
 /** A room-scoped, perfect-negotiation-friendly WebRTC mesh. Durable Objects only relay its signals. */
@@ -24,9 +28,10 @@ export class PeerMesh {
 
   constructor(private readonly options: PeerMeshOptions) {}
 
-  setLocalStream(stream: MediaStream) {
-    this.stream = stream;
-    for (const peer of this.peers.values()) this.replaceTracks(peer.connection);
+  /** Pass null to stop publishing local media (e.g. after a screen share ends) without tearing down peers. */
+  setLocalStream(stream: MediaStream | null) {
+    this.stream = stream ?? undefined;
+    for (const peer of this.peers.values()) this.applyStream(peer);
   }
 
   async connect(peerId: string, initiator: boolean) {
@@ -78,7 +83,7 @@ export class PeerMesh {
     const connection = new RTCPeerConnection({
       iceServers: this.options.iceServers ?? [{ urls: "stun:stun.l.google.com:19302" }],
     });
-    const peer: Peer = { connection, fileParts: [] };
+    const peer: Peer = { connection, fileParts: [], senders: {} };
     connection.onicecandidate = (event) => {
       if (event.candidate) this.options.sendSignal(peerId, { candidate: event.candidate.toJSON() });
     };
@@ -86,25 +91,27 @@ export class PeerMesh {
     connection.ondatachannel = (event) => {
       peer.channel = this.configureChannel(peerId, event.channel);
     };
-    this.addTracks(connection);
+    this.applyStream(peer);
     this.peers.set(peerId, peer);
     return peer;
   }
 
-  private addTracks(connection: RTCPeerConnection) {
-    if (!this.stream) return;
-    const existingTrackIds = new Set(connection.getSenders().map((sender) => sender.track?.id));
-    for (const track of this.stream.getTracks())
-      if (!existingTrackIds.has(track.id)) connection.addTrack(track, this.stream);
-  }
-
-  private replaceTracks(connection: RTCPeerConnection) {
-    if (!this.stream) return;
-    const senders = connection.getSenders();
-    for (const track of this.stream.getTracks()) {
-      const sender = senders.find((item) => item.track?.kind === track.kind);
-      if (sender) void sender.replaceTrack(track);
-      else connection.addTrack(track, this.stream);
+  /**
+   * Publishes the current local stream to one peer, kind by kind. Reuses each
+   * sender's own slot rather than matching by `sender.track` so a track can be
+   * swapped (camera <-> screen) or cleared (`replaceTrack(null)`) without
+   * renegotiation, and so a later stream change can still find that sender
+   * after its track has gone null.
+   */
+  private applyStream(peer: Peer) {
+    for (const kind of trackKinds) {
+      const track = this.stream?.getTracks().find((item) => item.kind === kind) ?? null;
+      const sender = peer.senders[kind];
+      if (sender) {
+        if (sender.track !== track) void sender.replaceTrack(track);
+      } else if (track && this.stream) {
+        peer.senders[kind] = peer.connection.addTrack(track, this.stream);
+      }
     }
   }
 
