@@ -10,19 +10,25 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { Brand } from "../components/brand";
 import { LandingAtmosphere } from "../components/landing-atmosphere";
-import {
-  LandingHeroCopy,
-  LandingReveal,
-  LandingScrollProgress,
-  MagneticLink,
-  RoomStory,
-} from "../components/landing-motion";
+import { LandingHeroCopy, LandingReveal, MagneticLink, RoomStory } from "../components/landing-motion";
 import { LandingScene } from "../components/landing-scene";
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Threadline",
+  applicationCategory: "BusinessApplication",
+  operatingSystem: "Web",
+  description:
+    "A room-centered workspace for live engineering collaboration and durable session records. Meet now, keep the thread, and return to a room that remembers.",
+  url: "https://threadline-silk.vercel.app",
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+};
 
 export default function Home() {
   return (
     <main id="main-content" className="landing shell">
-      <LandingScrollProgress />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       <LandingAtmosphere />
       <nav className="landing-nav" aria-label="Primary navigation">
         <Brand />
@@ -39,7 +45,7 @@ export default function Home() {
         <LandingScene />
       </section>
 
-      <LandingReveal delay={0.06}>
+      <LandingReveal>
         <section className="landing-proof" aria-label="Threadline principles">
           <div>
             <VideoConferenceIcon size={22} weight="duotone" />
@@ -80,6 +86,7 @@ export default function Home() {
               width={1680}
               height={945}
               unoptimized
+              loading="eager"
               sizes="(max-width: 820px) 100vw, 58vw"
             />
           </div>
