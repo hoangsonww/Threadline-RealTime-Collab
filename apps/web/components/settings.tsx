@@ -1,110 +1,122 @@
 "use client";
 
-import { CheckCircleIcon, CopyIcon, KeyIcon, LaptopIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import Link from "next/link";
+import {
+  CheckCircleIcon,
+  CopyIcon,
+  KeyIcon,
+  LaptopIcon,
+  PaperPlaneTiltIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import { apiFetch, type IdentityResponse } from "../lib/api";
+import { ThemePreference } from "./theme-preference";
 
-type Token = { id: string | number; label: string; prefix: string; scopes: string; created: string; lastUsed: string };
-const initialTokens: Token[] = [
-  {
-    id: 1,
-    label: "incident-cli",
-    prefix: "tl_pat_4f3…",
-    scopes: "rooms:read, messages:write",
-    created: "Jul 28, 2026",
-    lastUsed: "Today",
-  },
-];
-
-const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN;
-const apiToken = (token: {
+type Token = {
   id: string;
   label: string;
   tokenPrefix: string;
   scopes: string[];
   createdAt: string;
   lastUsedAt?: string;
-}): Token => ({
-  id: token.id,
-  label: token.label,
-  prefix: `${token.tokenPrefix}…`,
-  scopes: token.scopes.join(", "),
-  created: new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(
-    new Date(token.createdAt),
-  ),
-  lastUsed: token.lastUsedAt
-    ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(token.lastUsedAt))
-    : "Never",
-});
+  revokedAt?: string;
+};
+type Session = {
+  id: string;
+  userAgent?: string;
+  createdAt: string;
+  lastUsedAt: string;
+  revokedAt?: string;
+  isCurrent: boolean;
+};
+type OidcClient = {
+  id: string;
+  name: string;
+  redirectUris: string[];
+  allowedScopes: string[];
+  isFirstParty: boolean;
+  createdAt: string;
+};
+type Section = "general" | "security" | "sessions" | "tokens" | "clients";
 
-export function Settings() {
-  const [tokens, setTokens] = useState(initialTokens);
+const tokenDate = (value: string) =>
+  new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(value));
+
+export function Settings({ section = "general" }: { section?: Section }) {
+  const [identity, setIdentity] = useState<IdentityResponse>();
+  const [tokens, setTokens] = useState<Token[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [clients, setClients] = useState<OidcClient[]>([]);
   const [showNew, setShowNew] = useState(false);
   const [secret, setSecret] = useState("");
   const [copied, setCopied] = useState(false);
-  const [tokenError, setTokenError] = useState("");
+  const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
+  const [sendingVerification, setSendingVerification] = useState(false);
+  const load = async () => {
+    const [identityData, tokenData, sessionData, clientData] = await Promise.all([
+      apiFetch<IdentityResponse>("/v1/auth/me"),
+      apiFetch<{ tokens: Token[] }>("/v1/pats"),
+      apiFetch<{ sessions: Session[] }>("/v1/sessions"),
+      apiFetch<{ clients: OidcClient[] }>("/v1/oidc/clients"),
+    ]);
+    setIdentity(identityData);
+    setTokens(tokenData.tokens.filter((token) => !token.revokedAt));
+    setSessions(sessionData.sessions.filter((session) => !session.revokedAt));
+    setClients(clientData.clients);
+  };
   useEffect(() => {
-    if (!apiOrigin) return;
-    void fetch(`${apiOrigin}/v1/pats`, { credentials: "include" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load personal access tokens.");
-        return (await response.json()) as { tokens: Parameters<typeof apiToken>[0][] };
-      })
-      .then((data) => setTokens(data.tokens.map(apiToken)))
-      .catch((error: unknown) =>
-        setTokenError(error instanceof Error ? error.message : "Could not load access tokens."),
-      );
+    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."));
   }, []);
+  const resendVerification = async () => {
+    setSendingVerification(true);
+    setError("");
+    try {
+      await apiFetch("/v1/auth/email-verification/request", { method: "POST" });
+      setVerificationSent(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not send a verification link.");
+    } finally {
+      setSendingVerification(false);
+    }
+  };
   const createToken = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const label = String(form.get("label") || "Automation token").trim();
     setCreating(true);
-    setTokenError("");
+    setError("");
+    const scopes = ["rooms:read", "messages:write", "artifacts:read"].filter((scope) => form.get(scope) === "on");
     try {
-      if (apiOrigin) {
-        const response = await fetch(`${apiOrigin}/v1/pats`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ label, scopes: ["rooms:read", "messages:write"] }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message ?? "Could not create the access token.");
-        setTokens((items) => [apiToken(data.token), ...items]);
-        setSecret(data.secret);
-      } else {
-        const newSecret = `tl_pat_${crypto.randomUUID().replace(/-/g, "")}`;
-        setTokens((items) => [
-          {
-            id: Date.now(),
-            label,
-            prefix: `${newSecret.slice(0, 14)}…`,
-            scopes: "rooms:read, messages:write",
-            created: "Just now",
-            lastUsed: "Never",
-          },
-          ...items,
-        ]);
-        setSecret(newSecret);
-      }
+      const data = await apiFetch<{ token: Token; secret: string }>("/v1/pats", {
+        method: "POST",
+        body: JSON.stringify({ label: String(form.get("label") || "").trim(), scopes }),
+      });
+      setTokens((items) => [data.token, ...items]);
+      setSecret(data.secret);
       setShowNew(false);
-    } catch (error) {
-      setTokenError(error instanceof Error ? error.message : "Could not create the access token.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create the token.");
     } finally {
       setCreating(false);
     }
   };
   const revokeToken = async (token: Token) => {
-    setTokenError("");
     try {
-      if (apiOrigin) {
-        const response = await fetch(`${apiOrigin}/v1/pats/${token.id}`, { method: "DELETE", credentials: "include" });
-        if (!response.ok) throw new Error("Could not revoke the access token.");
-      }
+      await apiFetch(`/v1/pats/${token.id}`, { method: "DELETE" });
       setTokens((items) => items.filter((item) => item.id !== token.id));
-    } catch (error) {
-      setTokenError(error instanceof Error ? error.message : "Could not revoke the access token.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not revoke the token.");
+    }
+  };
+  const revokeSession = async (session: Session) => {
+    try {
+      await apiFetch(`/v1/sessions/${session.id}`, { method: "DELETE" });
+      setSessions((items) => items.filter((item) => item.id !== session.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not revoke the session.");
     }
   };
   const copySecret = async () => {
@@ -112,6 +124,13 @@ export function Settings() {
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
   };
+  const nav = [
+    ["general", "/app/settings", "General"],
+    ["security", "/app/settings/security", "Security"],
+    ["sessions", "/app/settings/sessions", "Sessions"],
+    ["tokens", "/app/settings/tokens", "Personal access tokens"],
+    ["clients", "/app/settings/clients", "OIDC clients"],
+  ] as const;
   return (
     <div className="content">
       <div className="page-header">
@@ -121,95 +140,155 @@ export function Settings() {
           <p>Manage the security controls and developer access that follow you across every Threadline room.</p>
         </div>
       </div>
+      {error && <p className="form-error">{error}</p>}
       <div className="settings-grid">
         <section>
-          <div className="settings-section">
-            <h3>Security</h3>
-            <p>Browser sessions are individually revocable and refresh automatically with rotation.</p>
-            <div className="key-row">
-              <div>
-                <strong>Current session</strong>
-                <span>Chrome on macOS · active now</span>
-              </div>
-              <button className="button button-secondary">
-                <LaptopIcon size={16} /> Current device
-              </button>
-            </div>
-            <div className="key-row">
-              <div>
-                <strong>Other devices</strong>
-                <span>Review and revoke past sessions</span>
-              </div>
-              <button className="button button-secondary">Manage sessions</button>
-            </div>
-          </div>
-          <div className="settings-section">
-            <h3>Personal access tokens</h3>
-            <p>
-              Use scoped tokens for trusted scripts, CLI workflows, and internal automation. They are shown exactly
-              once.
-            </p>
-            <div className="key-row">
-              <div>
-                <strong>Automation access</strong>
-                <span>Scopes are checked on every API request.</span>
-              </div>
-              <button
-                className="button button-primary"
-                onClick={() => {
-                  setSecret("");
-                  setShowNew(true);
-                }}
-              >
-                <PlusIcon size={15} weight="bold" /> New token
-              </button>
-            </div>
-            {tokenError && <p className="form-error">{tokenError}</p>}
-            {tokens.map((token) => (
-              <div className="key-row" key={token.id}>
-                <div>
-                  <strong>{token.label}</strong>
-                  <span>
-                    <code>{token.prefix}</code> · {token.scopes} · Last used {token.lastUsed}
-                  </span>
+          {(section === "general" || section === "security") && (
+            <>
+              <div className="settings-section">
+                <h3>Appearance</h3>
+                <p>Choose the interface contrast that is most comfortable for this device.</p>
+                <div className="key-row appearance-row">
+                  <div>
+                    <strong>Color theme</strong>
+                    <span>Your choice stays on this device.</span>
+                  </div>
+                  <ThemePreference />
                 </div>
-                <button className="button button-danger" onClick={() => void revokeToken(token)}>
-                  <TrashIcon size={15} /> Revoke
+              </div>
+              <div className="settings-section">
+                <h3>Security model</h3>
+                <p>Browser sessions are HttpOnly, individually revocable, and isolated from automation tokens.</p>
+                <div className="key-row">
+                  <div>
+                    <strong>Authentication boundary</strong>
+                    <span>Refresh tokens rotate; room tickets expire after two minutes.</span>
+                  </div>
+                  <Link className="button button-secondary" href="/app/settings/sessions">
+                    <LaptopIcon size={16} /> Review sessions
+                  </Link>
+                </div>
+                {identity && (
+                  <div className="key-row">
+                    <div>
+                      <strong>Email verification</strong>
+                      <span>
+                        {identity.user.emailVerified
+                          ? `${identity.user.email} is verified.`
+                          : verificationSent
+                            ? "Check your inbox for the new link."
+                            : `${identity.user.email} has not been verified yet.`}
+                      </span>
+                    </div>
+                    {identity.user.emailVerified ? (
+                      <span className="session-current">Verified</span>
+                    ) : (
+                      <button
+                        className="button button-secondary"
+                        disabled={sendingVerification || verificationSent}
+                        onClick={() => void resendVerification()}
+                      >
+                        <PaperPlaneTiltIcon size={15} />{" "}
+                        {verificationSent ? "Link sent" : sendingVerification ? "Sending…" : "Resend link"}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          {(section === "general" || section === "sessions" || section === "security") && (
+            <div className="settings-section" id="sessions">
+              <h3>Browser sessions</h3>
+              <p>Only sessions returned by the authenticated API are shown here.</p>
+              {sessions.map((session) => (
+                <div className="key-row" key={session.id}>
+                  <div>
+                    <strong>{session.isCurrent ? "Current device" : "Signed-in device"}</strong>
+                    <span>
+                      {session.userAgent || "Unknown browser"} · active {tokenDate(session.lastUsedAt)}
+                    </span>
+                  </div>
+                  {session.isCurrent ? (
+                    <span className="session-current">Current</span>
+                  ) : (
+                    <button className="button button-danger" onClick={() => void revokeSession(session)}>
+                      <TrashIcon size={15} /> Revoke
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!sessions.length && <p className="field-help">No active sessions were returned.</p>}
+            </div>
+          )}
+          {(section === "general" || section === "tokens") && (
+            <div className="settings-section" id="tokens">
+              <h3>Personal access tokens</h3>
+              <p>
+                Use scoped tokens for trusted scripts, CLI workflows, and internal automation. Secrets are shown once.
+              </p>
+              <div className="key-row">
+                <div>
+                  <strong>Automation access</strong>
+                  <span>Scopes are enforced for every API request.</span>
+                </div>
+                <button
+                  className="button button-primary"
+                  onClick={() => {
+                    setSecret("");
+                    setShowNew(true);
+                  }}
+                >
+                  <PlusIcon size={15} weight="bold" /> New token
                 </button>
               </div>
-            ))}
-          </div>
-          <div className="settings-section">
-            <h3>First-party OIDC clients</h3>
-            <p>
-              Threadline only registers internal clients, using authorization code with PKCE and rotating refresh
-              tokens.
-            </p>
-            <div className="key-row">
-              <div>
-                <strong>Threadline web</strong>
-                <span>Authorization code + PKCE · Active</span>
-              </div>
-              <button className="button button-secondary">View client</button>
+              {tokens.map((token) => (
+                <div className="key-row" key={token.id}>
+                  <div>
+                    <strong>{token.label}</strong>
+                    <span>
+                      <code>{token.tokenPrefix}…</code> · {token.scopes.join(", ")} · Created{" "}
+                      {tokenDate(token.createdAt)} · Last used{" "}
+                      {token.lastUsedAt ? tokenDate(token.lastUsedAt) : "never"}
+                    </span>
+                  </div>
+                  <button className="button button-danger" onClick={() => void revokeToken(token)}>
+                    <TrashIcon size={15} /> Revoke
+                  </button>
+                </div>
+              ))}
+              {!tokens.length && <p className="field-help">No active personal access tokens.</p>}
             </div>
-            <div className="key-row">
-              <div>
-                <strong>Threadline CLI</strong>
-                <span>Device registration pending</span>
-              </div>
-              <button className="button button-secondary">Configure</button>
+          )}
+          {(section === "general" || section === "clients") && (
+            <div className="settings-section" id="clients">
+              <h3>First-party OIDC clients</h3>
+              <p>
+                These client registrations are fetched from the identity service. Public third-party client creation is
+                not enabled.
+              </p>
+              {clients.map((client) => (
+                <div className="key-row" key={client.id}>
+                  <div>
+                    <strong>{client.name}</strong>
+                    <span>
+                      {client.id} · Authorization code + PKCE · {client.redirectUris.join(", ")}
+                    </span>
+                  </div>
+                  <span className="session-current">Active</span>
+                </div>
+              ))}
+              {!clients.length && <p className="field-help">No first-party clients were returned.</p>}
             </div>
-          </div>
+          )}
         </section>
         <aside className="settings-side">
           <h3>Settings</h3>
-          <a href="/app/settings" className="active">
-            General
-          </a>
-          <a href="/app/settings/security">Security</a>
-          <a href="/app/settings/sessions">Sessions</a>
-          <a href="/app/settings/tokens">Personal access tokens</a>
-          <a href="/app/settings/clients">OIDC clients</a>
+          {nav.map(([key, href, label]) => (
+            <Link href={href} className={section === key ? "active" : ""} key={key}>
+              {label}
+            </Link>
+          ))}
         </aside>
       </div>
       {showNew && (
@@ -218,7 +297,7 @@ export function Settings() {
             <div className="modal-head">
               <div>
                 <h3>Create personal access token</h3>
-                <p>Choose a descriptive label. You will be able to copy the secret once.</p>
+                <p>Choose explicit scopes. You will copy the secret exactly once.</p>
               </div>
             </div>
             <div className="modal-form">
@@ -226,17 +305,24 @@ export function Settings() {
                 <label htmlFor="token-label">Token label</label>
                 <input id="token-label" name="label" autoFocus placeholder="deploy-bot" required />
               </div>
-              <div className="field">
-                <label htmlFor="token-scope">Scopes</label>
-                <input id="token-scope" name="scopes" value="rooms:read, messages:write" readOnly />
-                <span className="field-help">The production API enforces one or more explicit scopes.</span>
-              </div>
+              <fieldset className="token-scopes">
+                <legend>Scopes</legend>
+                <label>
+                  <input type="checkbox" name="rooms:read" defaultChecked /> Read rooms
+                </label>
+                <label>
+                  <input type="checkbox" name="messages:write" defaultChecked /> Send messages
+                </label>
+                <label>
+                  <input type="checkbox" name="artifacts:read" /> Read artifacts
+                </label>
+              </fieldset>
               <div className="modal-actions">
                 <button type="button" className="button button-ghost" onClick={() => setShowNew(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="button button-primary">
-                  {creating ? "Creating..." : "Create token"}
+                <button type="submit" className="button button-primary" disabled={creating}>
+                  {creating ? "Creating…" : "Create token"}
                 </button>
               </div>
             </div>
@@ -249,7 +335,7 @@ export function Settings() {
             <div className="modal-head">
               <div>
                 <h3>Copy your token now</h3>
-                <p>This secret will not be visible again. Store it in your team’s secret manager.</p>
+                <p>This secret will not be shown again. Store it in a secret manager.</p>
               </div>
               <KeyIcon size={23} color="var(--accent)" />
             </div>
