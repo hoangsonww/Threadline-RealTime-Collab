@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiFetch } from "../lib/api";
+import { PasswordField } from "./password-field";
 
 type Mode = "login" | "register";
 
@@ -29,6 +30,16 @@ export function AuthForm({ mode }: { mode: Mode }) {
         String(form.get("organizationName") ?? "").trim().length < 2)
     ) {
       setError("Add your name and workspace name to continue.");
+      setBusy(false);
+      return;
+    }
+    if (mode === "register" && password.length < 10) {
+      setError("Use at least 10 characters for your password.");
+      setBusy(false);
+      return;
+    }
+    if (mode === "register" && password !== String(form.get("confirmation") ?? "")) {
+      setError("The two passwords do not match.");
       setBusy(false);
       return;
     }
@@ -77,21 +88,29 @@ export function AuthForm({ mode }: { mode: Mode }) {
         <label htmlFor="email">Work email</label>
         <input id="email" name="email" type="email" autoComplete="email" placeholder="you@company.com" />
       </div>
-      <div className="field">
-        <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete={mode === "login" ? "current-password" : "new-password"}
-          placeholder={mode === "login" ? "Your password" : "At least 10 characters"}
+      <PasswordField
+        id="password"
+        name="password"
+        label="Password"
+        autoComplete={mode === "login" ? "current-password" : "new-password"}
+        placeholder={mode === "login" ? "Your password" : "At least 10 characters"}
+        helper={
+          mode === "login" && (
+            <Link className="field-help" href="/forgot-password">
+              Forgot password?
+            </Link>
+          )
+        }
+      />
+      {mode === "register" && (
+        <PasswordField
+          id="confirmation"
+          name="confirmation"
+          label="Confirm password"
+          autoComplete="new-password"
+          placeholder="Repeat your password"
         />
-        {mode === "login" && (
-          <Link className="field-help" href="/forgot-password">
-            Forgot password?
-          </Link>
-        )}
-      </div>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}
