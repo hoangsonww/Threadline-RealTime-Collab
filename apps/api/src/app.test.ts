@@ -288,6 +288,23 @@ describe("Threadline identity API", () => {
     expect(registration.status).toBe(201);
   });
 
+  it("rate limits invite-code guessing on /v1/join like any other secret check", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    await agent.post("/v1/auth/register").send({
+      email: "guesser@example.com",
+      username: "guesser",
+      displayName: "Guesser User",
+      password: "correct-horse-battery",
+    });
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const response = await agent.post("/v1/join").send({ code: "WRONGCOD" });
+      expect(response.status).toBe(404);
+    }
+    const blocked = await agent.post("/v1/join").send({ code: "WRONGCOD" });
+    expect(blocked.status).toBe(429);
+  });
+
   it("enforces organization and restricted-room ABAC for reads, writes, tickets, and activity", async () => {
     const { app } = await createTestApp();
     const {
@@ -596,5 +613,14 @@ describe("Threadline identity API", () => {
     expect((await outsider.get("/v1/auth/me")).body.organizations).toHaveLength(0);
     expect((await outsider.get(`/v1/rooms/${room.body.room.id}`)).status).toBe(403);
     expect((await outsider.post(`/v1/rooms/${room.body.room.id}/ticket`)).status).toBe(403);
+
+    // Someone with no membership at all in the org — not merely a member lacking
+    // invite permission — can't read its join code either. And a nonexistent
+    // orgId returns the identical status, so a caller can't use the invite
+    // endpoint's response code to enumerate which org IDs are real.
+    const realOrgInvite = await outsider.get(`/v1/orgs/${org.body.organization.id}/invite`);
+    const fakeOrgInvite = await outsider.get("/v1/orgs/00000000-0000-4000-8000-000000000000/invite");
+    expect(realOrgInvite.status).toBe(403);
+    expect(fakeOrgInvite.status).toBe(403);
   });
 });

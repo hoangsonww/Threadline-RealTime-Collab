@@ -84,12 +84,13 @@ flowchart TD
     Mount(["/app/** route mounts"]) --> Loading["render workspace-loading<br/>(spinner, aria-busy)"]
     Loading --> Fetch["GET /v1/auth/me"]
     Fetch --> Result{"result?"}
-    Result -- "200" --> Authorized["authorized = true<br/>→ render the actual page"]
+    Result -- "200, organizations.length > 0" --> Authorized["authorized = true<br/>→ render the actual page"]
+    Result -- "200, organizations.length === 0" --> Onboard["router.replace(/onboarding?returnTo=...)"]
     Result -- "401" --> Redirect["router.replace(/login?returnTo=...)"]
     Result -- "network error,<br/>API misconfigured,<br/>anything else" --> ErrorState["render workspace-loading<br/>with a visible error message<br/>(not a silent infinite spinner)"]
 ```
 
-No `/app/**` page does its own auth check — `WorkspaceGate` (`apps/web/components/workspace-gate.tsx`) is the single choke point, and every page below it renders on the assumption that a session already exists. This is deliberately server-blind: `WorkspaceGate` doesn't know or care _which_ organization or room the caller is about to look at — that's the server's job on the next request, via ABAC (see [`api.md`](api.md#attribute-based-access-control-abac)). The non-401 error branch exists because the original version had no such branch: any failure that wasn't a clean 401 (API unreachable, `NEXT_PUBLIC_API_ORIGIN` unset) left the user staring at a permanent, silent spinner with no way out.
+No `/app/**` page does its own auth check — `WorkspaceGate` (`apps/web/components/workspace-gate.tsx`) is the single choke point, and every page below it renders on the assumption that a session already exists _and_ the account belongs to at least one organization (registration no longer creates one automatically — see [`api.md`](api.md#organizations--rooms)). This is otherwise deliberately server-blind: `WorkspaceGate` doesn't know or care _which_ organization or room the caller is about to look at — that's the server's job on the next request, via ABAC (see [`api.md`](api.md#attribute-based-access-control-abac)). The non-401 error branch exists because the original version had no such branch: any failure that wasn't a clean 401 (API unreachable, `NEXT_PUBLIC_API_ORIGIN` unset) left the user staring at a permanent, silent spinner with no way out.
 
 ## Shell composition
 
@@ -166,12 +167,13 @@ Fonts are `next/font/google`: **Manrope** for `--font-geist` (variable weight) a
 | `app-shell.tsx`, `workspace-sidebar.tsx`, `workspace-topbar.tsx`    | Persistent chrome for every non-room `/app/**` page                                                                                            |
 | `brand.tsx`                                                         | Logo mark, reused in the landing nav and both auth panes                                                                                       |
 | `auth-shell.tsx`, `auth-form.tsx`, `password-recovery.tsx`          | Login/register/forgot/reset/verify screens                                                                                                     |
+| `onboarding-flow.tsx`                                               | `/onboarding`: create-a-workspace / join-by-invite-code cards, shown whenever the account has zero organizations                               |
 | `landing-atmosphere.tsx`, `landing-motion.tsx`, `landing-scene.tsx` | Marketing page visuals and GSAP/motion interaction                                                                                             |
 | `dashboard.tsx`                                                     | `/app` home: recent rooms, recent activity, room-creation modal                                                                                |
 | `rooms-directory.tsx`                                               | `/app/rooms`: full room list                                                                                                                   |
 | `calendar-view.tsx`                                                 | `/app/calendar`: event list + scheduling modal                                                                                                 |
 | `activity-feed.tsx`                                                 | `/app/activity`: durable event stream across visible rooms                                                                                     |
-| `members-page.tsx`                                                  | `/app/org/:orgId/members`: organization membership                                                                                             |
+| `members-page.tsx`                                                  | `/app/org/:orgId/members`: organization membership, invite-code panel, role management                                                         |
 | `room-members-page.tsx`                                             | `/app/rooms/:roomId/members`: explicit room membership, only route with a "grant access" flow                                                  |
 | `settings.tsx`                                                      | `/app/settings(/security,/sessions,/tokens,/clients)`: appearance, sessions, PATs, OIDC clients, email verification                            |
 | `room-workspace.tsx`                                                | The live room: chat, notes, whiteboard, files, timeline, WebRTC controls — see [`realtime.md`](realtime.md)                                    |

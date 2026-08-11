@@ -122,6 +122,10 @@ export function createApp(options: AppOptions, app = express()) {
   app.use("/v1/auth/register", rateLimit(8, 60 * 60 * 1000));
   app.use("/v1/auth/password-reset/request", rateLimit(5, 60 * 60 * 1000));
   app.use("/v1/auth/email-verification/request", rateLimit(5, 60 * 60 * 1000));
+  // /v1/join checks a caller-supplied secret against every organization's join code,
+  // the same shape of risk as a password check — rate limit it like one so guessing
+  // codes at scale (across however many orgs exist) isn't free.
+  app.use("/v1/join", rateLimit(10, 15 * 60 * 1000));
   app.use((request, response, next) => {
     const isUnsafe = !["GET", "HEAD", "OPTIONS"].includes(request.method);
     const origin = request.get("origin");
@@ -874,10 +878,14 @@ export function createApp(options: AppOptions, app = express()) {
     try {
       const context = await requireScope(request, response, "orgs:read");
       if (!context) return;
-      const org = await options.repository.getOrganization(request.params.orgId);
-      if (!org) return clientError(response, 404, "not_found", "Organization was not found.");
+      // Membership is checked before the organization is even looked up, so a
+      // caller with no membership row gets the same 403 whether orgId belongs to
+      // someone else's real organization or doesn't exist at all — mirroring how
+      // GET /v1/orgs/:orgId/members already behaves, instead of leaking org
+      // existence through a 403-vs-404 status difference.
       const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
-      if (!canInviteToOrganization(caller, org))
+      const org = caller ? await options.repository.getOrganization(request.params.orgId) : undefined;
+      if (!org || !canInviteToOrganization(caller, org))
         return clientError(response, 403, "forbidden", "You do not have permission to view this invite code.");
       response.json({ joinCode: org.joinCode, allowMemberInvites: org.allowMemberInvites });
     } catch (error) {
@@ -889,10 +897,9 @@ export function createApp(options: AppOptions, app = express()) {
     try {
       const context = await requireScope(request, response, "orgs:write");
       if (!context) return;
-      const org = await options.repository.getOrganization(request.params.orgId);
-      if (!org) return clientError(response, 404, "not_found", "Organization was not found.");
       const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
-      if (!canInviteToOrganization(caller, org))
+      const org = caller ? await options.repository.getOrganization(request.params.orgId) : undefined;
+      if (!org || !canInviteToOrganization(caller, org))
         return clientError(response, 403, "forbidden", "You do not have permission to regenerate this invite code.");
       const updated = { ...org, joinCode: await uniqueJoinCode() };
       await options.repository.updateOrganization(updated);

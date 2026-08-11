@@ -270,7 +270,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           tags: ["Organizations"],
           operationId: "joinOrganization",
           summary: "Join a workspace by invite code",
-          description: "Requires `orgs:write`. Redeems a workspace's join code and creates a `member` membership.",
+          description:
+            "Requires `orgs:write`. Redeems a workspace's join code and creates a `member` membership. Rate limited 10/15min/IP, the same as a password check, since this is a caller-supplied secret being verified.",
           security: identitySecurity,
           requestBody: { required: true, content: json(schema("JoinOrganizationInput")) },
           responses: {
@@ -279,6 +280,7 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             "404": errors.NotFound,
             "409": errors.Conflict,
             "422": errors.Validation,
+            "429": errors.RateLimited,
           },
         },
       },
@@ -453,14 +455,13 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "getOrganizationInvite",
           summary: "Read a workspace's join code",
           description:
-            "Owners and admins can always read this; a plain member can only when the workspace has `allowMemberInvites` enabled.",
+            "Owners and admins can always read this; a plain member can only when the workspace has `allowMemberInvites` enabled. A caller with no membership in `orgId` gets `403`, the same as a real org they can't view — this endpoint deliberately never distinguishes 'wrong permission' from 'no such organization'.",
           security: identitySecurity,
           parameters: [pathParameter("orgId", "Organization identifier.")],
           responses: {
             "200": response("The current join code.", schema("InviteResponse")),
             "401": errors.Unauthorized,
             "403": errors.Forbidden,
-            "404": errors.NotFound,
           },
         },
       },
@@ -469,14 +470,14 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           tags: ["Organizations"],
           operationId: "regenerateOrganizationInvite",
           summary: "Regenerate a workspace's join code",
-          description: "Invalidates the previous code immediately. Same permission gate as reading the invite.",
+          description:
+            "Invalidates the previous code immediately. Same permission gate — and same no-existence-leak behavior — as reading the invite.",
           security: identitySecurity,
           parameters: [pathParameter("orgId", "Organization identifier.")],
           responses: {
             "200": response("A newly generated join code.", schema("InviteResponse")),
             "401": errors.Unauthorized,
             "403": errors.Forbidden,
-            "404": errors.NotFound,
           },
         },
       },

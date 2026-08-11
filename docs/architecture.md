@@ -206,6 +206,8 @@ erDiagram
         string id PK
         string name
         string slug
+        string joinCode "shareable, regenerable"
+        bool allowMemberInvites
         date createdAt
     }
     MEMBERSHIP {
