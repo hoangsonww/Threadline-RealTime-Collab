@@ -356,4 +356,56 @@ describe("Threadline identity API", () => {
     ).toBe(403);
     expect(ownerRegistration.status).toBe(201);
   });
+
+  it("revokes explicit room membership without touching the caller's organization membership", async () => {
+    const { app } = await createTestApp();
+    const owner = request.agent(app);
+    const member = request.agent(app);
+    await owner.post("/v1/auth/register").send({
+      email: "revoke-owner@example.com",
+      username: "revokeowner",
+      displayName: "Revoke Owner",
+      password: "correct-horse-battery",
+      organizationName: "Revoke Organization",
+    });
+    const memberRegistration = await member.post("/v1/auth/register").send({
+      email: "revoke-member@example.com",
+      username: "revokemember",
+      displayName: "Revoke Member",
+      password: "correct-horse-battery",
+      organizationName: "Revoke Member Organization",
+    });
+    const memberId = memberRegistration.body.user.id as string;
+    const ownerOrg = (await owner.get("/v1/auth/me")).body.organizations[0].id as string;
+    const room = await owner
+      .post(`/v1/orgs/${ownerOrg}/rooms`)
+      .send({ name: "revoke-target", visibility: "restricted" });
+    const roomId = room.body.room.id as string;
+    await owner.post(`/v1/orgs/${ownerOrg}/members`).send({ email: "revoke-member@example.com", role: "member" });
+    const grant = await owner.post(`/v1/rooms/${roomId}/members`).send({ userId: memberId, role: "viewer" });
+    expect(grant.status).toBe(201);
+    expect((await member.post(`/v1/rooms/${roomId}/ticket`)).status).toBe(200);
+
+    // The member being removed cannot revoke their own access — only someone with
+    // the room's "manage" permission can.
+    expect((await member.delete(`/v1/rooms/${roomId}/members/${memberId}`)).status).toBe(403);
+
+    // Removing someone who was never explicitly a member of this room 404s rather
+    // than silently succeeding.
+    const strangerId = "00000000-0000-4000-8000-000000000000";
+    expect((await owner.delete(`/v1/rooms/${roomId}/members/${strangerId}`)).status).toBe(404);
+
+    const revoke = await owner.delete(`/v1/rooms/${roomId}/members/${memberId}`);
+    expect(revoke.status).toBe(204);
+
+    // The org membership is untouched — only the room-scoped grant is gone, so a
+    // restricted room now correctly rejects the caller again.
+    expect((await member.get(`/v1/orgs/${ownerOrg}/rooms`)).status).toBe(200);
+    expect((await member.post(`/v1/rooms/${roomId}/ticket`)).status).toBe(403);
+
+    // The room owner can't be removed through this endpoint.
+    const ownerId = (await owner.get("/v1/auth/me")).body.user.id as string;
+    const removeOwner = await owner.delete(`/v1/rooms/${roomId}/members/${ownerId}`);
+    expect(removeOwner.status).toBe(400);
+  });
 });

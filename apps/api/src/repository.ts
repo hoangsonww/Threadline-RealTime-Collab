@@ -59,6 +59,7 @@ export interface Repository {
   getRoomMembership(roomId: string, userId: string): Promise<RoomMembership | undefined>;
   listRoomMemberships(roomId: string): Promise<RoomMembership[]>;
   createRoomMembership(membership: RoomMembership): Promise<void>;
+  deleteRoomMembership(roomId: string, userId: string): Promise<void>;
   createCalendarEvent(event: CalendarEvent): Promise<void>;
   listCalendarEvents(orgId: string, from?: Date, to?: Date): Promise<CalendarEvent[]>;
   createPat(token: PersonalAccessToken): Promise<void>;
@@ -183,6 +184,12 @@ export class MemoryRepository implements Repository {
   }
   async createRoomMembership(membership: RoomMembership) {
     this.roomMemberships.set(membership.id, membership);
+  }
+  async deleteRoomMembership(roomId: string, userId: string) {
+    const existing = [...this.roomMemberships.values()].find(
+      (membership) => membership.roomId === roomId && membership.userId === userId,
+    );
+    if (existing) this.roomMemberships.delete(existing.id);
   }
   async createCalendarEvent(event: CalendarEvent) {
     this.calendarEvents.set(event.id, event);
@@ -407,6 +414,9 @@ export class MongoRepository implements Repository {
   }
   async createRoomMembership(membership: RoomMembership) {
     await this.roomMemberships.insertOne(membership);
+  }
+  async deleteRoomMembership(roomId: string, userId: string) {
+    await this.roomMemberships.deleteOne({ roomId, userId });
   }
   async createCalendarEvent(event: CalendarEvent) {
     await this.calendarEvents.insertOne(event);

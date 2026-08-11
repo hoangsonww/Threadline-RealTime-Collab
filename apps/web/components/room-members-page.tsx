@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeftIcon, PlusIcon, ShieldCheckIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, PlusIcon, ShieldCheckIcon, UserMinusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { apiFetch, type IdentityResponse, type Room } from "../lib/api";
@@ -34,6 +34,7 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
   const [saving, setSaving] = useState(false);
   const [userId, setUserId] = useState("");
   const [role, setRole] = useState("member");
+  const [removingId, setRemovingId] = useState("");
 
   const load = useCallback(async () => {
     const [{ room: roomData, role: effectiveRole }, identity, roomMembers] = await Promise.all([
@@ -86,6 +87,19 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
     }
   };
 
+  const removeMember = async (member: RoomMember) => {
+    setRemovingId(member.id);
+    setError("");
+    try {
+      await apiFetch(`/v1/rooms/${roomId}/members/${member.id}`, { method: "DELETE" });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not remove this person's access.");
+    } finally {
+      setRemovingId("");
+    }
+  };
+
   return (
     <main id="main-content" className="room-layout">
       <header className="room-topbar">
@@ -124,6 +138,18 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
                 <span>{member.email}</span>
               </div>
               <span className={`role-badge role-${member.role}`}>{member.role}</span>
+              {canManage && member.role !== "owner" ? (
+                <button
+                  className="button button-danger"
+                  onClick={() => void removeMember(member)}
+                  disabled={removingId === member.id}
+                  aria-label={`Remove ${member.displayName}'s access`}
+                >
+                  <UserMinusIcon size={15} /> {removingId === member.id ? "Removing…" : "Remove access"}
+                </button>
+              ) : (
+                <span />
+              )}
             </div>
           ))}
         </div>
