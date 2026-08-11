@@ -5,6 +5,22 @@ import { createApp } from "./application.js";
 import { MemoryRepository } from "./repository.js";
 import { OidcSigner } from "./security.js";
 
+async function registerWithOrg(
+  app: Parameters<typeof request.agent>[0],
+  user: { email: string; username: string; displayName: string; password?: string },
+  orgName: string,
+) {
+  const agent = request.agent(app);
+  const registration = await agent.post("/v1/auth/register").send({
+    email: user.email,
+    username: user.username,
+    displayName: user.displayName,
+    password: user.password ?? "correct-horse-battery",
+  });
+  const org = await agent.post("/v1/orgs").send({ name: orgName });
+  return { agent, registration, org };
+}
+
 async function createTestApp(additionalWebOrigins?: string[], secureCookies = false) {
   const signer = await OidcSigner.create();
   const delivered: Array<{ type: string; actionUrl: string }> = [];
@@ -75,7 +91,6 @@ describe("Threadline identity API", () => {
       username: "local-proxy",
       displayName: "Local Proxy",
       password: "correct-horse-battery",
-      organizationName: "Local Engineering",
     });
     expect(localRegistration.status).toBe(201);
     expect(localRegistration.headers["set-cookie"][0]).not.toContain("Secure");
@@ -88,7 +103,6 @@ describe("Threadline identity API", () => {
         username: "production",
         displayName: "Production User",
         password: "correct-horse-battery",
-        organizationName: "Production Engineering",
       });
     expect(productionRegistration.status).toBe(201);
     expect(productionRegistration.headers["set-cookie"][0]).toContain("Secure");
@@ -102,10 +116,14 @@ describe("Threadline identity API", () => {
       username: "avery",
       displayName: "Avery Chen",
       password: "correct-horse-battery",
-      organizationName: "Northstar Engineering",
     });
     expect(registration.status).toBe(201);
     expect(registration.body.user.email).toBe("avery@example.com");
+
+    const createdOrg = await agent.post("/v1/orgs").send({ name: "Northstar Engineering" });
+    expect(createdOrg.status).toBe(201);
+    expect(createdOrg.body.organization.role).toBe("owner");
+    expect(createdOrg.body.organization.joinCode).toBeUndefined();
 
     const current = await agent.get("/v1/auth/me");
     expect(current.status).toBe(200);
@@ -157,7 +175,6 @@ describe("Threadline identity API", () => {
       username: "lina",
       displayName: "Lina Novak",
       password: "correct-horse-battery",
-      organizationName: "Northstar Engineering",
     });
     const verifier = "pkce-verifier-with-more-than-forty-three-characters-1234567890";
     const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -200,7 +217,6 @@ describe("Threadline identity API", () => {
       username: "reset-user",
       displayName: "Reset User",
       password: "correct-horse-battery",
-      organizationName: "Northstar Engineering",
     });
     const requestReset = await request(app)
       .post("/v1/auth/password-reset/request")
@@ -232,7 +248,6 @@ describe("Threadline identity API", () => {
       username: "verify-user",
       displayName: "Verify User",
       password: "correct-horse-battery",
-      organizationName: "Northstar Engineering",
     });
     expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(false);
 
@@ -269,30 +284,29 @@ describe("Threadline identity API", () => {
       username: "unaffected",
       displayName: "Unaffected User",
       password: "correct-horse-battery",
-      organizationName: "Unaffected Org",
     });
     expect(registration.status).toBe(201);
   });
 
   it("enforces organization and restricted-room ABAC for reads, writes, tickets, and activity", async () => {
     const { app } = await createTestApp();
-    const owner = request.agent(app);
+    const {
+      agent: owner,
+      registration: ownerRegistration,
+      org: ownerOrgResponse,
+    } = await registerWithOrg(
+      app,
+      { email: "owner@example.com", username: "owner", displayName: "Owner User" },
+      "Owner Organization",
+    );
     const member = request.agent(app);
-    const ownerRegistration = await owner.post("/v1/auth/register").send({
-      email: "owner@example.com",
-      username: "owner",
-      displayName: "Owner User",
-      password: "correct-horse-battery",
-      organizationName: "Owner Organization",
-    });
     const memberRegistration = await member.post("/v1/auth/register").send({
       email: "member@example.com",
       username: "member",
       displayName: "Member User",
       password: "correct-horse-battery",
-      organizationName: "Member Organization",
     });
-    const ownerOrg = (await owner.get("/v1/auth/me")).body.organizations[0].id as string;
+    const ownerOrg = ownerOrgResponse.body.organization.id as string;
     const restricted = await owner.post(`/v1/orgs/${ownerOrg}/rooms`).send({
       name: "private-incident",
       visibility: "restricted",
@@ -359,24 +373,20 @@ describe("Threadline identity API", () => {
 
   it("revokes explicit room membership without touching the caller's organization membership", async () => {
     const { app } = await createTestApp();
-    const owner = request.agent(app);
+    const { agent: owner, org: ownerOrgResponse } = await registerWithOrg(
+      app,
+      { email: "revoke-owner@example.com", username: "revokeowner", displayName: "Revoke Owner" },
+      "Revoke Organization",
+    );
     const member = request.agent(app);
-    await owner.post("/v1/auth/register").send({
-      email: "revoke-owner@example.com",
-      username: "revokeowner",
-      displayName: "Revoke Owner",
-      password: "correct-horse-battery",
-      organizationName: "Revoke Organization",
-    });
     const memberRegistration = await member.post("/v1/auth/register").send({
       email: "revoke-member@example.com",
       username: "revokemember",
       displayName: "Revoke Member",
       password: "correct-horse-battery",
-      organizationName: "Revoke Member Organization",
     });
     const memberId = memberRegistration.body.user.id as string;
-    const ownerOrg = (await owner.get("/v1/auth/me")).body.organizations[0].id as string;
+    const ownerOrg = ownerOrgResponse.body.organization.id as string;
     const room = await owner
       .post(`/v1/orgs/${ownerOrg}/rooms`)
       .send({ name: "revoke-target", visibility: "restricted" });
@@ -407,5 +417,184 @@ describe("Threadline identity API", () => {
     const ownerId = (await owner.get("/v1/auth/me")).body.user.id as string;
     const removeOwner = await owner.delete(`/v1/rooms/${roomId}/members/${ownerId}`);
     expect(removeOwner.status).toBe(400);
+  });
+
+  it("registers accounts with no organization until one is explicitly created or joined", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const registration = await agent.post("/v1/auth/register").send({
+      email: "unaffiliated@example.com",
+      username: "unaffiliated",
+      displayName: "Unaffiliated User",
+      password: "correct-horse-battery",
+    });
+    expect(registration.status).toBe(201);
+    expect(registration.body.organization).toBeUndefined();
+
+    const current = await agent.get("/v1/auth/me");
+    expect(current.body.organizations).toHaveLength(0);
+  });
+
+  it("creates a workspace with a join code that is never exposed outside the dedicated invite endpoint", async () => {
+    const { app } = await createTestApp();
+    const { agent: owner, org } = await registerWithOrg(
+      app,
+      { email: "wsowner@example.com", username: "wsowner", displayName: "Workspace Owner" },
+      "Codepath Labs",
+    );
+    expect(org.status).toBe(201);
+    expect(org.body.organization.role).toBe("owner");
+    expect(org.body.organization.joinCode).toBeUndefined();
+
+    const current = await owner.get("/v1/auth/me");
+    expect(current.body.organizations[0].joinCode).toBeUndefined();
+    const list = await owner.get("/v1/orgs");
+    expect(list.body.organizations[0].joinCode).toBeUndefined();
+
+    const invite = await owner.get(`/v1/orgs/${org.body.organization.id}/invite`);
+    expect(invite.status).toBe(200);
+    expect(invite.body.joinCode).toMatch(/^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{8}$/);
+    expect(invite.body.allowMemberInvites).toBe(false);
+  });
+
+  it("joins a workspace by invite code and rejects invalid or already-used codes", async () => {
+    const { app } = await createTestApp();
+    const { agent: owner, org } = await registerWithOrg(
+      app,
+      { email: "joinowner@example.com", username: "joinowner", displayName: "Join Owner" },
+      "Riverside Studio",
+    );
+    const orgId = org.body.organization.id as string;
+    const invite = await owner.get(`/v1/orgs/${orgId}/invite`);
+
+    const joiner = request.agent(app);
+    await joiner.post("/v1/auth/register").send({
+      email: "joiner@example.com",
+      username: "joiner",
+      displayName: "Joiner User",
+      password: "correct-horse-battery",
+    });
+
+    const badCode = await joiner.post("/v1/join").send({ code: "NOTREAL1" });
+    expect(badCode.status).toBe(404);
+
+    // Codes are accepted case-insensitively and with incidental whitespace,
+    // since a person is retyping this from another screen.
+    const join = await joiner.post("/v1/join").send({ code: ` ${invite.body.joinCode.toLowerCase()} ` });
+    expect(join.status).toBe(201);
+    expect(join.body.organization.role).toBe("member");
+    expect(join.body.organization.joinCode).toBeUndefined();
+
+    const rejoin = await joiner.post("/v1/join").send({ code: invite.body.joinCode });
+    expect(rejoin.status).toBe(409);
+
+    const members = await owner.get(`/v1/orgs/${orgId}/members`);
+    expect(members.body.members).toHaveLength(2);
+
+    // A plain member cannot read or regenerate the invite code by default.
+    expect((await joiner.get(`/v1/orgs/${orgId}/invite`)).status).toBe(403);
+    expect((await joiner.post(`/v1/orgs/${orgId}/invite/regenerate`)).status).toBe(403);
+
+    // The owner can opt in to letting members share the invite, at which
+    // point regeneration by the owner also invalidates the old code.
+    const settings = await owner.patch(`/v1/orgs/${orgId}/settings`).send({ allowMemberInvites: true });
+    expect(settings.status).toBe(200);
+    expect(settings.body.allowMemberInvites).toBe(true);
+    expect((await joiner.get(`/v1/orgs/${orgId}/invite`)).status).toBe(200);
+
+    const regenerated = await owner.post(`/v1/orgs/${orgId}/invite/regenerate`);
+    expect(regenerated.status).toBe(200);
+    expect(regenerated.body.joinCode).not.toBe(invite.body.joinCode);
+    expect((await joiner.post("/v1/join").send({ code: invite.body.joinCode })).status).toBe(404);
+  });
+
+  it("manages member roles: owner-only admin grants, and a last-admin self-demotion guard", async () => {
+    const { app } = await createTestApp();
+    const { agent: owner, org } = await registerWithOrg(
+      app,
+      { email: "roleowner@example.com", username: "roleowner", displayName: "Role Owner" },
+      "Northline Systems",
+    );
+    const orgId = org.body.organization.id as string;
+    const ownerId = (await owner.get("/v1/auth/me")).body.user.id as string;
+
+    const addMember = async (email: string, username: string) => {
+      const agent = request.agent(app);
+      const registration = await agent.post("/v1/auth/register").send({
+        email,
+        username,
+        displayName: username,
+        password: "correct-horse-battery",
+      });
+      await owner.post(`/v1/orgs/${orgId}/members`).send({ email, role: "member" });
+      return { agent, userId: registration.body.user.id as string };
+    };
+
+    const admin1 = await addMember("admin1@example.com", "admin1");
+    const admin2 = await addMember("admin2@example.com", "admin2");
+    const plain = await addMember("plainmember@example.com", "plainmember");
+
+    // Promote both to admin — only the owner may do this.
+    expect((await owner.patch(`/v1/orgs/${orgId}/members/${admin1.userId}`).send({ role: "admin" })).status).toBe(200);
+    expect((await owner.patch(`/v1/orgs/${orgId}/members/${admin2.userId}`).send({ role: "admin" })).status).toBe(200);
+
+    // A non-owner admin cannot grant admin to someone else.
+    const escalationAttempt = await admin1.agent
+      .patch(`/v1/orgs/${orgId}/members/${plain.userId}`)
+      .send({ role: "admin" });
+    expect(escalationAttempt.status).toBe(403);
+
+    // A plain member cannot change anyone's role at all.
+    expect(
+      (await plain.agent.patch(`/v1/orgs/${orgId}/members/${admin1.userId}`).send({ role: "member" })).status,
+    ).toBe(403);
+
+    // The owner's own role can never be changed through this endpoint.
+    expect((await owner.patch(`/v1/orgs/${orgId}/members/${ownerId}`).send({ role: "admin" })).status).toBe(400);
+
+    // With two admins present, one may self-demote to member.
+    const firstDemotion = await admin1.agent.patch(`/v1/orgs/${orgId}/members/${admin1.userId}`).send({
+      role: "member",
+    });
+    expect(firstDemotion.status).toBe(200);
+    expect(firstDemotion.body.member.role).toBe("member");
+
+    // Now admin2 is the organization's only admin — self-demotion must be blocked.
+    const blockedDemotion = await admin2.agent.patch(`/v1/orgs/${orgId}/members/${admin2.userId}`).send({
+      role: "member",
+    });
+    expect(blockedDemotion.status).toBe(400);
+    expect(blockedDemotion.body.error).toBe("last_admin");
+
+    // The guard only protects self-service demotion — an owner-directed
+    // change is allowed even if it leaves zero admins, since the owner
+    // remains as a fallback administrator.
+    const ownerDirectedDemotion = await owner.patch(`/v1/orgs/${orgId}/members/${admin2.userId}`).send({
+      role: "member",
+    });
+    expect(ownerDirectedDemotion.status).toBe(200);
+  });
+
+  it("keeps live rooms restricted to organization members even under the new signup flow", async () => {
+    const { app } = await createTestApp();
+    const { agent: owner, org } = await registerWithOrg(
+      app,
+      { email: "roomowner@example.com", username: "roomowner", displayName: "Room Owner" },
+      "Perimeter Inc",
+    );
+    const room = await owner.post(`/v1/orgs/${org.body.organization.id}/rooms`).send({ name: "standup" });
+    expect(room.status).toBe(201);
+
+    const outsider = request.agent(app);
+    await outsider.post("/v1/auth/register").send({
+      email: "outsider@example.com",
+      username: "outsider",
+      displayName: "Outsider User",
+      password: "correct-horse-battery",
+    });
+    // A brand-new account with zero organizations has no room role at all.
+    expect((await outsider.get("/v1/auth/me")).body.organizations).toHaveLength(0);
+    expect((await outsider.get(`/v1/rooms/${room.body.room.id}`)).status).toBe(403);
+    expect((await outsider.post(`/v1/rooms/${room.body.room.id}/ticket`)).status).toBe(403);
   });
 });

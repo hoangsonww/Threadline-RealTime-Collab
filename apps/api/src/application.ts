@@ -6,11 +6,21 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { z } from "zod";
 import { apiDocsCsp, renderRedocDocs, renderSwaggerDocs } from "./api-docs.js";
-import { scopes, type Scope, type Session, type User } from "./domain.js";
+import { scopes, type Organization, type Scope, type Session, type User } from "./domain.js";
 import { createOpenApiDocument } from "./openapi.js";
-import { canOrganization, canRoom, effectiveRoomRole } from "./policy.js";
+import { canInviteToOrganization, canOrganization, canRoom, effectiveRoomRole } from "./policy.js";
 import type { Repository } from "./repository.js";
-import { digest, hashPassword, id, now, opaqueToken, pkceChallenge, publicUser, verifyPassword } from "./security.js";
+import {
+  digest,
+  generateJoinCode,
+  hashPassword,
+  id,
+  now,
+  opaqueToken,
+  pkceChallenge,
+  publicUser,
+  verifyPassword,
+} from "./security.js";
 import type { OidcSigner } from "./security.js";
 
 const sessionCookie = "threadline_session";
@@ -223,16 +233,29 @@ export function createApp(options: AppOptions, app = express()) {
     return { room, membership, roomMembership };
   };
 
+  // The join code is deliberately never included here — it's only ever returned by
+  // the dedicated, permission-checked GET /v1/orgs/:orgId/invite endpoint, so a
+  // member without invite permission can never read it off /v1/auth/me or GET /v1/orgs.
   const organizationsForUser = async (userId: string) => {
     const organizations = await options.repository.getOrganizationsForUser(userId);
     return Promise.all(
       organizations.map(async (organization) => {
+        const { joinCode: _joinCode, ...publicOrg } = organization;
         const membership = await options.repository.getMembership(organization.id, userId);
-        return membership
-          ? { ...organization, role: membership.role, attributes: membership.attributes }
-          : organization;
+        return membership ? { ...publicOrg, role: membership.role, attributes: membership.attributes } : publicOrg;
       }),
     );
+  };
+
+  // Collisions are astronomically unlikely at 8 characters from a 32-symbol alphabet
+  // (~1.1 trillion combinations), but the check costs one indexed lookup and turns
+  // "astronomically unlikely" into "provably impossible," so it's cheap to just do.
+  const uniqueJoinCode = async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = generateJoinCode();
+      if (!(await options.repository.getOrganizationByJoinCode(candidate))) return candidate;
+    }
+    throw new Error("Could not generate a unique join code.");
   };
 
   const apiOrigin = (request: Request) => `${request.protocol}://${request.get("host")}`;
@@ -266,7 +289,6 @@ export function createApp(options: AppOptions, app = express()) {
             .regex(/^[a-z0-9-]+$/i),
           displayName: z.string().trim().min(2).max(80),
           password: passwordSchema,
-          organizationName: z.string().trim().min(2).max(80),
         })
         .parse(request.body);
       if (await options.repository.getUserByEmail(input.email))
@@ -284,22 +306,9 @@ export function createApp(options: AppOptions, app = express()) {
         passwordHash: await hashPassword(input.password),
         passwordUpdatedAt: now(),
       });
-      const org = {
-        id: id(),
-        name: input.organizationName,
-        slug: `${input.organizationName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-|-$/g, "")}-${user.id.slice(0, 6)}`,
-        createdAt: now(),
-      };
-      await options.repository.createOrganization(org, {
-        id: id(),
-        orgId: org.id,
-        userId: user.id,
-        role: "owner",
-        createdAt: now(),
-      });
+      // Deliberately does not create an organization here. A brand-new account
+      // belongs to nothing until the person explicitly creates or joins one on
+      // /onboarding — see POST /v1/orgs and POST /v1/join below.
       const rawToken = await createSession(user, request);
       await options.repository.writeAudit({
         id: id(),
@@ -312,7 +321,85 @@ export function createApp(options: AppOptions, app = express()) {
       await issueAccountAction("email_verification", user);
       setSessionCookie(request, response, rawToken)
         .status(201)
-        .json({ user: publicUser(user), organization: org });
+        .json({ user: publicUser(user) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/orgs", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const input = z.object({ name: z.string().trim().min(2).max(80) }).parse(request.body);
+      const org: Organization = {
+        id: id(),
+        name: input.name,
+        slug: `${input.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")}-${context.user.id.slice(0, 6)}`,
+        joinCode: await uniqueJoinCode(),
+        allowMemberInvites: false,
+        createdAt: now(),
+      };
+      await options.repository.createOrganization(org, {
+        id: id(),
+        orgId: org.id,
+        userId: context.user.id,
+        role: "owner",
+        createdAt: now(),
+      });
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.create",
+        targetType: "organization",
+        targetId: org.id,
+        createdAt: now(),
+      });
+      const { joinCode: _joinCode, ...publicOrg } = org;
+      response.status(201).json({ organization: { ...publicOrg, role: "owner" as const } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/join", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const input = z
+        .object({
+          code: z
+            .string()
+            .trim()
+            .transform((value) => value.toUpperCase().replace(/\s+/g, "")),
+        })
+        .parse(request.body);
+      const org = await options.repository.getOrganizationByJoinCode(input.code);
+      if (!org) return clientError(response, 404, "invalid_code", "That invite code doesn't match any workspace.");
+      if (await options.repository.getMembership(org.id, context.user.id))
+        return clientError(response, 409, "already_member", "You already belong to this workspace.");
+      const membership = {
+        id: id(),
+        orgId: org.id,
+        userId: context.user.id,
+        role: "member" as const,
+        createdAt: now(),
+      };
+      await options.repository.createMembership(membership);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.member_joined",
+        targetType: "membership",
+        targetId: membership.id,
+        metadata: { orgId: org.id, via: "join_code" },
+        createdAt: now(),
+      });
+      const { joinCode: _joinCode, ...publicOrg } = org;
+      response.status(201).json({ organization: { ...publicOrg, role: membership.role } });
     } catch (error) {
       next(error);
     }
@@ -777,6 +864,121 @@ export function createApp(options: AppOptions, app = express()) {
           attributes: membership.attributes,
           joinedAt: membership.createdAt,
         },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/v1/orgs/:orgId/invite", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:read");
+      if (!context) return;
+      const org = await options.repository.getOrganization(request.params.orgId);
+      if (!org) return clientError(response, 404, "not_found", "Organization was not found.");
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canInviteToOrganization(caller, org))
+        return clientError(response, 403, "forbidden", "You do not have permission to view this invite code.");
+      response.json({ joinCode: org.joinCode, allowMemberInvites: org.allowMemberInvites });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/orgs/:orgId/invite/regenerate", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const org = await options.repository.getOrganization(request.params.orgId);
+      if (!org) return clientError(response, 404, "not_found", "Organization was not found.");
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canInviteToOrganization(caller, org))
+        return clientError(response, 403, "forbidden", "You do not have permission to regenerate this invite code.");
+      const updated = { ...org, joinCode: await uniqueJoinCode() };
+      await options.repository.updateOrganization(updated);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.invite_regenerate",
+        targetType: "organization",
+        targetId: org.id,
+        createdAt: now(),
+      });
+      response.json({ joinCode: updated.joinCode, allowMemberInvites: updated.allowMemberInvites });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/v1/orgs/:orgId/settings", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(caller, "manage_members"))
+        return clientError(response, 403, "forbidden", "You do not have permission to manage this organization.");
+      const org = await options.repository.getOrganization(request.params.orgId);
+      if (!org) return clientError(response, 404, "not_found", "Organization was not found.");
+      const input = z.object({ allowMemberInvites: z.boolean() }).parse(request.body);
+      const updated = { ...org, allowMemberInvites: input.allowMemberInvites };
+      await options.repository.updateOrganization(updated);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.settings_update",
+        targetType: "organization",
+        targetId: org.id,
+        metadata: { allowMemberInvites: input.allowMemberInvites },
+        createdAt: now(),
+      });
+      response.json({ allowMemberInvites: updated.allowMemberInvites });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/v1/orgs/:orgId/members/:userId", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "orgs:write");
+      if (!context) return;
+      const caller = await options.repository.getMembership(request.params.orgId, context.user.id);
+      if (!canOrganization(caller, "manage_members"))
+        return clientError(response, 403, "forbidden", "You do not have permission to manage members.");
+      const input = z.object({ role: z.enum(["admin", "member"]) }).parse(request.body);
+      const targetUserId = z.string().uuid().parse(request.params.userId);
+      const target = await options.repository.getMembership(request.params.orgId, targetUserId);
+      if (!target) return clientError(response, 404, "not_found", "That person is not a member of this organization.");
+      if (target.role === "owner")
+        return clientError(response, 400, "cannot_change_owner", "The organization owner's role cannot be changed.");
+      if (input.role === "admin" && caller?.role !== "owner")
+        return clientError(response, 403, "forbidden", "Only an organization owner can assign administrator access.");
+      if (context.user.id === targetUserId && target.role === "admin" && input.role === "member") {
+        const memberships = await options.repository.listMemberships(request.params.orgId);
+        const otherAdmins = memberships.filter((m) => m.userId !== targetUserId && m.role === "admin");
+        if (otherAdmins.length === 0)
+          return clientError(
+            response,
+            400,
+            "last_admin",
+            "You're the only administrator. Assign another admin before stepping down to member.",
+          );
+      }
+      const updated = { ...target, role: input.role };
+      await options.repository.updateMembership(updated);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "org.member_role_changed",
+        targetType: "membership",
+        targetId: updated.id,
+        metadata: { orgId: updated.orgId, userId: targetUserId, role: updated.role, previousRole: target.role },
+        createdAt: now(),
+      });
+      const user = await options.repository.getUserById(targetUserId);
+      response.json({
+        member: user
+          ? { ...publicUser(user), role: updated.role, attributes: updated.attributes, joinedAt: updated.createdAt }
+          : undefined,
       });
     } catch (error) {
       next(error);

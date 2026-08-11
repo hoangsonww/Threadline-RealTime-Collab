@@ -1,11 +1,16 @@
 import argon2 from "argon2";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { exportJWK, generateKeyPair, importJWK, jwtVerify, SignJWT } from "jose";
 import type { Scope, User } from "./domain.js";
 
 export const now = () => new Date();
 export const id = () => randomUUID();
 export const opaqueToken = (bytes = 32) => randomBytes(bytes).toString("base64url");
+// Excludes visually ambiguous characters (0/O, 1/I/L) since this is a code a person
+// reads off one screen and types into another, not a machine-to-machine secret.
+const joinCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export const generateJoinCode = (length = 8) =>
+  Array.from({ length }, () => joinCodeAlphabet[randomInt(joinCodeAlphabet.length)]).join("");
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 export const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
 export const hashPassword = (value: string) =>
