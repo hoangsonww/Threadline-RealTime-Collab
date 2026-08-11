@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeftIcon,
   BroadcastIcon,
+  CaretLeftIcon,
   CodeIcon,
   DesktopIcon,
   EraserIcon,
@@ -71,15 +73,16 @@ const describeEvent = (event: RoomEvent) => {
   return event.type.replace(/[-.]/g, " ");
 };
 
-function StreamVideo({ stream }: { stream: MediaStream }) {
+function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
   }, [stream]);
-  return <video ref={ref} autoPlay playsInline />;
+  return <video ref={ref} autoPlay muted={muted} playsInline />;
 }
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
+  const router = useRouter();
   const [panel, setPanel] = useState<Panel>("chat");
   const [mode, setMode] = useState<"call" | "editor">("call");
   const [showPanel, setShowPanel] = useState(true);
@@ -99,7 +102,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [camera, setCamera] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const boardRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
@@ -297,7 +300,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = stream;
       meshRef.current?.setLocalStream(stream);
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      setLocalStream(stream);
       setCamera(true);
       setMic(true);
     } catch {
@@ -328,7 +331,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     // Restore whatever the camera stream was already sending (on, off-but-muted, or
     // never started) rather than assuming it should come back on.
     meshRef.current?.setLocalStream(streamRef.current);
-    if (videoRef.current) videoRef.current.srcObject = camera ? streamRef.current : null;
+    setLocalStream(camera ? streamRef.current : null);
   }, [camera, publish]);
   const toggleScreenShare = async () => {
     if (sharing) return stopScreenShare();
@@ -342,7 +345,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       // alongside the existing microphone track rather than replacing it.
       const audioTrack = streamRef.current?.getAudioTracks()[0];
       meshRef.current?.setLocalStream(audioTrack ? new MediaStream([videoTrack, audioTrack]) : screen);
-      if (videoRef.current) videoRef.current.srcObject = screen;
+      setLocalStream(screen);
       setSharing(true);
       publish("screen-share", { active: true });
     } catch {
@@ -365,10 +368,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     knownPeersRef.current.clear();
     localIdRef.current = "";
     setRemoteStreams({});
+    setLocalStream(null);
     setParticipants([]);
     setCamera(false);
     setSharing(false);
     setConnected(false);
+    router.push("/app/rooms");
   };
   const sendMessage = (event: React.FormEvent) => {
     event.preventDefault();
@@ -425,7 +430,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     <main id="main-content" className="room-layout">
       <header className="room-topbar">
         <div className="room-breadcrumb">
-          <Link href="/app/rooms" aria-label="Back to rooms">
+          <Link href="/app/rooms" aria-label="Back to rooms" title="Back to rooms">
             <ArrowLeftIcon size={17} />
           </Link>
           <span style={{ color: "var(--subtle)" }}>/</span>
@@ -455,13 +460,15 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             className="button button-ghost button-icon"
             href={`/app/rooms/${roomId}/members`}
             aria-label="Room members"
+            title="Room members"
           >
             <UsersThreeIcon size={18} />
           </Link>
           <button
-            className="button button-ghost button-icon"
+            className={`button button-ghost button-icon room-panel-toggle ${showPanel ? "active" : ""}`}
             onClick={() => setShowPanel((value) => !value)}
-            aria-label={showPanel ? "Hide room panel" : "Show room panel"}
+            aria-label={showPanel ? "Hide chat, notes, and other room tools" : "Show chat, notes, and other room tools"}
+            title={showPanel ? "Hide chat, notes, and other room tools" : "Show chat, notes, and other room tools"}
           >
             <SidebarSimpleIcon size={18} />
           </button>
@@ -472,33 +479,54 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         <section className="room-main">
           {mode === "call" ? (
             <div className="room-mode">
-              <div className="stage">
-                {visibleParticipants.map((person) => {
-                  const self = person.userId === identity?.id;
-                  const stream = self ? undefined : remoteStreams[person.userId];
-                  return (
-                    <article className={`video-tile ${self ? "self" : ""}`} key={person.userId}>
-                      {self && (camera || sharing) && <video ref={videoRef} autoPlay muted playsInline />}
-                      {!self && stream && <StreamVideo stream={stream} />}{" "}
-                      {((!stream && !self) || (self && !camera && !sharing)) && (
-                        <div className="video-placeholder">
-                          <span className="avatar">{initialsFor(person.username)}</span>
-                        </div>
-                      )}
-                      <div className="tile-label">
-                        <span>{self ? `${person.username} (you)` : person.username}</span>
-                        {self && (
-                          <span className="mic">
-                            {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
-                          </span>
+              {connected ? (
+                <div className="stage">
+                  {visibleParticipants.map((person) => {
+                    const self = person.userId === identity?.id;
+                    const stream = self ? undefined : remoteStreams[person.userId];
+                    const hasLocalVideo = self && (camera || sharing) && !!localStream;
+                    return (
+                      <article className={`video-tile ${self ? "self" : ""}`} key={person.userId}>
+                        {hasLocalVideo && <StreamVideo stream={localStream!} muted />}
+                        {!self && stream && <StreamVideo stream={stream} />}{" "}
+                        {((!stream && !self) || (self && !hasLocalVideo)) && (
+                          <div className="video-placeholder">
+                            <span className="avatar">{initialsFor(person.username)}</span>
+                          </div>
                         )}
-                      </div>
-                      {person.screenSharing && <span className="tile-status">Sharing</span>}
-                    </article>
-                  );
-                })}
-                {!visibleParticipants.length && <div className="room-empty">Load the authenticated room to begin.</div>}
-              </div>
+                        <div className="tile-label">
+                          <span>{self ? `${person.username} (you)` : person.username}</span>
+                          {self && (
+                            <span className="mic">
+                              {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
+                            </span>
+                          )}
+                        </div>
+                        {person.screenSharing && <span className="tile-status">Sharing</span>}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="room-prejoin">
+                  <div className="room-prejoin-card">
+                    <span className="room-prejoin-eyebrow">{reconnecting ? "Reconnecting…" : "Not connected yet"}</span>
+                    <h2># {room?.name || "this room"}</h2>
+                    <p>
+                      Join to see who&apos;s here, chat, and collaborate live. Camera and mic are optional — turn them
+                      on now or later from the controls below.
+                    </p>
+                    <div className="room-prejoin-actions">
+                      <button className="button button-primary" onClick={() => void startCamera()}>
+                        <VideoCameraIcon size={16} weight="fill" /> Join with camera
+                      </button>
+                      <button className="button button-secondary" onClick={() => void connectRoom()}>
+                        <BroadcastIcon size={16} /> Join without camera
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="room-mode room-editor-mode">
@@ -533,6 +561,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               className={`control ${mic ? "active" : ""}`}
               onClick={toggleMic}
               aria-label={mic ? "Mute microphone" : "Unmute microphone"}
+              title={mic ? "Mute microphone" : "Unmute microphone"}
             >
               {mic ? <MicrophoneIcon size={18} /> : <MicrophoneSlashIcon size={18} />}
             </button>
@@ -540,6 +569,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               className={`control ${camera ? "active" : ""}`}
               onClick={toggleCamera}
               aria-label={camera ? "Turn off camera" : "Turn on camera"}
+              title={camera ? "Turn off camera" : "Turn on camera"}
             >
               {camera ? <VideoCameraIcon size={18} /> : <VideoCameraSlashIcon size={18} />}
             </button>
@@ -547,21 +577,31 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               className={`control ${sharing ? "active" : ""}`}
               onClick={() => void toggleScreenShare()}
               aria-label={sharing ? "Stop sharing screen" : "Share screen"}
+              title={sharing ? "Stop sharing screen" : "Share screen"}
             >
               <MonitorArrowUpIcon size={18} />
             </button>
             <button
-              className={`control ${connected ? "active" : ""}`}
-              onClick={() => void connectRoom()}
-              aria-label="Connect to room coordinator"
+              className="control danger"
+              onClick={leave}
+              disabled={!connected && !camera && !sharing}
+              aria-label="Leave the room"
+              title="Leave the room"
             >
-              <BroadcastIcon size={18} />
-            </button>
-            <button className="control danger" onClick={leave} aria-label="Leave media session">
               <PhoneDisconnectIcon size={18} />
             </button>
           </div>
         </section>
+        {!showPanel && (
+          <button
+            className="room-panel-reveal"
+            onClick={() => setShowPanel(true)}
+            aria-label="Show chat, notes, and other room tools"
+            title="Show chat, notes, and other room tools"
+          >
+            <CaretLeftIcon size={14} />
+          </button>
+        )}
         {showPanel && (
           <aside className="room-panel">
             <div className="room-panel-tabs" role="tablist" aria-label="Room tools">

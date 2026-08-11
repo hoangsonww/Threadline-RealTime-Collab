@@ -830,9 +830,11 @@ a {
   gap: 7px;
 }
 .room-body {
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 324px;
+  transition: grid-template-columns 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .room-main {
   min-height: 0;
@@ -3140,11 +3142,81 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.room-panel-hidden {
+.room-body.room-panel-hidden {
   grid-template-columns: minmax(0, 1fr);
 }
 .room-panel-hidden .room-main {
   grid-column: 1;
+}
+.room-panel-toggle.active {
+  color: var(--accent);
+  border-color: rgba(82, 224, 162, 0.45);
+}
+.room-panel-reveal {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 64px;
+  border: 1px solid var(--line);
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
+  color: var(--muted);
+  background: var(--surface-raised);
+  transform: translateY(-50%);
+  transition:
+    color 160ms ease,
+    background 160ms ease,
+    width 160ms ease;
+}
+.room-panel-reveal:hover {
+  width: 26px;
+  color: var(--ink);
+  background: var(--surface-hover);
+}
+.room-prejoin {
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  padding: 30px;
+}
+.room-prejoin-card {
+  display: grid;
+  gap: 10px;
+  max-width: 380px;
+  text-align: center;
+}
+.room-prejoin-eyebrow {
+  justify-self: center;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.room-prejoin-card h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+}
+.room-prejoin-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.room-prejoin-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
 }
 .room-empty,
 .panel-empty {
