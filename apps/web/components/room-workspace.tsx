@@ -76,7 +76,21 @@ const describeEvent = (event: RoomEvent) => {
 function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    if (ref.current) ref.current.srcObject = stream;
+    const video = ref.current;
+    if (!video) return;
+    video.srcObject = stream;
+    // Browsers can silently refuse to autoplay unmuted media (a remote peer's audio
+    // track) without a recent user gesture on the page — the <video> then just sits
+    // there paused, with nothing on screen, until something happens to retry it. The
+    // `autoPlay` attribute alone doesn't surface or recover from that rejection, so
+    // play() is called explicitly and retried on the next interaction if it's blocked.
+    const tryPlay = () => {
+      void video.play().catch(() => {
+        document.addEventListener("pointerdown", tryPlay, { once: true });
+      });
+    };
+    tryPlay();
+    return () => document.removeEventListener("pointerdown", tryPlay);
   }, [stream]);
   return <video ref={ref} autoPlay muted={muted} playsInline />;
 }
@@ -532,7 +546,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             <div className="room-mode room-editor-mode">
               <div className="notes-head">
                 <strong>Shared editor</strong>
-                <span>{connected ? "Synced through the room" : "Join the room to sync"}</span>
+                {connected ? (
+                  <span>Synced through the room</span>
+                ) : (
+                  <button className="button button-secondary" onClick={() => void connectRoom()}>
+                    <BroadcastIcon size={14} /> Join to sync
+                  </button>
+                )}
               </div>
               <textarea
                 className="board"
@@ -556,41 +576,40 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               />
             </div>
           )}
-          <div className="room-controls">
-            <button
-              className={`control ${mic ? "active" : ""}`}
-              onClick={toggleMic}
-              aria-label={mic ? "Mute microphone" : "Unmute microphone"}
-              title={mic ? "Mute microphone" : "Unmute microphone"}
-            >
-              {mic ? <MicrophoneIcon size={18} /> : <MicrophoneSlashIcon size={18} />}
-            </button>
-            <button
-              className={`control ${camera ? "active" : ""}`}
-              onClick={toggleCamera}
-              aria-label={camera ? "Turn off camera" : "Turn on camera"}
-              title={camera ? "Turn off camera" : "Turn on camera"}
-            >
-              {camera ? <VideoCameraIcon size={18} /> : <VideoCameraSlashIcon size={18} />}
-            </button>
-            <button
-              className={`control ${sharing ? "active" : ""}`}
-              onClick={() => void toggleScreenShare()}
-              aria-label={sharing ? "Stop sharing screen" : "Share screen"}
-              title={sharing ? "Stop sharing screen" : "Share screen"}
-            >
-              <MonitorArrowUpIcon size={18} />
-            </button>
-            <button
-              className="control danger"
-              onClick={leave}
-              disabled={!connected && !camera && !sharing}
-              aria-label="Leave the room"
-              title="Leave the room"
-            >
-              <PhoneDisconnectIcon size={18} />
-            </button>
-          </div>
+          {connected && (
+            <div className="room-controls">
+              <span className="room-controls-status">
+                <span className="status-dot" /> In call
+              </span>
+              <button
+                className={`control ${mic ? "active" : ""}`}
+                onClick={toggleMic}
+                aria-label={mic ? "Mute microphone" : "Unmute microphone"}
+                title={mic ? "Mute microphone" : "Unmute microphone"}
+              >
+                {mic ? <MicrophoneIcon size={18} /> : <MicrophoneSlashIcon size={18} />}
+              </button>
+              <button
+                className={`control ${camera ? "active" : ""}`}
+                onClick={toggleCamera}
+                aria-label={camera ? "Turn off camera" : "Turn on camera"}
+                title={camera ? "Turn off camera" : "Turn on camera"}
+              >
+                {camera ? <VideoCameraIcon size={18} /> : <VideoCameraSlashIcon size={18} />}
+              </button>
+              <button
+                className={`control ${sharing ? "active" : ""}`}
+                onClick={() => void toggleScreenShare()}
+                aria-label={sharing ? "Stop sharing screen" : "Share screen"}
+                title={sharing ? "Stop sharing screen" : "Share screen"}
+              >
+                <MonitorArrowUpIcon size={18} />
+              </button>
+              <button className="control danger" onClick={leave} aria-label="Leave the room" title="Leave the room">
+                <PhoneDisconnectIcon size={18} /> <span className="control-label">Leave call</span>
+              </button>
+            </div>
+          )}
         </section>
         {!showPanel && (
           <button
@@ -602,166 +621,168 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             <CaretLeftIcon size={14} />
           </button>
         )}
-        {showPanel && (
-          <aside className="room-panel">
-            <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
-              {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
-                <button
-                  key={item}
-                  className={panel === item ? "active" : ""}
-                  onClick={() => setPanel(item)}
-                  role="tab"
-                  aria-selected={panel === item}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-            <div className="panel-content">
-              {panel === "chat" && (
-                <div className="chat">
-                  <div className="chat-list">
-                    {messages.map((message) => (
-                      <article className="message" key={message.id}>
-                        <span className="avatar">{message.initials}</span>
-                        <div className="message-body">
-                          <div className="message-meta">
-                            <strong>{message.person}</strong>
-                            <time>{message.time}</time>
-                          </div>
-                          <p>{message.text}</p>
+        <aside
+          className={`room-panel ${showPanel ? "" : "room-panel-collapsed"}`}
+          inert={!showPanel || undefined}
+          aria-hidden={!showPanel}
+        >
+          <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
+            {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
+              <button
+                key={item}
+                className={panel === item ? "active" : ""}
+                onClick={() => setPanel(item)}
+                role="tab"
+                aria-selected={panel === item}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          <div className="panel-content">
+            {panel === "chat" && (
+              <div className="chat">
+                <div className="chat-list">
+                  {messages.map((message) => (
+                    <article className="message" key={message.id}>
+                      <span className="avatar">{message.initials}</span>
+                      <div className="message-body">
+                        <div className="message-meta">
+                          <strong>{message.person}</strong>
+                          <time>{message.time}</time>
                         </div>
-                      </article>
-                    ))}
-                    {!messages.length && <p className="panel-empty">No messages have been recorded in this room.</p>}
-                  </div>
-                  <form className="chat-compose" onSubmit={sendMessage}>
-                    <input
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      placeholder={connected ? "Message the room" : "Connect to message"}
-                      aria-label="Message the room"
-                      disabled={!connected}
-                    />
-                    <button className="button button-primary" disabled={!connected} aria-label="Send message">
-                      <PaperPlaneTiltIcon size={15} weight="fill" />
-                    </button>
-                  </form>
+                        <p>{message.text}</p>
+                      </div>
+                    </article>
+                  ))}
+                  {!messages.length && <p className="panel-empty">No messages have been recorded in this room.</p>}
                 </div>
-              )}
-              {panel === "notes" && (
-                <div className="notes">
-                  <div className="notes-head">
-                    <strong>Shared notes</strong>
-                    <span>{connected ? "Live sync" : "Connect to save"}</span>
-                  </div>
-                  <textarea
-                    value={notes}
-                    onChange={(event) => {
-                      setNotes(event.target.value);
-                      publish("editor", { document: "notes", content: event.target.value });
-                    }}
-                    aria-label="Shared notes"
-                    placeholder="Capture decisions, context, and follow-up work…"
+                <form className="chat-compose" onSubmit={sendMessage}>
+                  <input
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    placeholder={connected ? "Message the room" : "Connect to message"}
+                    aria-label="Message the room"
+                    disabled={!connected}
                   />
-                </div>
-              )}
-              {
-                // Kept mounted (not conditionally rendered like the other panels) even
-                // when a different tab is active: incoming whiteboard strokes are drawn
-                // straight onto the canvas imperatively, with no separate stroke-history
-                // state to replay later, so unmounting it while off-tab would silently
-                // and permanently drop anything a teammate drew in the meantime.
-              }
-              <div className="whiteboard" style={panel === "board" ? undefined : { display: "none" }}>
-                <div className="whiteboard-head">
-                  <strong>Whiteboard</strong>
-                  <button className="button button-ghost" onClick={clearBoard} disabled={!connected}>
-                    <EraserIcon size={14} /> Clear
+                  <button className="button button-primary" disabled={!connected} aria-label="Send message">
+                    <PaperPlaneTiltIcon size={15} weight="fill" />
                   </button>
+                </form>
+              </div>
+            )}
+            {panel === "notes" && (
+              <div className="notes">
+                <div className="notes-head">
+                  <strong>Shared notes</strong>
+                  <span>{connected ? "Live sync" : "Connect to save"}</span>
                 </div>
-                <canvas
-                  ref={boardRef}
-                  className="board"
-                  width={560}
-                  height={630}
-                  onPointerDown={(event) => {
-                    const point = pointFor(event);
-                    if (!point || !connected) return;
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    drawingRef.current = true;
-                    lastPoint.current = point;
+                <textarea
+                  value={notes}
+                  onChange={(event) => {
+                    setNotes(event.target.value);
+                    publish("editor", { document: "notes", content: event.target.value });
                   }}
-                  onPointerMove={draw}
-                  onPointerUp={() => {
-                    drawingRef.current = false;
-                    lastPoint.current = null;
-                  }}
-                  onPointerLeave={() => {
-                    drawingRef.current = false;
-                    lastPoint.current = null;
-                  }}
+                  aria-label="Shared notes"
+                  placeholder="Capture decisions, context, and follow-up work…"
                 />
               </div>
-              {panel === "files" && (
-                <div className="files">
-                  <div className="files-head">
-                    <strong>Files</strong>
-                    <span>{files.length} transfers</span>
-                  </div>
-                  <label className="file-drop" htmlFor="room-file">
-                    <FileArrowUpIcon size={20} />
-                    <strong>Send directly to connected peers</strong>Files move over encrypted WebRTC data channels and
-                    are not silently stored by the UI.
-                    <input id="room-file" type="file" multiple onChange={uploadFiles} hidden />
-                  </label>
-                  <div className="file-list">
-                    {files.length ? (
-                      files.map((file, index) => (
-                        <div className="file-row" key={`${file.name}-${index}`}>
-                          <FileIcon size={18} weight="duotone" />
-                          <div>
-                            <strong>{file.name}</strong>
-                            <span>
-                              {file.size} · {file.status}
-                            </span>
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="field-help">No files have been transferred in this session.</p>
-                    )}
-                  </div>
+            )}
+            {
+              // Kept mounted (not conditionally rendered like the other panels) even
+              // when a different tab is active: incoming whiteboard strokes are drawn
+              // straight onto the canvas imperatively, with no separate stroke-history
+              // state to replay later, so unmounting it while off-tab would silently
+              // and permanently drop anything a teammate drew in the meantime.
+            }
+            <div className="whiteboard" style={panel === "board" ? undefined : { display: "none" }}>
+              <div className="whiteboard-head">
+                <strong>Whiteboard</strong>
+                <button className="button button-ghost" onClick={clearBoard} disabled={!connected}>
+                  <EraserIcon size={14} /> Clear
+                </button>
+              </div>
+              <canvas
+                ref={boardRef}
+                className="board"
+                width={560}
+                height={630}
+                onPointerDown={(event) => {
+                  const point = pointFor(event);
+                  if (!point || !connected) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  drawingRef.current = true;
+                  lastPoint.current = point;
+                }}
+                onPointerMove={draw}
+                onPointerUp={() => {
+                  drawingRef.current = false;
+                  lastPoint.current = null;
+                }}
+                onPointerLeave={() => {
+                  drawingRef.current = false;
+                  lastPoint.current = null;
+                }}
+              />
+            </div>
+            {panel === "files" && (
+              <div className="files">
+                <div className="files-head">
+                  <strong>Files</strong>
+                  <span>{files.length} transfers</span>
                 </div>
-              )}
-              {panel === "timeline" && (
-                <div className="timeline">
-                  <div className="timeline-head">
-                    <strong>Room timeline</strong>
-                    <span>Durable record</span>
-                  </div>
-                  {timeline
-                    .slice()
-                    .reverse()
-                    .map((event, index) => (
-                      <div className="timeline-event" key={event.id ?? `${event.type}-${index}-${eventAt(event)}`}>
-                        <i />
+                <label className="file-drop" htmlFor="room-file">
+                  <FileArrowUpIcon size={20} />
+                  <strong>Send directly to connected peers</strong>Files move over encrypted WebRTC data channels and
+                  are not silently stored by the UI.
+                  <input id="room-file" type="file" multiple onChange={uploadFiles} hidden />
+                </label>
+                <div className="file-list">
+                  {files.length ? (
+                    files.map((file, index) => (
+                      <div className="file-row" key={`${file.name}-${index}`}>
+                        <FileIcon size={18} weight="duotone" />
                         <div>
-                          <p>{describeEvent(event)}</p>
-                          <time>
-                            {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-                              new Date(eventAt(event)),
-                            )}
-                          </time>
+                          <strong>{file.name}</strong>
+                          <span>
+                            {file.size} · {file.status}
+                          </span>
                         </div>
                       </div>
-                    ))}
-                  {!timeline.length && <p className="panel-empty">This room has no durable events yet.</p>}
+                    ))
+                  ) : (
+                    <p className="field-help">No files have been transferred in this session.</p>
+                  )}
                 </div>
-              )}
-            </div>
-          </aside>
-        )}
+              </div>
+            )}
+            {panel === "timeline" && (
+              <div className="timeline">
+                <div className="timeline-head">
+                  <strong>Room timeline</strong>
+                  <span>Durable record</span>
+                </div>
+                {timeline
+                  .slice()
+                  .reverse()
+                  .map((event, index) => (
+                    <div className="timeline-event" key={event.id ?? `${event.type}-${index}-${eventAt(event)}`}>
+                      <i />
+                      <div>
+                        <p>{describeEvent(event)}</p>
+                        <time>
+                          {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+                            new Date(eventAt(event)),
+                          )}
+                        </time>
+                      </div>
+                    </div>
+                  ))}
+                {!timeline.length && <p className="panel-empty">This room has no durable events yet.</p>}
+              </div>
+            )}
+          </div>
+        </aside>
       </div>
     </main>
   );

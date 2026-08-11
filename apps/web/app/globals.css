@@ -789,7 +789,7 @@ a {
 }
 
 .room-layout {
-  min-height: 100dvh;
+  height: 100dvh;
   display: grid;
   grid-template-rows: 56px minmax(0, 1fr);
 }
@@ -832,11 +832,12 @@ a {
 .room-body {
   position: relative;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 324px;
-  transition: grid-template-columns 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: stretch;
 }
 .room-main {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-rows: minmax(250px, 1fr) 54px;
@@ -922,12 +923,23 @@ a {
   font-weight: 800;
 }
 .room-controls {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   border-top: 1px solid var(--line);
   background: #171a20;
+}
+.room-controls-status {
+  position: absolute;
+  left: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
 }
 .control {
   display: grid;
@@ -938,6 +950,16 @@ a {
   border-radius: 10px;
   color: var(--ink);
   background: #252a33;
+}
+.control.danger {
+  display: inline-flex;
+  gap: 7px;
+  width: auto;
+  padding: 0 14px;
+}
+.control-label {
+  font-size: 13px;
+  font-weight: 700;
 }
 .control:hover {
   background: #303642;
@@ -952,11 +974,26 @@ a {
   background: rgba(255, 123, 133, 0.1);
 }
 .room-panel {
+  flex: 0 0 324px;
+  width: 324px;
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   border-left: 1px solid var(--line);
   background: #15181d;
+  overflow: hidden;
+  transition:
+    flex-basis 280ms cubic-bezier(0.16, 1, 0.3, 1),
+    width 280ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 200ms ease,
+    border-color 280ms ease;
+}
+.room-panel.room-panel-collapsed {
+  flex-basis: 0;
+  width: 0;
+  border-left-color: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 .room-panel-tabs {
   display: flex;
@@ -3142,12 +3179,6 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.room-body.room-panel-hidden {
-  grid-template-columns: minmax(0, 1fr);
-}
-.room-panel-hidden .room-main {
-  grid-column: 1;
-}
 .room-panel-toggle.active {
   color: var(--accent);
   border-color: rgba(82, 224, 162, 0.45);
@@ -3478,8 +3509,9 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
-.room-body {
-  grid-template-columns: minmax(0, 1fr) 360px;
+.room-panel {
+  flex-basis: 360px;
+  width: 360px;
 }
 
 .room-main {
