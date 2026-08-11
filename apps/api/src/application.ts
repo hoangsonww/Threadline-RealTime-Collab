@@ -828,6 +828,27 @@ export function createApp(options: AppOptions, app = express()) {
     }
   });
 
+  app.delete("/v1/rooms/:roomId/members/:userId", async (request, response, next) => {
+    try {
+      const context = await requireScope(request, response, "rooms:write");
+      if (!context) return;
+      const access = await roomAccess(request.params.roomId, context.user.id);
+      if (!access) return clientError(response, 404, "not_found", "Room was not found.");
+      if (!canRoom(access.membership, access.room, access.roomMembership, "manage"))
+        return clientError(response, 403, "forbidden", "You do not have permission to manage this room.");
+      const targetUserId = z.string().uuid().parse(request.params.userId);
+      const targetMembership = await options.repository.getRoomMembership(access.room.id, targetUserId);
+      if (!targetMembership)
+        return clientError(response, 404, "not_found", "That person is not a member of this room.");
+      if (targetMembership.role === "owner")
+        return clientError(response, 400, "cannot_remove_owner", "The room owner cannot be removed this way.");
+      await options.repository.deleteRoomMembership(access.room.id, targetUserId);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/v1/orgs/:orgId/calendar", async (request, response, next) => {
     try {
       const context = await requireScope(request, response, "orgs:read");

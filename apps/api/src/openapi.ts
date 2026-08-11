@@ -370,6 +370,24 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           },
         },
       },
+      "/v1/rooms/{roomId}/members/{userId}": {
+        delete: {
+          tags: ["Rooms"],
+          operationId: "removeRoomMember",
+          summary: "Revoke a person's explicit membership in a room",
+          description:
+            "Requires `rooms:write` and the room `manage` permission. The room owner cannot be removed this way — remove them from the organization instead.",
+          security: identitySecurity,
+          parameters: [pathParameter("roomId", "Room identifier."), pathParameter("userId", "Target user identifier.")],
+          responses: {
+            "204": { description: "Membership removed." },
+            "400": errors.Validation,
+            "401": errors.Unauthorized,
+            "403": errors.Forbidden,
+            "404": errors.NotFound,
+          },
+        },
+      },
       "/v1/orgs/{orgId}/members": {
         get: {
           tags: ["Organizations"],
