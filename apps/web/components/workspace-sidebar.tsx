@@ -104,7 +104,7 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
           <XIcon size={18} />
         </button>
         <Brand href="/app" />
-        <div className="workspace-switcher" aria-busy={!org}>
+        <div className="workspace-switcher workspace-switcher-with-action" aria-busy={!org}>
           <span className="workspace-monogram">{org ? initials(org.name) : "··"}</span>
           <div className="workspace-switcher-copy">
             {data.identity && data.identity.organizations.length > 1 ? (
@@ -124,6 +124,9 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
             )}
             <small>{data.error ? "Connection required" : "Engineering workspace"}</small>
           </div>
+          <Link className="workspace-switcher-add" href="/onboarding" aria-label="Create or join another workspace">
+            <PlusIcon size={13} weight="bold" />
+          </Link>
         </div>
         <nav className="workspace-nav" aria-label="Workspace">
           {nav.map(([key, href, Icon, label]) => (

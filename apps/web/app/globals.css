@@ -4415,3 +4415,297 @@ textarea:focus-visible {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Workspace onboarding ------------------------------------------------------ */
+
+.onboarding-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--canvas);
+}
+
+.onboarding-shell {
+  width: 100%;
+  max-width: 620px;
+  display: grid;
+  gap: 28px;
+}
+
+.onboarding-intro h1 {
+  margin: 10px 0 8px;
+  font-size: 32px;
+  letter-spacing: -0.045em;
+}
+
+.onboarding-intro p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted);
+  max-width: 480px;
+}
+
+.onboarding-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.onboarding-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  text-align: left;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.onboarding-card:hover,
+.onboarding-card:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-2px);
+}
+
+.onboarding-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  color: var(--accent-ink);
+  background: linear-gradient(140deg, var(--accent), var(--accent-strong));
+}
+
+.onboarding-card-icon-alt {
+  background: linear-gradient(140deg, #b98af0, #7a4fd6);
+}
+
+.onboarding-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.onboarding-card-copy strong {
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.onboarding-card-copy span {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.onboarding-card-arrow {
+  flex: 0 0 auto;
+  margin-left: auto;
+  margin-top: 4px;
+  color: var(--subtle);
+}
+
+.onboarding-form {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.onboarding-back {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.onboarding-back:hover {
+  color: var(--ink);
+}
+
+.onboarding-code-input {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .onboarding-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Invite code + role management (members page) ----------------------------- */
+
+.invite-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  max-width: 900px;
+}
+
+.invite-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.invite-panel-head h3 {
+  margin: 0 0 3px;
+  font-size: 14px;
+}
+
+.invite-panel-head p {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11.5px;
+}
+
+.invite-code-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.invite-code-row input {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  letter-spacing: 0.28em;
+  text-align: center;
+  font-weight: 650;
+}
+
+.invite-panel-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.invite-panel-settings-copy strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.invite-panel-settings-copy span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--subtle);
+  max-width: 420px;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+}
+
+.toggle-switch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.toggle-switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  transition: background 0.15s ease;
+}
+
+.toggle-switch-track::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease;
+}
+
+.toggle-switch input:checked + .toggle-switch-track {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-raised));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.toggle-switch input:checked + .toggle-switch-track::before {
+  transform: translateX(16px);
+  background: var(--accent);
+}
+
+.toggle-switch input:focus-visible + .toggle-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.member-row-with-actions {
+  grid-template-columns: 32px minmax(160px, 1fr) 82px minmax(100px, 0.7fr) minmax(130px, auto);
+}
+
+.member-role-cell {
+  justify-self: end;
+}
+
+.member-role-static {
+  justify-self: end;
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.workspace-switcher-with-action {
+  grid-template-columns: 31px minmax(0, 1fr) auto;
+}
+
+.workspace-switcher-add {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-switcher-add:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}

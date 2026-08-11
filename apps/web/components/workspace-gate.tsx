@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { ApiError, apiFetch } from "../lib/api";
+import { ApiError, apiFetch, type IdentityResponse } from "../lib/api";
 
 /** Keeps every /app surface behind one session check, including deep links. */
 export function WorkspaceGate({ children }: { children: React.ReactNode }) {
@@ -11,8 +11,12 @@ export function WorkspaceGate({ children }: { children: React.ReactNode }) {
   const [authorized, setAuthorized] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
-    void apiFetch("/v1/auth/me")
-      .then(() => setAuthorized(true))
+    void apiFetch<IdentityResponse>("/v1/auth/me")
+      .then((identity) => {
+        if (identity.organizations.length === 0)
+          return router.replace(`/onboarding?returnTo=${encodeURIComponent(pathname || "/app")}`);
+        setAuthorized(true);
+      })
       .catch((cause) => {
         if (cause instanceof ApiError && cause.status === 401)
           return router.replace(`/login?returnTo=${encodeURIComponent(pathname || "/app")}`);

@@ -24,12 +24,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setBusy(false);
       return;
     }
-    if (
-      mode === "register" &&
-      (String(form.get("displayName") ?? "").trim().length < 2 ||
-        String(form.get("organizationName") ?? "").trim().length < 2)
-    ) {
-      setError("Add your name and workspace name to continue.");
+    if (mode === "register" && String(form.get("displayName") ?? "").trim().length < 2) {
+      setError("Add your name to continue.");
       setBusy(false);
       return;
     }
@@ -50,7 +46,6 @@ export function AuthForm({ mode }: { mode: Mode }) {
               email,
               password,
               displayName: String(form.get("displayName")).trim(),
-              organizationName: String(form.get("organizationName")).trim(),
               // Threadline has no user-facing handle; this only fills an internal/OIDC
               // field, so it just needs to satisfy the API's 3-32 char shape.
               username: `${email
@@ -64,7 +59,19 @@ export function AuthForm({ mode }: { mode: Mode }) {
         body: JSON.stringify(payload),
       });
       const returnTo = new URLSearchParams(window.location.search).get("returnTo");
-      router.push(returnTo?.startsWith("/app") ? returnTo : "/app");
+      const destination = returnTo?.startsWith("/app") ? returnTo : "/app";
+      if (mode === "register") {
+        // A brand-new account belongs to no workspace yet — send it through
+        // onboarding first, carrying the original destination along.
+        router.push(`/onboarding${destination !== "/app" ? `?returnTo=${encodeURIComponent(destination)}` : ""}`);
+        return;
+      }
+      const identity = await apiFetch<{ organizations: unknown[] }>("/v1/auth/me");
+      router.push(
+        identity.organizations.length === 0
+          ? `/onboarding${destination !== "/app" ? `?returnTo=${encodeURIComponent(destination)}` : ""}`
+          : destination,
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Unable to sign in. Please try again.");
       setBusy(false);
@@ -73,16 +80,10 @@ export function AuthForm({ mode }: { mode: Mode }) {
   return (
     <form className="auth-form" onSubmit={submit} noValidate>
       {mode === "register" && (
-        <>
-          <div className="field">
-            <label htmlFor="displayName">Your name</label>
-            <input id="displayName" name="displayName" autoComplete="name" placeholder="Avery Chen" />
-          </div>
-          <div className="field">
-            <label htmlFor="organizationName">Workspace name</label>
-            <input id="organizationName" name="organizationName" placeholder="Northstar Engineering" />
-          </div>
-        </>
+        <div className="field">
+          <label htmlFor="displayName">Your name</label>
+          <input id="displayName" name="displayName" autoComplete="name" placeholder="Avery Chen" />
+        </div>
       )}
       <div className="field">
         <label htmlFor="email">Work email</label>
@@ -117,19 +118,25 @@ export function AuthForm({ mode }: { mode: Mode }) {
         </p>
       )}
       <button className="button button-primary" disabled={busy} type="submit">
-        {busy ? "Opening workspace..." : mode === "login" ? "Sign in" : "Create workspace"}
+        {busy
+          ? mode === "login"
+            ? "Signing in..."
+            : "Creating account..."
+          : mode === "login"
+            ? "Sign in"
+            : "Create account"}
       </button>
       <p className="field-help" style={{ textAlign: "center", margin: 0 }}>
         {mode === "login" ? (
           <>
             New to Threadline?{" "}
             <Link href="/register" style={{ color: "var(--accent)" }}>
-              Create a workspace
+              Create an account
             </Link>
           </>
         ) : (
           <>
-            Already have a workspace?{" "}
+            Already have an account?{" "}
             <Link href="/login" style={{ color: "var(--accent)" }}>
               Sign in
             </Link>

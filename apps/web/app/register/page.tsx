@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { AuthShell } from "../../components/auth-shell";
 
 export const metadata: Metadata = {
-  title: "Create your workspace",
+  title: "Create your account",
   description:
-    "Start a Threadline workspace: a room your team can return to, with live collaboration and a durable record.",
+    "Create a Threadline account, then create or join a workspace: a room your team can return to, with live collaboration and a durable record.",
   alternates: { canonical: "/register" },
 };
 
