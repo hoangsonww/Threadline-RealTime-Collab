@@ -840,7 +840,7 @@ a {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(250px, 1fr) 54px;
+  grid-template-rows: minmax(0, 1fr) auto;
   background: #111318;
 }
 .stage {
@@ -1404,6 +1404,7 @@ a {
   --subtle: #718198;
   --line: rgba(174, 194, 219, 0.16);
   --line-soft: rgba(174, 194, 219, 0.09);
+  --line-strong: rgba(174, 194, 219, 0.4);
   --accent: #5ca4ff;
   --accent-strong: #8ac1ff;
   --accent-ink: #07182e;
@@ -1429,6 +1430,7 @@ a {
   --subtle: #75869b;
   --line: rgba(34, 58, 86, 0.16);
   --line-soft: rgba(34, 58, 86, 0.09);
+  --line-strong: rgba(34, 58, 86, 0.4);
   --accent: #1f6feb;
   --accent-strong: #1559c0;
   --accent-ink: #ffffff;
@@ -1904,6 +1906,7 @@ textarea:focus-visible {
   position: relative;
   isolation: isolate;
   overflow-x: clip;
+  overflow-y: visible;
   padding-bottom: 44px;
 }
 
@@ -3313,7 +3316,7 @@ textarea:focus-visible {
   top: 0;
   height: 70px;
   padding: 0 34px;
-  border-color: var(--line);
+  border-color: var(--line-strong);
   background: color-mix(in srgb, var(--canvas) 84%, transparent);
   backdrop-filter: blur(18px);
 }
@@ -3490,7 +3493,7 @@ textarea:focus-visible {
 .room-topbar {
   min-height: 64px;
   padding: 0 24px;
-  border-color: var(--line);
+  border-color: var(--line-strong);
   background: color-mix(in srgb, var(--canvas) 92%, transparent);
 }
 
@@ -3522,7 +3525,8 @@ textarea:focus-visible {
 
 .room-mode {
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .room-mode .stage {
@@ -3601,7 +3605,7 @@ textarea:focus-visible {
 .room-controls {
   min-height: 68px;
   gap: 9px;
-  border-color: var(--line);
+  border-color: var(--line-strong);
   background: color-mix(in srgb, var(--canvas) 92%, transparent);
 }
 

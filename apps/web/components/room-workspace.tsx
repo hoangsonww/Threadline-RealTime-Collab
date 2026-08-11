@@ -215,6 +215,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       meshRef.current ??= new PeerMesh({
         sendSignal: (peerId, payload) => socket.send(JSON.stringify({ type: "signal", to: peerId, payload })),
         onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
+        getLocalId: () => localIdRef.current,
         onFile: (_peerId, file) =>
           setFiles((items) => [
             { name: file.name, size: formatSize(file.size), status: "Received by direct transfer" },
