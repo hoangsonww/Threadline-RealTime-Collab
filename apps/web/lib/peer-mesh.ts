@@ -7,6 +7,8 @@ type PeerMeshOptions = {
   sendSignal: (peerId: string, payload: SignalPayload) => void;
   onRemoteStream: (peerId: string, stream: MediaStream) => void;
   onFile: (peerId: string, file: File) => void;
+  /** Read at signaling time (not just once), since it's only known after room.ready arrives. */
+  getLocalId: () => string;
   iceServers?: RTCIceServer[];
 };
 
@@ -19,9 +21,19 @@ type Peer = {
   fileParts: ArrayBuffer[];
   incomingFile?: { name: string; type: string };
   senders: Partial<Record<TrackKind, RTCRtpSender>>;
+  makingOffer: boolean;
 };
 
-/** A room-scoped, perfect-negotiation-friendly WebRTC mesh. Durable Objects only relay its signals. */
+/**
+ * A room-scoped WebRTC mesh implementing "perfect negotiation" (the pattern MDN/W3C
+ * recommend for exactly this class of bug): every track change — including one that
+ * arrives well after the initial offer/answer, such as a camera stream that only
+ * resolves once a real permission prompt is dismissed — triggers its own renegotiation
+ * via `onnegotiationneeded` instead of only being signaled once at connection setup.
+ * Without this, a track added after the first negotiation round is silently never
+ * described to the remote peer: the sender has it, but the peer's video/audio never
+ * shows anything, because nothing ever tells them a track was added.
+ */
 export class PeerMesh {
   private readonly peers = new Map<string, Peer>();
   private stream?: MediaStream;
@@ -37,22 +49,40 @@ export class PeerMesh {
   async connect(peerId: string, initiator: boolean) {
     const peer = this.ensurePeer(peerId);
     if (!initiator) return;
+    // Creating the data channel (like adding a track) triggers onnegotiationneeded,
+    // which is what actually sends the first offer — no explicit offer here.
     peer.channel ??= this.configureChannel(peerId, peer.connection.createDataChannel("threadline-files"));
-    const offer = await peer.connection.createOffer();
-    await peer.connection.setLocalDescription(offer);
-    this.options.sendSignal(peerId, { description: peer.connection.localDescription?.toJSON() });
   }
 
   async receiveSignal(peerId: string, signal: SignalPayload) {
     const peer = this.ensurePeer(peerId);
-    if (signal.candidate) await peer.connection.addIceCandidate(signal.candidate);
-    if (!signal.description) return;
-    await peer.connection.setRemoteDescription(signal.description);
-    if (signal.description.type === "offer") {
-      const answer = await peer.connection.createAnswer();
-      await peer.connection.setLocalDescription(answer);
-      this.options.sendSignal(peerId, { description: peer.connection.localDescription?.toJSON() });
+    try {
+      if (signal.description) {
+        const isOffer = signal.description.type === "offer";
+        // Signaling glare: both sides started an offer around the same time. The
+        // "polite" side (a stable, symmetric tie-break on the two peer IDs) backs off
+        // its own offer in favor of the incoming one; the impolite side ignores the
+        // incoming offer and lets its own proceed.
+        const collision = isOffer && (peer.makingOffer || peer.connection.signalingState !== "stable");
+        if (collision && !this.isPolite(peerId)) return;
+        if (collision) await peer.connection.setLocalDescription({ type: "rollback" });
+        await peer.connection.setRemoteDescription(signal.description);
+        if (isOffer) {
+          const answer = await peer.connection.createAnswer();
+          await peer.connection.setLocalDescription(answer);
+          this.options.sendSignal(peerId, { description: peer.connection.localDescription?.toJSON() });
+        }
+      }
+      if (signal.candidate) await peer.connection.addIceCandidate(signal.candidate);
+    } catch {
+      // A dropped signal here just means this specific renegotiation retries on the
+      // next negotiationneeded/ICE event rather than tearing the connection down.
     }
+  }
+
+  /** A stable, symmetric tie-break — exactly one side is polite for any given pair. */
+  private isPolite(peerId: string) {
+    return this.options.getLocalId() > peerId;
   }
 
   async sendFile(file: File) {
@@ -83,13 +113,33 @@ export class PeerMesh {
     const connection = new RTCPeerConnection({
       iceServers: this.options.iceServers ?? [{ urls: "stun:stun.l.google.com:19302" }],
     });
-    const peer: Peer = { connection, fileParts: [], senders: {} };
+    const peer: Peer = { connection, fileParts: [], senders: {}, makingOffer: false };
     connection.onicecandidate = (event) => {
       if (event.candidate) this.options.sendSignal(peerId, { candidate: event.candidate.toJSON() });
     };
     connection.ontrack = (event) => this.options.onRemoteStream(peerId, event.streams[0]);
     connection.ondatachannel = (event) => {
       peer.channel = this.configureChannel(peerId, event.channel);
+    };
+    // Fires whenever a track or data channel is added/removed, at ANY point in this
+    // connection's life — not just at initial setup. This is what actually lets a
+    // camera stream that resolves seconds after the peer connection already exists
+    // (a real getUserMedia() permission prompt, not a fake instantly-resolved stream)
+    // still reach the other side.
+    connection.onnegotiationneeded = () => {
+      void (async () => {
+        try {
+          peer.makingOffer = true;
+          const offer = await connection.createOffer();
+          await connection.setLocalDescription(offer);
+          this.options.sendSignal(peerId, { description: connection.localDescription?.toJSON() });
+        } catch {
+          // Ignore — a later negotiationneeded event or a signal from the remote peer
+          // will retry rather than leaving the connection in a broken state.
+        } finally {
+          peer.makingOffer = false;
+        }
+      })();
     };
     this.applyStream(peer);
     this.peers.set(peerId, peer);
