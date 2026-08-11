@@ -8,6 +8,7 @@ import {
   HouseIcon,
   ListIcon,
   PlusIcon,
+  SignOutIcon,
   UsersThreeIcon,
   VideoConferenceIcon,
   XIcon,
@@ -32,10 +33,23 @@ const initials = (name: string) =>
 export function WorkspaceSidebar({ active }: { active: Active }) {
   const [data, setData] = useState<SidebarData>({ rooms: [] });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedOrgId = searchParams.get("org");
+
+  const logOut = async () => {
+    setLoggingOut(true);
+    try {
+      await apiFetch("/v1/auth/logout", { method: "POST" });
+    } catch {
+      // Even if the request fails (e.g. the session was already gone), still send
+      // the user to the login screen — there is nothing else useful to do here.
+    } finally {
+      router.push("/login");
+    }
+  };
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
@@ -135,21 +149,19 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
           )}
         </div>
         <div className="sidebar-bottom">
-          {org && (
-            <Link
-              className={active === "members" ? "workspace-nav active" : "workspace-nav"}
-              href={`/app/org/${org.id}/members`}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 36, padding: "0 9px" }}>
+          <nav className="workspace-nav" aria-label="Account">
+            {org && (
+              <Link className={active === "members" ? "active" : ""} href={`/app/org/${org.id}/members`}>
                 <UsersThreeIcon size={17} weight="duotone" /> Members
-              </span>
-            </Link>
-          )}
-          <Link className={active === "settings" ? "workspace-nav active" : "workspace-nav"} href="/app/settings">
-            <span style={{ display: "flex", alignItems: "center", gap: 10, minHeight: 36, padding: "0 9px" }}>
+              </Link>
+            )}
+            <Link className={active === "settings" ? "active" : ""} href="/app/settings">
               <GearSixIcon size={17} weight="duotone" /> Settings
-            </span>
-          </Link>
+            </Link>
+            <button type="button" onClick={() => void logOut()} disabled={loggingOut} aria-label="Log out">
+              <SignOutIcon size={17} weight="duotone" /> {loggingOut ? "Logging out…" : "Log out"}
+            </button>
+          </nav>
           {canManageMembers && (
             <Link
               className="button button-secondary"

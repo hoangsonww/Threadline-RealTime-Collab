@@ -188,6 +188,33 @@ a {
   color: var(--subtle);
   font-size: 12px;
 }
+.password-field {
+  position: relative;
+}
+.field input.password-input {
+  padding-right: 40px;
+}
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--subtle);
+  background: transparent;
+  transform: translateY(-50%);
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.password-toggle:hover {
+  color: var(--ink);
+  background: var(--surface-hover);
+}
 .divider {
   height: 1px;
   background: var(--line-soft);
@@ -538,20 +565,32 @@ a {
   display: grid;
   gap: 3px;
 }
-.workspace-nav a {
+.workspace-nav a,
+.workspace-nav button {
   position: relative;
   display: flex;
   align-items: center;
+  width: 100%;
   gap: 10px;
   min-height: 36px;
   padding: 0 9px;
+  border: 0;
   border-radius: 8px;
   color: var(--muted);
+  background: transparent;
+  font: inherit;
   font-size: 13px;
   font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.workspace-nav button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .workspace-nav a:hover,
-.workspace-nav a.active {
+.workspace-nav a.active,
+.workspace-nav button:hover:not(:disabled) {
   background: var(--surface-raised);
   color: var(--ink);
 }
@@ -2734,7 +2773,8 @@ textarea:focus-visible {
   gap: 4px;
 }
 
-.workspace-nav a {
+.workspace-nav a,
+.workspace-nav button {
   min-height: 40px;
   padding: 0 11px;
   border: 1px solid transparent;
@@ -2750,13 +2790,15 @@ textarea:focus-visible {
 }
 
 .workspace-nav a:hover,
-.workspace-nav a.active {
+.workspace-nav a.active,
+.workspace-nav button:hover:not(:disabled) {
   border-color: var(--line-soft);
   background: var(--surface-raised);
   color: var(--ink);
 }
 
-.workspace-nav a:hover {
+.workspace-nav a:hover,
+.workspace-nav button:hover:not(:disabled) {
   transform: translateX(2px);
 }
 

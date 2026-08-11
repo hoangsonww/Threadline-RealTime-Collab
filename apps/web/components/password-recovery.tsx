@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import { PasswordField } from "./password-field";
 
 const apiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN;
 
@@ -88,26 +89,20 @@ export function ResetPasswordForm() {
   };
   return (
     <form className="auth-form" onSubmit={submit} noValidate>
-      <div className="field">
-        <label htmlFor="new-password">New password</label>
-        <input
-          id="new-password"
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          placeholder="At least 10 characters"
-        />
-      </div>
-      <div className="field">
-        <label htmlFor="confirm-password">Confirm new password</label>
-        <input
-          id="confirm-password"
-          name="confirmation"
-          type="password"
-          autoComplete="new-password"
-          placeholder="Repeat your new password"
-        />
-      </div>
+      <PasswordField
+        id="new-password"
+        name="password"
+        label="New password"
+        autoComplete="new-password"
+        placeholder="At least 10 characters"
+      />
+      <PasswordField
+        id="confirm-password"
+        name="confirmation"
+        label="Confirm new password"
+        autoComplete="new-password"
+        placeholder="Repeat your new password"
+      />
       {error && <p className="form-error">{error}</p>}
       <button className="button button-primary" disabled={busy} type="submit">
         {busy ? "Updating password..." : "Set new password"}
