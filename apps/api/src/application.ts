@@ -76,6 +76,15 @@ function isLoopbackHttpOrigin(origin: string) {
   }
 }
 
+function isJsonParseFailure(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "type" in error &&
+    (error as { type?: unknown }).type === "entity.parse.failed"
+  );
+}
+
 /** Build the configured Express application without starting a network listener. */
 export function createApp(options: AppOptions, app = express()) {
   const allowedWebOrigins = new Set([options.webOrigin, ...(options.additionalWebOrigins ?? [])]);
@@ -1355,9 +1364,25 @@ export function createApp(options: AppOptions, app = express()) {
 
   app.post("/oauth/token", async (request, response, next) => {
     try {
-      const grant = z.string().parse(request.body.grant_type);
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const parsedGrant = z
+        .string()
+        .min(1)
+        .refine(
+          (value) => value.trim().length > 0 && value === value.trim(),
+          "Grant type must not be blank or contain surrounding whitespace.",
+        )
+        .safeParse(body.grant_type);
+      if (!parsedGrant.success)
+        return clientError(
+          response,
+          400,
+          "invalid_request",
+          parsedGrant.error.issues[0]?.message ?? "The token request is malformed.",
+        );
+      const grant = parsedGrant.data;
       if (grant === "authorization_code") {
-        const input = z
+        const parsedInput = z
           .object({
             grant_type: z.literal("authorization_code"),
             code: z.string().min(20),
@@ -1365,7 +1390,15 @@ export function createApp(options: AppOptions, app = express()) {
             redirect_uri: z.string().url(),
             code_verifier: z.string().min(43).max(128),
           })
-          .parse(request.body);
+          .safeParse(body);
+        if (!parsedInput.success)
+          return clientError(
+            response,
+            400,
+            "invalid_request",
+            parsedInput.error.issues[0]?.message ?? "The token request is malformed.",
+          );
+        const input = parsedInput.data;
         const code = await options.repository.consumeAuthorizationCode(digest(input.code));
         if (
           !code ||
@@ -1408,9 +1441,17 @@ export function createApp(options: AppOptions, app = express()) {
         });
       }
       if (grant === "refresh_token") {
-        const input = z
+        const parsedInput = z
           .object({ grant_type: z.literal("refresh_token"), refresh_token: z.string().min(20), client_id: z.string() })
-          .parse(request.body);
+          .safeParse(body);
+        if (!parsedInput.success)
+          return clientError(
+            response,
+            400,
+            "invalid_request",
+            parsedInput.error.issues[0]?.message ?? "The token request is malformed.",
+          );
+        const input = parsedInput.data;
         const refresh = await options.repository.consumeRefreshToken(digest(input.refresh_token));
         if (!refresh || refresh.expiresAt <= now() || refresh.revokedAt || refresh.clientId !== input.client_id)
           return clientError(response, 400, "invalid_grant", "The refresh token is invalid or expired.");
@@ -1491,7 +1532,9 @@ export function createApp(options: AppOptions, app = express()) {
     }
   });
 
-  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
+    if (request.path === "/oauth/token" && isJsonParseFailure(error))
+      return clientError(response, 400, "invalid_request", "The token request is malformed.");
     if (error instanceof z.ZodError)
       return clientError(response, 422, "validation_error", error.issues[0]?.message ?? "Request validation failed.");
     // Validation errors above are expected user-input noise, not bugs — only

@@ -435,7 +435,6 @@ describe("Threadline identity API", () => {
     const removeOwner = await owner.delete(`/v1/rooms/${roomId}/members/${ownerId}`);
     expect(removeOwner.status).toBe(400);
   });
-
   it("registers accounts with no organization until one is explicitly created or joined", async () => {
     const { app } = await createTestApp();
     const agent = request.agent(app);
@@ -622,5 +621,47 @@ describe("Threadline identity API", () => {
     const fakeOrgInvite = await outsider.get("/v1/orgs/00000000-0000-4000-8000-000000000000/invite");
     expect(realOrgInvite.status).toBe(403);
     expect(fakeOrgInvite.status).toBe(403);
+  });
+});
+
+describe("POST /oauth/token request validation", () => {
+  it("returns 400 invalid_request for missing, malformed, or unparsable request data", async () => {
+    const { app } = await createTestApp();
+    const responses = await Promise.all([
+      request(app).post("/oauth/token").set("Content-Type", "text/plain").send("grant_type=authorization_code"),
+      request(app).post("/oauth/token").send({}),
+      request(app).post("/oauth/token").send({ grant_type: "" }),
+      request(app).post("/oauth/token").send({ grant_type: "   " }),
+      request(app).post("/oauth/token").send({ grant_type: " authorization_code " }),
+      request(app).post("/oauth/token").send({ grant_type: 42 }),
+      request(app).post("/oauth/token").send({ grant_type: "authorization_code" }),
+      request(app).post("/oauth/token").send({ grant_type: "refresh_token", client_id: "threadline-web" }),
+    ]);
+    for (const response of responses) {
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe("invalid_request");
+    }
+  });
+
+  it("returns 400 invalid_request for malformed JSON parsed before the route", async () => {
+    const { app } = await createTestApp();
+    const response = await request(app)
+      .post("/oauth/token")
+      .set("Content-Type", "application/json")
+      .send('{"grant_type":');
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("invalid_request");
+  });
+
+  it("keeps unsupported grant types and non-token validation errors distinct", async () => {
+    const { app } = await createTestApp();
+    const unsupported = await request(app).post("/oauth/token").send({ grant_type: "client_credentials" });
+    expect(unsupported.status).toBe(400);
+    expect(unsupported.body.error).toBe("unsupported_grant_type");
+
+    const ordinaryValidationError = await request(app).post("/v1/auth/login").send({});
+    expect(ordinaryValidationError.status).toBe(422);
+    expect(ordinaryValidationError.body.error).toBe("validation_error");
   });
 });
