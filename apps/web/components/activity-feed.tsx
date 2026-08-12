@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Room } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 
 type ActivityEvent = { id: string; roomId: string; type: string; payload: unknown; createdAt: string };
 const eventIcon = (type: string) =>
@@ -25,7 +26,7 @@ const eventText = (type: string) => {
 };
 
 export function ActivityFeed() {
-  const selectedOrgId = useSearchParams().get("org");
+  const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [organization, setOrganization] = useState("");
@@ -36,6 +37,7 @@ export function ActivityFeed() {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
         const org = selectedOrganization(identity, selectedOrgId);
         if (!org) throw new Error("Your account does not belong to an organization.");
+        setPreferredOrgId(org.id);
         const data = await apiFetch<{ events: ActivityEvent[]; rooms: Array<{ id: string; name: string }> }>(
           `/v1/orgs/${org.id}/activity`,
         );

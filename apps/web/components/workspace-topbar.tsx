@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse } from "../lib/api";
+import { getPreferredOrgId } from "../lib/workspace-preference";
 
 type Identity = { title: string; subtitle: string; initials: string };
 const defaultIdentity: Identity = { title: "Loading workspace", subtitle: "Securing your session", initials: "··" };
@@ -19,7 +20,7 @@ const initialsFor = (name: string) =>
 
 export function WorkspaceTopbar() {
   const [identity, setIdentity] = useState(defaultIdentity);
-  const selectedOrgId = useSearchParams().get("org");
+  const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   useEffect(() => {
     void apiFetch<IdentityResponse>("/v1/auth/me")
       .then((data) => {

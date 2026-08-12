@@ -5,11 +5,13 @@ import { ArrowUpRightIcon, LockKeyIcon, PlusIcon, VideoConferenceIcon } from "@p
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Room } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 
 export function RoomsDirectory() {
-  const selectedOrgId = useSearchParams().get("org");
+  const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [organization, setOrganization] = useState("");
+  const [organizationId, setOrganizationId] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
     void (async () => {
@@ -17,8 +19,10 @@ export function RoomsDirectory() {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
         const org = selectedOrganization(identity, selectedOrgId);
         if (!org) throw new Error("Your account does not belong to an organization.");
+        setPreferredOrgId(org.id);
         const result = await apiFetch<{ rooms: Room[] }>(`/v1/orgs/${org.id}/rooms`);
         setOrganization(org.name);
+        setOrganizationId(org.id);
         setRooms(result.rooms);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not load rooms.");
@@ -33,7 +37,7 @@ export function RoomsDirectory() {
           <h2>Rooms</h2>
           <p>Every room is a live collaboration space and a durable record for its members.</p>
         </div>
-        <Link className="button button-primary" href={`/app?org=${selectedOrgId ?? ""}`}>
+        <Link className="button button-primary" href={`/app?org=${organizationId}`}>
           <PlusIcon size={16} weight="bold" /> New room
         </Link>
       </div>
@@ -63,7 +67,7 @@ export function RoomsDirectory() {
             <strong>No rooms are available to you</strong>
             <p>Once a room is created or you are explicitly added to a restricted room, it will appear here.</p>
           </div>
-          <Link className="button button-primary" href={`/app?org=${selectedOrgId ?? ""}`}>
+          <Link className="button button-primary" href={`/app?org=${organizationId}`}>
             Open a room
           </Link>
         </div>

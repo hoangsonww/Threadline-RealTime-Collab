@@ -13,6 +13,7 @@ import {
   type Organization,
   type Room,
 } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
 
 type ActivityEvent = {
@@ -53,7 +54,7 @@ const describeEvent = (event: ActivityEvent, rooms: Room[]) => {
 export function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const selectedOrgId = searchParams.get("org");
+  const selectedOrgId = searchParams.get("org") ?? getPreferredOrgId();
   const [state, setState] = useState<State>({ rooms: [], activity: [] });
   const [modal, setModal] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -65,6 +66,7 @@ export function Dashboard() {
       const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
       const organization = selectedOrganization(identity, selectedOrgId);
       if (!organization) throw new Error("Your account does not belong to an organization.");
+      setPreferredOrgId(organization.id);
       const [roomData, activityData] = await Promise.all([
         apiFetch<{ rooms: Room[] }>(`/v1/orgs/${organization.id}/rooms`),
         apiFetch<{ events: ActivityEvent[] }>(`/v1/orgs/${organization.id}/activity`),

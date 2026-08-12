@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeftIcon, ArrowRightIcon, BuildingsIcon, TicketIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, ArrowRightIcon, BuildingsIcon, TicketIcon, XIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
-import { ApiError, apiFetch, type IdentityResponse } from "../lib/api";
+import { ApiError, apiFetch, type IdentityResponse, type Organization } from "../lib/api";
+import { setPreferredOrgId } from "../lib/workspace-preference";
 import { Brand } from "./brand";
 
 type View = "choice" | "create" | "join";
@@ -18,6 +19,11 @@ export function OnboardingFlow() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
   const [gateError, setGateError] = useState("");
+  // Whether the account already has at least one workspace — determines
+  // whether this is the mandatory post-signup step (no way out) or an
+  // optional "add another workspace" flow reachable from the sidebar
+  // switcher (which offers a way back to the current workspace).
+  const [hasWorkspaces, setHasWorkspaces] = useState(false);
   const [view, setView] = useState<View>("choice");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -28,8 +34,7 @@ export function OnboardingFlow() {
   useEffect(() => {
     void apiFetch<IdentityResponse>("/v1/auth/me")
       .then((identity) => {
-        // Someone who already belongs to a workspace has nothing to do here.
-        if (identity.organizations.length > 0) return router.replace(destinationFromQuery());
+        setHasWorkspaces(identity.organizations.length > 0);
         setChecking(false);
       })
       .catch((cause) => {
@@ -59,7 +64,11 @@ export function OnboardingFlow() {
     setBusy(true);
     setError("");
     try {
-      await apiFetch("/v1/orgs", { method: "POST", body: JSON.stringify({ name }) });
+      const { organization } = await apiFetch<{ organization: Organization }>("/v1/orgs", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      setPreferredOrgId(organization.id);
       router.push(destinationFromQuery());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not create the workspace. Please try again.");
@@ -77,7 +86,11 @@ export function OnboardingFlow() {
     setBusy(true);
     setError("");
     try {
-      await apiFetch("/v1/join", { method: "POST", body: JSON.stringify({ code: trimmed }) });
+      const { organization } = await apiFetch<{ organization: Organization }>("/v1/join", {
+        method: "POST",
+        body: JSON.stringify({ code: trimmed }),
+      });
+      setPreferredOrgId(organization.id);
       router.push(destinationFromQuery());
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 404) {
@@ -102,12 +115,24 @@ export function OnboardingFlow() {
   return (
     <main id="main-content" className="onboarding-page">
       <div className="onboarding-shell">
+        {hasWorkspaces && (
+          <button
+            type="button"
+            className="onboarding-cancel"
+            onClick={() => router.push(destinationFromQuery())}
+            aria-label="Back to your workspace"
+          >
+            <XIcon size={16} weight="bold" />
+          </button>
+        )}
         <Brand />
         <div className="onboarding-intro">
-          <p className="eyebrow">One more step</p>
+          <p className="eyebrow">{hasWorkspaces ? "Add a workspace" : "One more step"}</p>
           <h1>Where do you want to work?</h1>
           <p>
-            Every Threadline account starts empty — create a workspace of your own, or join one with an invite code.
+            {hasWorkspaces
+              ? "Create another workspace of your own, or join one with an invite code."
+              : "Every Threadline account starts empty — create a workspace of your own, or join one with an invite code."}
           </p>
         </div>
         <AnimatePresence mode="wait">

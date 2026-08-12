@@ -4427,10 +4427,30 @@ textarea:focus-visible {
 }
 
 .onboarding-shell {
+  position: relative;
   width: 100%;
   max-width: 620px;
   display: grid;
   gap: 28px;
+}
+
+.onboarding-cancel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+}
+
+.onboarding-cancel:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
 }
 
 .onboarding-intro h1 {
@@ -4687,25 +4707,4 @@ textarea:focus-visible {
   justify-self: end;
   color: var(--subtle);
   font-size: 11px;
-}
-
-.workspace-switcher-with-action {
-  grid-template-columns: 31px minmax(0, 1fr) auto;
-}
-
-.workspace-switcher-add {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--muted);
-}
-
-.workspace-switcher-add:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
 }

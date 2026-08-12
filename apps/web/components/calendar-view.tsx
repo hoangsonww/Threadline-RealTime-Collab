@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Organization, type Room } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
 
 type CalendarEvent = {
@@ -22,7 +23,7 @@ const localDateTime = (date: Date) => {
 };
 
 export function CalendarView() {
-  const selectedOrgId = useSearchParams().get("org");
+  const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   const [organization, setOrganization] = useState<Organization>();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -34,6 +35,7 @@ export function CalendarView() {
     const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
     const org = selectedOrganization(identity, selectedOrgId);
     if (!org) throw new Error("Your account does not belong to an organization.");
+    setPreferredOrgId(org.id);
     const [roomData, calendarData] = await Promise.all([
       apiFetch<{ rooms: Room[] }>(`/v1/orgs/${org.id}/rooms`),
       apiFetch<{ events: CalendarEvent[] }>(`/v1/orgs/${org.id}/calendar`),
