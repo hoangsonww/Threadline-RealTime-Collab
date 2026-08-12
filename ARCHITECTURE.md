@@ -47,23 +47,27 @@ Threadline/
 │   │   ├── lib/                 apiFetch() HTTP client, PeerMesh WebRTC client
 │   │   └── public/             static assets
 │   ├── api/                    Express REST API
+│   │   ├── Dockerfile
 │   │   └── src/
 │   │       ├── domain.ts        entity types
 │   │       ├── repository.ts    Repository interface + MemoryRepository + MongoRepository
 │   │       ├── policy.ts        ABAC decision logic (canOrganization, canRoom)
 │   │       ├── application.ts   createApp() factory, routes, middleware, rate limiting
 │   │       ├── security.ts      password hashing, token generation, cookie handling
+│   │       ├── instrument.ts    Sentry.init(), imported first in src/index.ts
 │   │       ├── openapi.ts       OpenAPI 3.1 document
 │   │       ├── api-docs.ts      Swagger UI / ReDoc serving, scoped CSP
 │   │       └── index.ts         boot-time env validation, HTTP server entry point
 │   └── realtime/                Cloudflare Worker + Durable Object
+│       ├── Dockerfile           local Wrangler emulation, not the Cloudflare deploy path
 │       └── src/index.ts         fetch handler + RoomDurableObject
 ├── docs/                       Deep-dive documentation
 │   ├── decisions/                Architecture Decision Records
 │   └── screenshots/               Curated UI screenshots referenced from the docs
 ├── infra/
-│   ├── docker/                   Dockerfiles and docker-compose.yml
+│   ├── docker/                   Fixtures consumed by apps/realtime/Dockerfile (dev-only secrets)
 │   └── kubernetes/                Kustomize base + overlays (one or more clusters)
+├── compose.yaml                Local Docker Compose stack (web + API + realtime + MongoDB)
 └── .github/workflows/           CI pipeline (format, lint, typecheck, test, build)
 ```
 

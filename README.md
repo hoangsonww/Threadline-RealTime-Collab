@@ -1,4 +1,8 @@
-# Threadline
+# Threadline — A Real-Time Collaboration Platform
+
+![CI/CD](https://img.shields.io/github/actions/workflow/status/hoangsonww/Threadline-RealTime-Collab/quality.yml?branch=main&style=flat-square&label=CI%2FCD)
+![License](https://img.shields.io/github/license/hoangsonww/Threadline-RealTime-Collab?style=flat-square)
+![Last commit](https://img.shields.io/github/last-commit/hoangsonww/Threadline-RealTime-Collab?style=flat-square)
 
 ![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
@@ -33,6 +37,15 @@
 
 Threadline is a room-centered collaboration workspace for engineering teams. A room is both a live session (video, audio, screen share, whiteboard, chat, shared editor) and a durable record of what happened in it — nothing is thrown away when the call ends. The whole system is three independently deployable services, each with a single job, none of them trusting the others' enforcement — that split, and what it costs and buys, is the actual subject of this repository.
 
+> **Quickstart:** [try the live deployment](https://threadline-rtc.vercel.app) with a real account, or run it yourself:
+>
+> ```bash
+> git clone https://github.com/hoangsonww/Threadline-RealTime-Collab.git && cd Threadline-RealTime-Collab
+> npm install && cp apps/realtime/.dev.vars.example apps/realtime/.dev.vars && npm run dev
+> ```
+>
+> Open `http://localhost:3000` — all three services run locally, zero database setup required. See [Running it locally](#running-it-locally) for what's actually happening.
+
 ## Table of contents
 
 - [Overview](#overview)
@@ -44,6 +57,7 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [Trust model](#trust-model)
 - [Onboarding and workspace roles](#onboarding-and-workspace-roles)
 - [Engineering principles](#engineering-principles)
+- [Performance and scaling characteristics](#performance-and-scaling-characteristics)
 - [Real incidents found operating this](#real-incidents-found-operating-this)
 - [Testing and quality gates](#testing-and-quality-gates)
 - [Observability](#observability)
@@ -53,6 +67,7 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [Environment variables](#environment-variables)
 - [Commands](#commands)
 - [Deploying it yourself](#deploying-it-yourself)
+- [FAQ](#faq)
 - [Documentation index](#documentation-index)
 - [License](#license)
 
@@ -204,7 +219,22 @@ Full design and endpoint-by-endpoint detail: [`docs/api.md`](docs/api.md#organiz
 - **Fail closed on misconfiguration, at boot, not at request time.** `apps/api/src/index.ts` refuses to start in production with an insecure or incomplete configuration — short secrets, non-HTTPS origins, a missing signing key — rather than starting with a silently weaker default. See [Boot-time validation](docs/security.md#boot-time-validation).
 - **Secrets are single-purpose and never reused across trust boundaries.** The value that authorizes a WebSocket connection is not the value that authorizes a durable-event webhook call, which is not the value that signs an OIDC access token. A leak of one does not compromise what the others protect.
 - **No media server, by design.** WebRTC media takes the shortest path available — peer-to-peer — rather than routing through infrastructure Threadline would have to run, secure, and pay for per minute of call time. The cost of that choice (mesh bandwidth scales with participant count) is written down, not hidden: [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md).
+- **Explicit field whitelists over blacklists when serializing anything from a database driver.** `const { secretField, ...rest } = doc` looks safe but silently includes whatever else the driver happened to attach to that object — the MongoDB driver mutates an inserted document by adding its own `_id`, which leaked into two responses this exact way before being replaced with an explicit `publicOrganization()` whitelist. The identical, still-unfixed pattern elsewhere in the codebase is tracked, not hidden: [`docs/roadmap.md`](docs/roadmap.md).
+- **A unique index on a field added to an already-populated collection is a migration, not just a schema change.** It needs a backfill pass before (or atomically with) rollout, or it can take the whole service down at boot — this one did, in production, for real. See [the incident that taught this](docs/operations.md#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request).
 - **Honesty over polish in the documentation itself.** The incidents, known limitations, and roadmap gaps below are real and current, not a marketing summary — see [Real incidents found operating this](#real-incidents-found-operating-this) and [`docs/roadmap.md`](docs/roadmap.md).
+
+## Performance and scaling characteristics
+
+Concrete numbers, not marketing — what actually happens as usage grows, and where the real ceilings are.
+
+| Dimension                             | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WebRTC mesh bandwidth per participant | O(n − 1) upload connections for a room of _n_ people — a 6-person room means 5 simultaneous outbound video/audio streams from each participant's browser. Fine at the small-team scale this product targets; a 20-person room would mean 19 outbound streams per participant, which most consumer upload bandwidth can't sustain. See [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md) for the SFU alternative and why it wasn't chosen.        |
+| Durable Object idle cost              | Zero ongoing compute for a room with no active WebSocket connections — Cloudflare hibernates the object between messages (`state.acceptWebSocket()`), so an idle-but-connected room costs nothing until the next message arrives. A brand-new room's Durable Object is created lazily, on the first request that names its ID.                                                                                                                        |
+| API request latency                   | Serverless cold start on Vercel for `apps/api` (a few hundred ms on a cold instance, low single-digit ms once warm) plus one MongoDB Atlas round trip per request that touches the database — every ABAC check re-queries membership rather than caching it, which is a deliberate correctness trade-off (see [Engineering principles](#engineering-principles)), not an oversight.                                                                   |
+| Rate limits                           | Login/register/password-reset/email-verification: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. All backed by an atomic Mongo counter, not process-local memory, so the limit holds across every serverless instance handling that IP — see [`docs/security.md`](docs/security.md#rate-limits).                                             |
+| Horizontal scaling (Kubernetes)       | The stateless web/API tier autoscales 2–10 replicas via HPA on CPU, with a PodDisruptionBudget and a soft topology-spread preference so replicas don't collapse onto one node. `apps/realtime` doesn't scale this way at all — it isn't stateless, and Cloudflare's Durable Object placement (one instance per room, globally) is the scaling model, not replica count. See [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). |
+| Room-event history                    | The in-memory timeline broadcast to connected clients keeps the most recent 200 events per room session; the durable `RoomEvent` collection in MongoDB is unbounded and is what the activity feed and timeline actually read from after a reload.                                                                                                                                                                                                     |
 
 ## Real incidents found operating this
 
@@ -384,6 +414,32 @@ The three services need different configuration, summarized here — the full ta
 - Zero-cost preview path (free tiers of Vercel + MongoDB Atlas + Cloudflare, no domain purchase): see [`docs/deployment.md`](docs/deployment.md#zero-cost-public-preview).
 - Self-hosting the stateless web/API tier on Kubernetes instead of Vercel/Render, while Cloudflare remains the production owner of room Durable Objects: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
 - Exactly which URLs this project's own live deployment runs at, and how that maps onto the general deployment guide: [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
+
+## FAQ
+
+**Is this used by real teams, or is it a demo?**
+It's a real, running deployment — not a multi-tenant SaaS with paying customers, but not a static demo either. Registering a real account on the [live deployment](#live-deployment) creates a real workspace, backed by the same production database and the same code in this repository. "Production-ready" here means correctly designed and genuinely operated (real incidents, real trust boundaries, real test coverage where it exists), not "battle-tested at scale with a support team."
+
+**Why MongoDB instead of a relational database?**
+The data model — users, rooms, memberships, a growing durable event timeline — is document-shaped, and every read is already scoped by a single indexed ID (organization, room, or user), not a cross-table join. The `Repository` interface ([ADR-0003](docs/decisions/0003-repository-interface.md)) means this choice isn't load-bearing either way — swapping the datastore touches one file, not the route handlers.
+
+**Why a first-party OIDC provider instead of Auth0, Clerk, or NextAuth?**
+Partly to build the actual flow (Authorization Code + PKCE, JWKS, token rotation) rather than configure someone else's, and partly because a third-party auth platform is one more service in the exact trust model this repository is about being honest regarding — see [Trust model](#trust-model).
+
+**Why Cloudflare Durable Objects instead of Redis/Ably/Pusher for presence?**
+Those solve "many stateless servers agree on shared state" by adding a coordination service Threadline would have to run, operate, and pay for. A Durable Object gives one authoritative, in-memory instance per room natively, with no separate service and no consistency protocol to write by hand. [ADR-0001](docs/decisions/0001-durable-objects-for-realtime.md) has the full tradeoff against that alternative.
+
+**Can I run this without Vercel or Cloudflare?**
+`apps/web` and `apps/api` can run anywhere Node 22 runs — Docker, Kubernetes, bare metal — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). `apps/realtime` genuinely cannot: it's written against the Durable Objects API, which is Cloudflare-specific, and there's no portable equivalent without rewriting the presence/signaling layer against a different coordination primitive entirely.
+
+**What happens to an in-progress call if `apps/api` goes down?**
+Nothing, live — chat, presence, and WebRTC signaling all keep working, since none of that path touches the API. New room creation, login, and durable-event history reads fail. Full breakdown: [Failure modes and resilience](ARCHITECTURE.md#failure-modes-and-resilience).
+
+**How much does this cost to run?**
+The [zero-cost public preview](docs/deployment.md#zero-cost-public-preview) path runs on free tiers of Vercel, MongoDB Atlas, and Cloudflare Workers, no domain purchase — real limits apply (cold starts, free-tier caps), but genuinely $0. This project's own [live deployment](#live-deployment) runs this way.
+
+**Why is there no automated test suite for the frontend?**
+Named honestly as the single largest testing gap in the repository rather than hidden — see [Testing and quality gates](#testing-and-quality-gates) for exactly what that means and what catches bugs instead.
 
 ## Documentation index
 
