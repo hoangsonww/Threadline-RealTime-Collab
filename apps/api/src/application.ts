@@ -95,7 +95,7 @@ export function createApp(options: AppOptions, app = express()) {
       try {
         // request.path is relative to this middleware's mount point (Express rebases
         // it inside app.use), so an exact-path mount always sees "/" here regardless
-        // of which route matched — baseUrl is the literal mounted path instead, which
+        // of which route matched â€” baseUrl is the literal mounted path instead, which
         // is what actually distinguishes one rate-limited route from another.
         const key = `${request.baseUrl}:${ipHash(request)}`;
         const bucket = await options.repository.incrementRateLimit(key, windowMs);
@@ -1134,7 +1134,8 @@ export function createApp(options: AppOptions, app = express()) {
 
   app.post("/oauth/token", async (request, response, next) => {
     try {
-      const grant = z.string().parse(request.body.grant_type);
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const grant = z.string().trim().min(1).parse(body.grant_type);
       if (grant === "authorization_code") {
         const input = z
           .object({
@@ -1144,7 +1145,7 @@ export function createApp(options: AppOptions, app = express()) {
             redirect_uri: z.string().url(),
             code_verifier: z.string().min(43).max(128),
           })
-          .parse(request.body);
+          .parse(body);
         const code = await options.repository.consumeAuthorizationCode(digest(input.code));
         if (
           !code ||
@@ -1189,7 +1190,7 @@ export function createApp(options: AppOptions, app = express()) {
       if (grant === "refresh_token") {
         const input = z
           .object({ grant_type: z.literal("refresh_token"), refresh_token: z.string().min(20), client_id: z.string() })
-          .parse(request.body);
+          .parse(body);
         const refresh = await options.repository.consumeRefreshToken(digest(input.refresh_token));
         if (!refresh || refresh.expiresAt <= now() || refresh.revokedAt || refresh.clientId !== input.client_id)
           return clientError(response, 400, "invalid_grant", "The refresh token is invalid or expired.");
@@ -1217,6 +1218,10 @@ export function createApp(options: AppOptions, app = express()) {
       }
       return clientError(response, 400, "unsupported_grant_type", "This grant type is not enabled.");
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        clientError(response, 400, "invalid_request", error.issues[0]?.message ?? "The token request is malformed.");
+        return;
+      }
       next(error);
     }
   });

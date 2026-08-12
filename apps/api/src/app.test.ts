@@ -408,4 +408,26 @@ describe("Threadline identity API", () => {
     const removeOwner = await owner.delete(`/v1/rooms/${roomId}/members/${ownerId}`);
     expect(removeOwner.status).toBe(400);
   });
+
+  it("returns 400 invalid_request when the token body is unparsable", async () => {
+    const { app } = await createTestApp();
+    const response = await request(app)
+      .post("/oauth/token")
+      .set("Content-Type", "text/plain")
+      .send("grant_type=authorization_code");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("invalid_request");
+  });
+});
+
+describe("POST /oauth/token grant_type validation", () => {
+  it("returns 400 invalid_request for blank or missing grant_type", async () => {
+    const { app } = await createTestApp();
+    for (const payload of [{}, { grant_type: "" }, { grant_type: "   " }]) {
+      const res = await request(app).post("/oauth/token").send(payload);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    }
+  });
 });
