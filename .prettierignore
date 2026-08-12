@@ -5,3 +5,4 @@
 **/node_modules/**
 **/worker-configuration.d.ts
 **/next-env.d.ts
+*.md

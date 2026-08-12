@@ -1,9 +1,5 @@
 # Threadline — A Real-Time Collaboration Platform
 
-![CI/CD](https://img.shields.io/github/actions/workflow/status/hoangsonww/Threadline-RealTime-Collab/quality.yml?branch=main&style=flat-square&label=CI%2FCD)
-![License](https://img.shields.io/github/license/hoangsonww/Threadline-RealTime-Collab?style=flat-square)
-![Last commit](https://img.shields.io/github/last-commit/hoangsonww/Threadline-RealTime-Collab?style=flat-square)
-
 ![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
@@ -37,15 +33,6 @@
 
 Threadline is a room-centered collaboration workspace for engineering teams. A room is both a live session (video, audio, screen share, whiteboard, chat, shared editor) and a durable record of what happened in it — nothing is thrown away when the call ends. The whole system is three independently deployable services, each with a single job, none of them trusting the others' enforcement — that split, and what it costs and buys, is the actual subject of this repository.
 
-> **Quickstart:** [try the live deployment](https://threadline-rtc.vercel.app) with a real account, or run it yourself:
->
-> ```bash
-> git clone https://github.com/hoangsonww/Threadline-RealTime-Collab.git && cd Threadline-RealTime-Collab
-> npm install && cp apps/realtime/.dev.vars.example apps/realtime/.dev.vars && npm run dev
-> ```
->
-> Open `http://localhost:3000` — all three services run locally, zero database setup required. See [Running it locally](#running-it-locally) for what's actually happening.
-
 ## Table of contents
 
 - [Overview](#overview)
@@ -72,6 +59,8 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [License](#license)
 
 ## Overview
+
+Threadline provides a single, unified workspace for a live call and its durable record, with three independent services each owning exactly one responsibility. The system is designed to demonstrate how to structure a realtime product across a serverless web tier, a serverless API tier, and a genuinely stateful coordination tier, with independent authorization checks at every boundary rather than a single shared trust domain.
 
 - **What a room is:** a live WebRTC call (video, audio, screen share) plus a shared whiteboard, shared notes, a shared code editor, direct peer-to-peer file transfer, and chat — all synced in real time across every connected participant.
 - **What persists:** chat messages, document edits, whiteboard updates, and who joined/left are written into a durable, permission-filtered timeline you can revisit after the call ends. Live-only signals (cursor position, WebRTC offers/answers/ICE candidates, individual whiteboard strokes) are deliberately never persisted — they're too high-frequency to be a meaningful record.
