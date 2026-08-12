@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const siteUrl = "https://threadline-silk.vercel.app";
+const siteUrl = "https://threadline-rtc.vercel.app";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();
@@ -8,5 +8,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${siteUrl}/`, lastModified: now, changeFrequency: "monthly", priority: 1 },
     { url: `${siteUrl}/login`, lastModified: now, changeFrequency: "yearly", priority: 0.5 },
     { url: `${siteUrl}/register`, lastModified: now, changeFrequency: "yearly", priority: 0.8 },
+    { url: `${siteUrl}/forgot-password`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${siteUrl}/reset-password`, lastModified: now, changeFrequency: "yearly", priority: 0.1 },
+    { url: `${siteUrl}/verify-email`, lastModified: now, changeFrequency: "yearly", priority: 0.1 },
   ];
 }

@@ -1,12 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Manrope } from "next/font/google";
 import "./globals.css";
+import { PwaRegister } from "../components/pwa-register";
 import { ThemeSync } from "../components/theme-sync";
 
 const sans = Manrope({ subsets: ["latin"], variable: "--font-geist" });
 const mono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-geist-mono" });
 
-const siteUrl = "https://threadline-silk.vercel.app";
+const siteUrl = "https://threadline-rtc.vercel.app";
 const siteName = "Threadline";
 const description =
   "A room-centered workspace for live engineering collaboration and durable session records. Meet now, keep the thread, and return to a room that remembers.";
@@ -33,6 +34,7 @@ export const metadata: Metadata = {
   formatDetection: { email: false, address: false, telephone: false },
   robots: { index: true, follow: true, googleBot: { index: true, follow: true } },
   alternates: { canonical: "/" },
+  appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: siteName },
   openGraph: {
     type: "website",
     url: siteUrl,
@@ -71,6 +73,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     >
       <body>
         <ThemeSync />
+        <PwaRegister />
         <a className="skip-link" href="#main-content">
           Skip to content
         </a>

@@ -21,7 +21,7 @@ const structuredData = {
   operatingSystem: "Web",
   description:
     "A room-centered workspace for live engineering collaboration and durable session records. Meet now, keep the thread, and return to a room that remembers.",
-  url: "https://threadline-silk.vercel.app",
+  url: "https://threadline-rtc.vercel.app",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 };
 

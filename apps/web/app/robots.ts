@@ -5,8 +5,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: ["/", "/login", "/register", "/forgot-password", "/reset-password", "/verify-email"],
-      disallow: ["/app", "/app/", "/app/*", "/oidc/", "/oauth/"],
+      disallow: ["/app", "/app/", "/app/*", "/onboarding", "/oidc/", "/oauth/"],
     },
-    sitemap: "https://threadline-silk.vercel.app/sitemap.xml",
+    sitemap: "https://threadline-rtc.vercel.app/sitemap.xml",
   };
 }
