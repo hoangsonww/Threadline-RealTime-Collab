@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import * as Sentry from "@sentry/node";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -1273,6 +1274,9 @@ export function createApp(options: AppOptions, app = express()) {
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
     if (error instanceof z.ZodError)
       return clientError(response, 422, "validation_error", error.issues[0]?.message ?? "Request validation failed.");
+    // Validation errors above are expected user-input noise, not bugs — only
+    // report the truly unexpected branch to Sentry.
+    Sentry.captureException(error);
     response.status(500).json({ error: "internal_error", message: "An unexpected error occurred." });
   });
   return app;
