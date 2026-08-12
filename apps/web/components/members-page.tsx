@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ApiError, apiFetch, type IdentityResponse } from "../lib/api";
 import { AppSelect } from "./app-select";
+import { MemberRowSkeleton } from "./skeletons";
 
 type Member = {
   id: string;
@@ -31,6 +32,7 @@ export function MembersPage({ orgId }: { orgId: string }) {
   const [callerId, setCallerId] = useState("");
   const [callerRole, setCallerRole] = useState<"owner" | "admin" | "member" | undefined>(undefined);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [canManageMembers, setCanManageMembers] = useState(false);
@@ -61,7 +63,10 @@ export function MembersPage({ orgId }: { orgId: string }) {
     }
   }, [orgId]);
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load members."));
+    setLoading(true);
+    void load()
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load members."))
+      .finally(() => setLoading(false));
   }, [load]);
   const copyJoinCode = async () => {
     if (!invite) return;
@@ -223,54 +228,56 @@ export function MembersPage({ orgId }: { orgId: string }) {
       )}
       {error && <p className="form-error">{error}</p>}
       <div className="members-table">
-        {members.map((member) => {
-          const roleOptions = [
-            { value: "member", label: "Member" },
-            ...(callerRole === "owner" || member.role === "admin" ? [{ value: "admin", label: "Admin" }] : []),
-          ];
-          return (
-            <div className="member-row member-row-with-actions" key={member.id}>
-              <span className="avatar">
-                {member.displayName
-                  .split(" ")
-                  .map((part) => part[0])
-                  .slice(0, 2)
-                  .join("")}
-              </span>
-              <div>
-                <strong>{member.displayName}</strong>
-                <span>{member.email}</span>
-              </div>
-              <span className={`role-badge role-${member.role}`}>{member.role}</span>
-              <span className="member-grants">
-                {[
-                  member.attributes?.canCreateRooms && "rooms",
-                  member.attributes?.canSchedule && "calendar",
-                  member.attributes?.canManageMembers && "members",
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "standard access"}
-              </span>
-              {canManageMembers && member.role !== "owner" ? (
-                <div className="member-role-cell">
-                  <AppSelect
-                    ariaLabel={`Change role for ${member.displayName}`}
-                    disabled={roleUpdating === member.id}
-                    id={`role-${member.id}`}
-                    onValueChange={(value) => void changeMemberRole(member, value as "admin" | "member")}
-                    options={roleOptions}
-                    value={member.role}
-                    variant="sidebar"
-                  />
+        {loading && <MemberRowSkeleton count={4} withActions />}
+        {!loading &&
+          members.map((member) => {
+            const roleOptions = [
+              { value: "member", label: "Member" },
+              ...(callerRole === "owner" || member.role === "admin" ? [{ value: "admin", label: "Admin" }] : []),
+            ];
+            return (
+              <div className="member-row member-row-with-actions" key={member.id}>
+                <span className="avatar">
+                  {member.displayName
+                    .split(" ")
+                    .map((part) => part[0])
+                    .slice(0, 2)
+                    .join("")}
+                </span>
+                <div>
+                  <strong>{member.displayName}</strong>
+                  <span>{member.email}</span>
                 </div>
-              ) : (
-                <span className="member-role-static">{member.id === callerId ? "You" : ""}</span>
-              )}
-            </div>
-          );
-        })}
+                <span className={`role-badge role-${member.role}`}>{member.role}</span>
+                <span className="member-grants">
+                  {[
+                    member.attributes?.canCreateRooms && "rooms",
+                    member.attributes?.canSchedule && "calendar",
+                    member.attributes?.canManageMembers && "members",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "standard access"}
+                </span>
+                {canManageMembers && member.role !== "owner" ? (
+                  <div className="member-role-cell">
+                    <AppSelect
+                      ariaLabel={`Change role for ${member.displayName}`}
+                      disabled={roleUpdating === member.id}
+                      id={`role-${member.id}`}
+                      onValueChange={(value) => void changeMemberRole(member, value as "admin" | "member")}
+                      options={roleOptions}
+                      value={member.role}
+                      variant="sidebar"
+                    />
+                  </div>
+                ) : (
+                  <span className="member-role-static">{member.id === callerId ? "You" : ""}</span>
+                )}
+              </div>
+            );
+          })}
       </div>
-      {!error && !members.length && (
+      {!loading && !error && !members.length && (
         <div className="empty-state large">
           <UsersThreeIcon size={26} weight="duotone" />
           <div>

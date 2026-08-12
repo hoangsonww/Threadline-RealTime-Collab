@@ -24,6 +24,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
+import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
 type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
@@ -644,19 +645,36 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             {panel === "chat" && (
               <div className="chat">
                 <div className="chat-list">
-                  {messages.map((message) => (
-                    <article className="message" key={message.id}>
-                      <span className="avatar">{message.initials}</span>
-                      <div className="message-body">
-                        <div className="message-meta">
-                          <strong>{message.person}</strong>
-                          <time>{message.time}</time>
+                  {!room && !roomError ? (
+                    Array.from({ length: 3 }, (_, index) => (
+                      <article className="message" key={index}>
+                        <span className="avatar" aria-hidden="true" />
+                        <div className="message-body">
+                          <div className="message-meta">
+                            <Skeleton width={80} height="0.85em" />
+                            <Skeleton width={50} height="0.75em" />
+                          </div>
+                          <Skeleton width="70%" />
                         </div>
-                        <p>{message.text}</p>
-                      </div>
-                    </article>
-                  ))}
-                  {!messages.length && <p className="panel-empty">No messages have been recorded in this room.</p>}
+                      </article>
+                    ))
+                  ) : (
+                    <>
+                      {messages.map((message) => (
+                        <article className="message" key={message.id}>
+                          <span className="avatar">{message.initials}</span>
+                          <div className="message-body">
+                            <div className="message-meta">
+                              <strong>{message.person}</strong>
+                              <time>{message.time}</time>
+                            </div>
+                            <p>{message.text}</p>
+                          </div>
+                        </article>
+                      ))}
+                      {!messages.length && <p className="panel-empty">No messages have been recorded in this room.</p>}
+                    </>
+                  )}
                 </div>
                 <form className="chat-compose" onSubmit={sendMessage}>
                   <input
@@ -763,23 +781,37 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   <strong>Room timeline</strong>
                   <span>Durable record</span>
                 </div>
-                {timeline
-                  .slice()
-                  .reverse()
-                  .map((event, index) => (
-                    <div className="timeline-event" key={event.id ?? `${event.type}-${index}-${eventAt(event)}`}>
+                {!room && !roomError ? (
+                  Array.from({ length: 4 }, (_, index) => (
+                    <div className="timeline-event" key={index}>
                       <i />
                       <div>
-                        <p>{describeEvent(event)}</p>
-                        <time>
-                          {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-                            new Date(eventAt(event)),
-                          )}
-                        </time>
+                        <Skeleton width="60%" />
+                        <Skeleton width={90} height="0.75em" style={{ marginTop: 4 }} />
                       </div>
                     </div>
-                  ))}
-                {!timeline.length && <p className="panel-empty">This room has no durable events yet.</p>}
+                  ))
+                ) : (
+                  <>
+                    {timeline
+                      .slice()
+                      .reverse()
+                      .map((event, index) => (
+                        <div className="timeline-event" key={event.id ?? `${event.type}-${index}-${eventAt(event)}`}>
+                          <i />
+                          <div>
+                            <p>{describeEvent(event)}</p>
+                            <time>
+                              {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+                                new Date(eventAt(event)),
+                              )}
+                            </time>
+                          </div>
+                        </div>
+                      ))}
+                    {!timeline.length && <p className="panel-empty">This room has no durable events yet.</p>}
+                  </>
+                )}
               </div>
             )}
           </div>

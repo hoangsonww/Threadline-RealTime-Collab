@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Room } from "../lib/api";
 import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
+import { DirectoryCardSkeleton } from "./skeletons";
 
 export function RoomsDirectory() {
   const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
@@ -13,7 +14,9 @@ export function RoomsDirectory() {
   const [organization, setOrganization] = useState("");
   const [organizationId, setOrganizationId] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
+    setLoading(true);
     void (async () => {
       try {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
@@ -26,6 +29,8 @@ export function RoomsDirectory() {
         setRooms(result.rooms);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not load rooms.");
+      } finally {
+        setLoading(false);
       }
     })();
   }, [selectedOrgId]);
@@ -43,24 +48,28 @@ export function RoomsDirectory() {
       </div>
       {error && <p className="form-error">{error}</p>}
       <div className="directory-grid">
-        {rooms.map((room) => (
-          <Link className="directory-card" href={`/app/rooms/${room.id}`} key={room.id}>
-            <span className="directory-icon">
-              <VideoConferenceIcon size={23} weight="duotone" />
-            </span>
-            <span className="directory-card-head">
-              <strong># {room.name}</strong>
-              {room.visibility === "restricted" && <LockKeyIcon size={14} aria-label="Restricted" />}
-            </span>
-            <p>{room.description || "No room description has been added."}</p>
-            <span className="directory-card-footer">
-              <span>{room.classification || "internal"}</span>
-              <ArrowUpRightIcon size={15} />
-            </span>
-          </Link>
-        ))}
+        {loading ? (
+          <DirectoryCardSkeleton count={6} />
+        ) : (
+          rooms.map((room) => (
+            <Link className="directory-card" href={`/app/rooms/${room.id}`} key={room.id}>
+              <span className="directory-icon">
+                <VideoConferenceIcon size={23} weight="duotone" />
+              </span>
+              <span className="directory-card-head">
+                <strong># {room.name}</strong>
+                {room.visibility === "restricted" && <LockKeyIcon size={14} aria-label="Restricted" />}
+              </span>
+              <p>{room.description || "No room description has been added."}</p>
+              <span className="directory-card-footer">
+                <span>{room.classification || "internal"}</span>
+                <ArrowUpRightIcon size={15} />
+              </span>
+            </Link>
+          ))
+        )}
       </div>
-      {!error && !rooms.length && (
+      {!loading && !error && !rooms.length && (
         <div className="empty-state large">
           <VideoConferenceIcon size={26} weight="duotone" />
           <div>

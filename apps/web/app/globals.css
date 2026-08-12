@@ -4708,3 +4708,32 @@ textarea:focus-visible {
   color: var(--subtle);
   font-size: 11px;
 }
+
+/* Loading skeletons ---------------------------------------------------- */
+
+.skeleton {
+  display: inline-block;
+  vertical-align: middle;
+  background: linear-gradient(90deg, var(--line-soft) 25%, var(--line) 37%, var(--line-soft) 63%);
+  background-size: 400% 100%;
+  animation: threadline-shimmer 1.4s ease infinite;
+}
+
+@keyframes threadline-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.skeleton-row {
+  pointer-events: none;
+}

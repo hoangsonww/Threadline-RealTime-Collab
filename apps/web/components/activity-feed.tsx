@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Room } from "../lib/api";
 import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
+import { ActivityFeedRowSkeleton } from "./skeletons";
 
 type ActivityEvent = { id: string; roomId: string; type: string; payload: unknown; createdAt: string };
 const eventIcon = (type: string) =>
@@ -31,7 +32,9 @@ export function ActivityFeed() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [organization, setOrganization] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
+    setLoading(true);
     void (async () => {
       try {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
@@ -46,6 +49,8 @@ export function ActivityFeed() {
         setRooms(data.rooms.map((room) => ({ ...room, orgId: org.id, createdAt: "", updatedAt: "" })));
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not load activity.");
+      } finally {
+        setLoading(false);
       }
     })();
   }, [selectedOrgId]);
@@ -61,28 +66,32 @@ export function ActivityFeed() {
       </div>
       {error && <p className="form-error">{error}</p>}
       <div className="activity-feed">
-        {events.map((event) => {
-          const Icon = eventIcon(event.type);
-          return (
-            <Link className="activity-feed-row" href={`/app/rooms/${event.roomId}`} key={event.id}>
-              <span className="activity-feed-icon">
-                <Icon size={18} weight="duotone" />
-              </span>
-              <span>
-                <strong>{eventText(event.type)}</strong>
-                <p># {roomName(event.roomId)}</p>
-              </span>
-              <time>
-                {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
-                  new Date(event.createdAt),
-                )}
-              </time>
-              <ArrowUpRightIcon size={15} />
-            </Link>
-          );
-        })}
+        {loading ? (
+          <ActivityFeedRowSkeleton count={6} />
+        ) : (
+          events.map((event) => {
+            const Icon = eventIcon(event.type);
+            return (
+              <Link className="activity-feed-row" href={`/app/rooms/${event.roomId}`} key={event.id}>
+                <span className="activity-feed-icon">
+                  <Icon size={18} weight="duotone" />
+                </span>
+                <span>
+                  <strong>{eventText(event.type)}</strong>
+                  <p># {roomName(event.roomId)}</p>
+                </span>
+                <time>
+                  {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(
+                    new Date(event.createdAt),
+                  )}
+                </time>
+                <ArrowUpRightIcon size={15} />
+              </Link>
+            );
+          })
+        )}
       </div>
-      {!error && !events.length && (
+      {!loading && !error && !events.length && (
         <div className="empty-state large">
           <BellIcon size={26} weight="duotone" />
           <div>

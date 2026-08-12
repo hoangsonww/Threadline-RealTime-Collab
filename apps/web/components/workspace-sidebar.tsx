@@ -19,6 +19,7 @@ import { apiFetch, selectedOrganization, type IdentityResponse, type Organizatio
 import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
 import { Brand } from "./brand";
+import { SidebarRoomSkeleton } from "./skeletons";
 
 const ADD_WORKSPACE = "__add_workspace__";
 
@@ -35,6 +36,7 @@ const initials = (name: string) =>
 
 export function WorkspaceSidebar({ active }: { active: Active }) {
   const [data, setData] = useState<SidebarData>({ rooms: [] });
+  const [loading, setLoading] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const pathname = usePathname();
@@ -58,6 +60,7 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     void (async () => {
       try {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
@@ -69,6 +72,8 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
       } catch (error) {
         if (!cancelled)
           setData({ rooms: [], error: error instanceof Error ? error.message : "Unable to load workspace." });
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -146,18 +151,24 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
         </nav>
         <p className="sidebar-label">Recent rooms</p>
         <div className="sidebar-room-list">
-          {data.rooms.slice(0, 5).map((room) => (
-            <Link className="sidebar-room" href={`/app/rooms/${room.id}`} key={room.id}>
-              <span># {room.name}</span>
-              {room.visibility === "restricted" && (
-                <span className="room-lock" aria-label="Restricted room">
-                  ••
-                </span>
+          {loading ? (
+            <SidebarRoomSkeleton count={3} />
+          ) : (
+            <>
+              {data.rooms.slice(0, 5).map((room) => (
+                <Link className="sidebar-room" href={`/app/rooms/${room.id}`} key={room.id}>
+                  <span># {room.name}</span>
+                  {room.visibility === "restricted" && (
+                    <span className="room-lock" aria-label="Restricted room">
+                      ••
+                    </span>
+                  )}
+                </Link>
+              ))}
+              {!data.rooms.length && (
+                <p className="sidebar-empty">{data.error ? "Sign in to load rooms" : "No rooms yet"}</p>
               )}
-            </Link>
-          ))}
-          {!data.rooms.length && (
-            <p className="sidebar-empty">{data.error ? "Sign in to load rooms" : "No rooms yet"}</p>
+            </>
           )}
         </div>
         <div className="sidebar-bottom">
