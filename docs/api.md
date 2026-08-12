@@ -123,7 +123,7 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 | Method & path                              | Auth          | Notes                                                                                                  |
 | ------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
-| `POST /v1/auth/register`                   | none          | Creates user + owner `Membership` on a new org + session. Rate limited 8/hour/IP.                      |
+| `POST /v1/auth/register`                   | none          | Creates a user + session only — no organization. Rate limited 8/hour/IP.                               |
 | `POST /v1/auth/login`                      | none          | Rate limited 12/15min/IP.                                                                              |
 | `POST /v1/auth/logout`                     | session       | Revokes the current session only.                                                                      |
 | `POST /v1/auth/password`                   | session       | Revokes every _other_ active session on success.                                                       |
@@ -142,21 +142,27 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 ### Organizations & rooms
 
-| Method & path                    | Auth           | Scope         | Notes                                                                                                                                   |
-| -------------------------------- | -------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/orgs`                   | session or PAT | `orgs:read`   | Orgs the caller belongs to, with their role/attributes attached.                                                                        |
-| `GET /v1/orgs/:orgId/rooms`      | session or PAT | `rooms:read`  | Filtered through `canRoom(..., "read")` per room — restricted rooms without membership are silently excluded, not `403`'d individually. |
-| `POST /v1/orgs/:orgId/rooms`     | session or PAT | `rooms:write` | Requires `canOrganization(..., "create_room")`. Creator becomes room `owner`.                                                           |
-| `GET /v1/rooms/:roomId`          | session or PAT | `rooms:read`  | Returns the caller's effective role alongside the room.                                                                                 |
-| `POST /v1/rooms/:roomId/ticket`  | session only   | —             | Issues the 120-second signed WebSocket ticket. Never available to PATs — live sessions are an interactive-browser concept.              |
-| `GET /v1/rooms/:roomId/events`   | session or PAT | `rooms:read`  | Durable timeline only (see [`architecture.md`](architecture.md#data-model) for what does/doesn't get persisted).                        |
-| `GET /v1/rooms/:roomId/members`  | session or PAT | `rooms:read`  | Explicit `RoomMembership` rows only.                                                                                                    |
-| `POST /v1/rooms/:roomId/members` | session or PAT | `rooms:write` | Requires `canRoom(..., "manage")`. Target must already be an org member. Grantable roles: `host`, `member`, `viewer` (not `owner`).     |
-| `GET /v1/orgs/:orgId/members`    | session or PAT | `orgs:read`   |                                                                                                                                         |
-| `POST /v1/orgs/:orgId/members`   | session or PAT | `orgs:write`  | Requires `canOrganization(..., "manage_members")`. Only an existing `owner` may assign the `admin` role.                                |
-| `GET /v1/orgs/:orgId/calendar`   | session or PAT | `orgs:read`   | Room-attached events filtered through the same room read policy. Supports `?from=` / `?to=` ISO bounds.                                 |
-| `POST /v1/orgs/:orgId/calendar`  | session or PAT | `orgs:write`  | Requires `canOrganization(..., "schedule")`. `endsAt` must be after `startsAt`.                                                         |
-| `GET /v1/orgs/:orgId/activity`   | session or PAT | `rooms:read`  | Last 100 durable events across every room visible to the caller.                                                                        |
+| Method & path                            | Auth           | Scope         | Notes                                                                                                                                                                |
+| ---------------------------------------- | -------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/orgs`                           | session or PAT | `orgs:read`   | Orgs the caller belongs to, with their role/attributes attached. `joinCode` is never included here.                                                                  |
+| `POST /v1/orgs`                          | session or PAT | `orgs:write`  | Creates a workspace. Caller becomes `owner` with a fresh, unique `joinCode` (not returned in this response either).                                                  |
+| `POST /v1/join`                          | session or PAT | `orgs:write`  | Redeems an org's `joinCode`, creates a `member` membership. Rate limited 10/15min/IP — it's a secret check, same as a password.                                      |
+| `GET /v1/orgs/:orgId/invite`             | session or PAT | `orgs:read`   | Requires `canInviteToOrganization`: owner/admin always, plain member only if `allowMemberInvites`. Only place `joinCode` is returned.                                |
+| `POST /v1/orgs/:orgId/invite/regenerate` | session or PAT | `orgs:write`  | Same permission gate as above. Invalidates the previous code immediately.                                                                                            |
+| `PATCH /v1/orgs/:orgId/settings`         | session or PAT | `orgs:write`  | Requires `canOrganization(..., "manage_members")`. Currently just toggles `allowMemberInvites`.                                                                      |
+| `PATCH /v1/orgs/:orgId/members/:userId`  | session or PAT | `orgs:write`  | Requires `manage_members`; only an `owner` may assign `admin`. Owner's own role is immutable here; an admin can only self-demote if another admin exists in the org. |
+| `GET /v1/orgs/:orgId/rooms`              | session or PAT | `rooms:read`  | Filtered through `canRoom(..., "read")` per room — restricted rooms without membership are silently excluded, not `403`'d individually.                              |
+| `POST /v1/orgs/:orgId/rooms`             | session or PAT | `rooms:write` | Requires `canOrganization(..., "create_room")`. Creator becomes room `owner`.                                                                                        |
+| `GET /v1/rooms/:roomId`                  | session or PAT | `rooms:read`  | Returns the caller's effective role alongside the room.                                                                                                              |
+| `POST /v1/rooms/:roomId/ticket`          | session only   | —             | Issues the 120-second signed WebSocket ticket. Never available to PATs — live sessions are an interactive-browser concept.                                           |
+| `GET /v1/rooms/:roomId/events`           | session or PAT | `rooms:read`  | Durable timeline only (see [`architecture.md`](architecture.md#data-model) for what does/doesn't get persisted).                                                     |
+| `GET /v1/rooms/:roomId/members`          | session or PAT | `rooms:read`  | Explicit `RoomMembership` rows only.                                                                                                                                 |
+| `POST /v1/rooms/:roomId/members`         | session or PAT | `rooms:write` | Requires `canRoom(..., "manage")`. Target must already be an org member. Grantable roles: `host`, `member`, `viewer` (not `owner`).                                  |
+| `GET /v1/orgs/:orgId/members`            | session or PAT | `orgs:read`   |                                                                                                                                                                      |
+| `POST /v1/orgs/:orgId/members`           | session or PAT | `orgs:write`  | Requires `canOrganization(..., "manage_members")`. Only an existing `owner` may assign the `admin` role.                                                             |
+| `GET /v1/orgs/:orgId/calendar`           | session or PAT | `orgs:read`   | Room-attached events filtered through the same room read policy. Supports `?from=` / `?to=` ISO bounds.                                                              |
+| `POST /v1/orgs/:orgId/calendar`          | session or PAT | `orgs:write`  | Requires `canOrganization(..., "schedule")`. `endsAt` must be after `startsAt`.                                                                                      |
+| `GET /v1/orgs/:orgId/activity`           | session or PAT | `rooms:read`  | Last 100 durable events across every room visible to the caller.                                                                                                     |
 
 ### Personal access tokens
 

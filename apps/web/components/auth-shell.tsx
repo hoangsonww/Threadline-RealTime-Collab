@@ -34,8 +34,8 @@ export function AuthShell({ mode }: { mode: "login" | "register" }) {
           <Link href="/">Back to home</Link>
         </div>
         <div className="auth-card">
-          <h2>{register ? "Create your workspace" : "Welcome back"}</h2>
-          <p>{register ? "Start a room your team can return to." : "Sign in to continue to Threadline."}</p>
+          <h2>{register ? "Create your account" : "Welcome back"}</h2>
+          <p>{register ? "You'll create or join a workspace next." : "Sign in to continue to Threadline."}</p>
           <AuthForm mode={mode} />
         </div>
       </section>

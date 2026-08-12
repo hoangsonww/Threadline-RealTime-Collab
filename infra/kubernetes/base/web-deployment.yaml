@@ -24,8 +24,18 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      # See the matching comment in api-deployment.yaml — soft preference,
+      # never blocks scheduling.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: threadline-web
       containers:
         - name: web
           image: threadline-web:latest
@@ -72,3 +82,9 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

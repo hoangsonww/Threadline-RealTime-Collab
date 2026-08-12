@@ -13,7 +13,9 @@ import {
   type Organization,
   type Room,
 } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
+import { ActivityItemSkeleton, RoomCardSkeleton } from "./skeletons";
 
 type ActivityEvent = {
   id: string;
@@ -53,18 +55,21 @@ const describeEvent = (event: ActivityEvent, rooms: Room[]) => {
 export function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const selectedOrgId = searchParams.get("org");
+  const selectedOrgId = searchParams.get("org") ?? getPreferredOrgId();
   const [state, setState] = useState<State>({ rooms: [], activity: [] });
+  const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
   const [visibility, setVisibility] = useState("organization");
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
       const organization = selectedOrganization(identity, selectedOrgId);
       if (!organization) throw new Error("Your account does not belong to an organization.");
+      setPreferredOrgId(organization.id);
       const [roomData, activityData] = await Promise.all([
         apiFetch<{ rooms: Room[] }>(`/v1/orgs/${organization.id}/rooms`),
         apiFetch<{ events: ActivityEvent[] }>(`/v1/orgs/${organization.id}/activity`),
@@ -77,6 +82,8 @@ export function Dashboard() {
         activity: [],
         error: error instanceof Error ? error.message : "Unable to load the workspace.",
       });
+    } finally {
+      setLoading(false);
     }
   }, [router, selectedOrgId]);
 
@@ -143,7 +150,9 @@ export function Dashboard() {
               </Link>
             </div>
             <div className="room-list">
-              {state.rooms.length ? (
+              {loading ? (
+                <RoomCardSkeleton count={4} />
+              ) : state.rooms.length ? (
                 state.rooms.slice(0, 8).map((room) => (
                   <Link className="room-card" href={`/app/rooms/${room.id}`} key={room.id}>
                     <span className="room-card-icon">
@@ -186,7 +195,9 @@ export function Dashboard() {
               </Link>
             </div>
             <div className="activity-card">
-              {state.activity.length ? (
+              {loading ? (
+                <ActivityItemSkeleton count={4} />
+              ) : state.activity.length ? (
                 state.activity.slice(0, 5).map((event) => (
                   <div className="activity-item" key={event.id}>
                     <span className="avatar">TL</span>

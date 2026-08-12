@@ -4,7 +4,7 @@ Terms as this codebase actually uses them — not always the industry-general de
 
 ## Table of contents
 
-[A](#a) &middot; [C](#c) &middot; [D](#d) &middot; [E](#e) &middot; [H](#h) &middot; [I](#i) &middot; [M](#m) &middot; [O](#o) &middot; [P](#p) &middot; [R](#r) &middot; [S](#s) &middot; [V](#v) &middot; [W](#w)
+[A](#a) &middot; [C](#c) &middot; [D](#d) &middot; [E](#e) &middot; [H](#h) &middot; [I](#i) &middot; [J](#j) &middot; [M](#m) &middot; [O](#o) &middot; [P](#p) &middot; [R](#r) &middot; [S](#s) &middot; [V](#v) &middot; [W](#w)
 
 ## A
 
@@ -35,6 +35,10 @@ Terms as this codebase actually uses them — not always the industry-general de
 - **ICE / STUN / TURN** — Standard WebRTC connectivity-establishment building blocks. Threadline currently only configures a public STUN server by default; TURN is not wired up (see [`roadmap.md`](roadmap.md)).
 - **Ingest secret** — The shared value between `apps/api` (`INTERNAL_INGEST_SECRET`) and `apps/realtime` (`PERSISTENCE_SECRET`, same value) that authenticates the Durable Object's webhook calls to `POST /v1/internal/room-events`. Proves the _request_ is from the trusted Worker; does not by itself authorize the _event's_ content — see [`security.md`](security.md#realtime--api-ingest-secret).
 
+## J
+
+- **Join code** (`Organization.joinCode`) — An 8-character, regenerable code (`ABCDEFGHJKMNPQRSTUVWXYZ23456789` alphabet — visually ambiguous characters excluded) that self-serves an org's `member` role via `POST /v1/join`. Owners/admins can always view or regenerate it (`GET`/`POST /v1/orgs/:orgId/invite*`); a plain member can only when `allowMemberInvites` is set. Never included in any general-purpose response (`/v1/auth/me`, `GET /v1/orgs`) — only the dedicated invite endpoints return it. See [`api.md`](api.md#organizations--rooms).
+
 ## M
 
 - **Membership** — A user's row in an `Organization` (role: `owner`/`admin`/`member`, plus delegated `attributes`). Distinct from `RoomMembership`, which is room-scoped.
@@ -42,7 +46,7 @@ Terms as this codebase actually uses them — not always the industry-general de
 ## O
 
 - **OIDC (OpenID Connect)** — Threadline's first-party identity provider (`/oauth/*`, `/.well-known/openid-configuration`). Authorization Code + PKCE only; no implicit or password grant; first-party clients only (no public third-party registration). See [`api.md`](api.md#oidc-authorization-code--pkce-end-to-end).
-- **Organization** — The top-level tenant. Every user's first organization is created automatically at registration; a user can belong to more than one.
+- **Organization** — The top-level tenant. Registration no longer creates one — a new account joins or creates its first organization on `/onboarding`, via `POST /v1/orgs` (become owner) or `POST /v1/join` (redeem an invite code). A user can belong to more than one.
 
 ## P
 
@@ -73,4 +77,4 @@ Terms as this codebase actually uses them — not always the industry-general de
 
 ## W
 
-- **WorkspaceGate** — The single client component (`apps/web/components/workspace-gate.tsx`) every `/app/**` route renders behind. Blocks on `GET /v1/auth/me` before showing anything. See [`frontend.md`](frontend.md#workspacegate-the-one-place-session-checking-happens).
+- **WorkspaceGate** — The single client component (`apps/web/components/workspace-gate.tsx`) every `/app/**` route renders behind. Blocks on `GET /v1/auth/me` before showing anything; redirects to `/login` if unauthenticated, or to `/onboarding` if the account has zero organizations. See [`frontend.md`](frontend.md#workspacegate-the-one-place-session-checking-happens).

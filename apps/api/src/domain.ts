@@ -46,6 +46,10 @@ export interface Organization {
   id: string;
   name: string;
   slug: string;
+  /** Shareable, regenerable code used to self-serve join this organization. */
+  joinCode: string;
+  /** When false (the default), only an owner/admin can view or regenerate joinCode. */
+  allowMemberInvites: boolean;
   createdAt: Date;
 }
 

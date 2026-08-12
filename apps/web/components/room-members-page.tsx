@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { apiFetch, type IdentityResponse, type Room } from "../lib/api";
 import { AppSelect } from "./app-select";
+import { MemberRowSkeleton } from "./skeletons";
 
 type OrgMember = { id: string; email: string; displayName: string };
 type RoomMember = {
@@ -30,6 +31,7 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
   const [orgMembers, setOrgMembers] = useState<OrgMember[]>([]);
   const [canManage, setCanManage] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [userId, setUserId] = useState("");
@@ -56,7 +58,10 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
   }, [roomId]);
 
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load room members."));
+    setLoading(true);
+    void load()
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load room members."))
+      .finally(() => setLoading(false));
   }, [load]);
 
   const addable = orgMembers.filter((candidate) => !members.some((member) => member.id === candidate.id));
@@ -130,30 +135,34 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
         </div>
         {error && <p className="form-error">{error}</p>}
         <div className="members-table">
-          {members.map((member) => (
-            <div className="member-row" key={member.id}>
-              <span className="avatar">{initialsFor(member.displayName)}</span>
-              <div>
-                <strong>{member.displayName}</strong>
-                <span>{member.email}</span>
+          {loading ? (
+            <MemberRowSkeleton count={3} />
+          ) : (
+            members.map((member) => (
+              <div className="member-row" key={member.id}>
+                <span className="avatar">{initialsFor(member.displayName)}</span>
+                <div>
+                  <strong>{member.displayName}</strong>
+                  <span>{member.email}</span>
+                </div>
+                <span className={`role-badge role-${member.role}`}>{member.role}</span>
+                {canManage && member.role !== "owner" ? (
+                  <button
+                    className="button button-danger"
+                    onClick={() => void removeMember(member)}
+                    disabled={removingId === member.id}
+                    aria-label={`Remove ${member.displayName}'s access`}
+                  >
+                    <UserMinusIcon size={15} /> {removingId === member.id ? "Removing…" : "Remove access"}
+                  </button>
+                ) : (
+                  <span />
+                )}
               </div>
-              <span className={`role-badge role-${member.role}`}>{member.role}</span>
-              {canManage && member.role !== "owner" ? (
-                <button
-                  className="button button-danger"
-                  onClick={() => void removeMember(member)}
-                  disabled={removingId === member.id}
-                  aria-label={`Remove ${member.displayName}'s access`}
-                >
-                  <UserMinusIcon size={15} /> {removingId === member.id ? "Removing…" : "Remove access"}
-                </button>
-              ) : (
-                <span />
-              )}
-            </div>
-          ))}
+            ))
+          )}
         </div>
-        {!error && !members.length && (
+        {!loading && !error && !members.length && (
           <div className="empty-state large">
             <UsersThreeIcon size={26} weight="duotone" />
             <div>

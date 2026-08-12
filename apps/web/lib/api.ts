@@ -38,6 +38,7 @@ export type Organization = {
   id: string;
   name: string;
   slug: string;
+  allowMemberInvites: boolean;
   role?: "owner" | "admin" | "member";
   attributes?: { canCreateRooms?: boolean; canManageMembers?: boolean; canSchedule?: boolean };
 };

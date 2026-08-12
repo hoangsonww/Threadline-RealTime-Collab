@@ -1,4 +1,4 @@
-import type { Membership, Room, RoomMembership, RoomRole } from "./domain.js";
+import type { Membership, Organization, Room, RoomMembership, RoomRole } from "./domain.js";
 
 export type OrganizationAction = "read" | "create_room" | "manage_members" | "schedule";
 export type RoomAction = "read" | "join_live" | "write" | "manage";
@@ -19,6 +19,18 @@ export function canOrganization(membership: Membership | undefined, action: Orga
       membership.role === "owner" || membership.role === "admin" || membership.attributes?.canManageMembers === true
     );
   return membership.role === "owner" || membership.role === "admin" || membership.attributes?.canSchedule === true;
+}
+
+/**
+ * Who may view or regenerate an organization's join code. Owners and admins
+ * always can; a plain member can only when the organization has explicitly
+ * opted in via `allowMemberInvites` — that flag is what "share access" means
+ * for a role with no other management power.
+ */
+export function canInviteToOrganization(membership: Membership | undefined, organization: Organization) {
+  if (!membership) return false;
+  if (membership.role === "owner" || membership.role === "admin") return true;
+  return organization.allowMemberInvites === true;
 }
 
 export function effectiveRoomRole(

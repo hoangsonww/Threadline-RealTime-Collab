@@ -11,6 +11,8 @@ Real problems hit while developing and testing this codebase, not a generic chec
 - ["Realtime is not configured. Set both NEXT_PUBLIC_API_ORIGIN and NEXT_PUBLIC_REALTIME_ORIGIN."](#realtime-is-not-configured-set-both-next_public_api_origin-and-next_public_realtime_origin)
 - [Camera/screen-share button does nothing, forever](#camerascreen-share-button-does-nothing-forever)
 - [Sidebar/topbar say "Session unavailable" or the room says "Connection required"](#sidebartopbar-say-session-unavailable-or-the-room-says-connection-required)
+- [Switched workspaces, but the URL still has no `?org=` and doesn't seem to update](#switched-workspaces-but-the-url-still-has-no-org-and-doesnt-seem-to-update)
+- [Visiting `/onboarding` used to bounce straight back to `/app` — it doesn't anymore](#visiting-onboarding-used-to-bounce-straight-back-to-app--it-doesnt-anymore)
 - [Local data (users, rooms, sessions) disappears after editing API code](#local-data-users-rooms-sessions-disappears-after-editing-api-code)
 - [Room events (chat, joins, activity feed) never show up, even though the room connects fine](#room-events-chat-joins-activity-feed-never-show-up-even-though-the-room-connects-fine)
 - [Testing with two different logged-in accounts in one browser breaks the "wrong" tab](#testing-with-two-different-logged-in-accounts-in-one-browser-breaks-the-wrong-tab)
@@ -69,6 +71,18 @@ flowchart TD
 **Cause:** `/v1/auth/me` returned `401`. Either the session cookie expired/was revoked, or (in local dev specifically) the API process restarted and lost its in-memory session store — see the next entry.
 
 **Fix:** Log in again. If this keeps happening every time you save a file during local dev, see below.
+
+## Switched workspaces, but the URL still has no `?org=` and doesn't seem to update
+
+**Cause:** This is expected, not a bug. Every org-scoped page (`dashboard.tsx`, `rooms-directory.tsx`, `calendar-view.tsx`, `activity-feed.tsx`, `workspace-sidebar.tsx`, `workspace-topbar.tsx`) resolves which organization to show via a fallback chain: the `?org=` query param if present, else the last-used workspace from `localStorage` (`apps/web/lib/workspace-preference.ts`, key `threadline-last-org`), else the first organization the account belongs to — and it writes back whichever one it lands on as the new "last used" value. Switching workspaces through the sidebar dropdown does put `?org=<id>` in the URL for that navigation, but visiting `/app` fresh afterward (a new tab, a bookmark, clicking the logo) intentionally omits it and relies on the remembered preference instead, so seeing a bare `/app` URL still showing the right workspace is the fallback chain working correctly, not the switch failing to persist.
+
+**Fix:** Nothing to fix if the correct workspace is showing — check `localStorage.getItem("threadline-last-org")` in devtools if you want to confirm the stored value directly. If the _wrong_ workspace is showing, that's the actual bug to chase: confirm the account still has a membership in whatever org is stored there (a since-removed membership falls back to the first organization returned by `GET /v1/auth/me`, which has no guaranteed ordering).
+
+## Visiting `/onboarding` used to bounce straight back to `/app` — it doesn't anymore
+
+**Cause:** Not a bug report, a behavior change worth knowing about if you're working from older notes or a cached mental model of this codebase. `/onboarding` originally redirected away immediately (`router.replace`) if the account already had at least one organization, on the assumption that the page only existed for the mandatory first-workspace step right after registration. That made the sidebar's "create or join another workspace" entry point useless — clicking it just flashed and bounced back to `/app`. The page now has two modes instead of one redirect: **mandatory** (an account with zero organizations, reached via registration or `WorkspaceGate`'s safety-net redirect — no way to back out, since there's nowhere to go back to) and **optional** (an account that already has a workspace, reached from the sidebar switcher's "create or join a workspace" entry — shows a close button back to the current workspace, and the copy says "Add a workspace" instead of "One more step").
+
+**Fix:** Nothing to fix — if you're seeing the page render instead of bounce, that's current, correct behavior. If you're trying to reproduce the old auto-redirect for some reason, it no longer exists anywhere in `apps/web/components/onboarding-flow.tsx`.
 
 ## Local data (users, rooms, sessions) disappears after editing API code
 

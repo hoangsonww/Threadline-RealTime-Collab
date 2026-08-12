@@ -5,7 +5,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Organization, type Room } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
+import { CalendarEventSkeleton } from "./skeletons";
 
 type CalendarEvent = {
   id: string;
@@ -22,11 +24,12 @@ const localDateTime = (date: Date) => {
 };
 
 export function CalendarView() {
-  const selectedOrgId = useSearchParams().get("org");
+  const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   const [organization, setOrganization] = useState<Organization>();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [roomId, setRoomId] = useState("");
@@ -34,6 +37,7 @@ export function CalendarView() {
     const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
     const org = selectedOrganization(identity, selectedOrgId);
     if (!org) throw new Error("Your account does not belong to an organization.");
+    setPreferredOrgId(org.id);
     const [roomData, calendarData] = await Promise.all([
       apiFetch<{ rooms: Room[] }>(`/v1/orgs/${org.id}/rooms`),
       apiFetch<{ events: CalendarEvent[] }>(`/v1/orgs/${org.id}/calendar`),
@@ -43,7 +47,10 @@ export function CalendarView() {
     setEvents(calendarData.events);
   }, [selectedOrgId]);
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load calendar."));
+    setLoading(true);
+    void load()
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load calendar."))
+      .finally(() => setLoading(false));
   }, [load]);
   const create = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -93,28 +100,34 @@ export function CalendarView() {
       </div>
       {error && <p className="form-error">{error}</p>}
       <div className="calendar-list">
-        {events.map((item) => (
-          <article className="calendar-event" key={item.id}>
-            <time>
-              <strong>
-                {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(item.startsAt))}
-              </strong>
-              <span>
-                {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
-                  new Date(item.startsAt),
-                )}
-              </span>
-            </time>
-            <div>
-              <h3>{item.title}</h3>
-              <p>{item.description || "No description."}</p>
-              <span>{item.roomId ? `# ${roomName(item.roomId) || "Room"}` : "Organization session"}</span>
-            </div>
-            <ClockIcon size={18} />
-          </article>
-        ))}
+        {loading ? (
+          <CalendarEventSkeleton count={4} />
+        ) : (
+          events.map((item) => (
+            <article className="calendar-event" key={item.id}>
+              <time>
+                <strong>
+                  {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+                    new Date(item.startsAt),
+                  )}
+                </strong>
+                <span>
+                  {new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(
+                    new Date(item.startsAt),
+                  )}
+                </span>
+              </time>
+              <div>
+                <h3>{item.title}</h3>
+                <p>{item.description || "No description."}</p>
+                <span>{item.roomId ? `# ${roomName(item.roomId) || "Room"}` : "Organization session"}</span>
+              </div>
+              <ClockIcon size={18} />
+            </article>
+          ))
+        )}
       </div>
-      {!error && !events.length && (
+      {!loading && !error && !events.length && (
         <div className="empty-state large">
           <CalendarDotsIcon size={26} weight="duotone" />
           <div>

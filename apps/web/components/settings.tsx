@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "../lib/api";
+import { KeyRowSkeleton } from "./skeletons";
 import { ThemePreference } from "./theme-preference";
 
 type Token = {
@@ -53,6 +54,7 @@ export function Settings({ section = "general" }: { section?: Section }) {
   const [secret, setSecret] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [verificationSent, setVerificationSent] = useState(false);
   const [sendingVerification, setSendingVerification] = useState(false);
@@ -69,7 +71,9 @@ export function Settings({ section = "general" }: { section?: Section }) {
     setClients(clientData.clients);
   };
   useEffect(() => {
-    void load().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."));
+    void load()
+      .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."))
+      .finally(() => setLoading(false));
   }, []);
   const resendVerification = async () => {
     setSendingVerification(true);
@@ -201,24 +205,30 @@ export function Settings({ section = "general" }: { section?: Section }) {
             <div className="settings-section" id="sessions">
               <h3>Browser sessions</h3>
               <p>Only sessions returned by the authenticated API are shown here.</p>
-              {sessions.map((session) => (
-                <div className="key-row" key={session.id}>
-                  <div>
-                    <strong>{session.isCurrent ? "Current device" : "Signed-in device"}</strong>
-                    <span>
-                      {session.userAgent || "Unknown browser"} · active {tokenDate(session.lastUsedAt)}
-                    </span>
-                  </div>
-                  {session.isCurrent ? (
-                    <span className="session-current">Current</span>
-                  ) : (
-                    <button className="button button-danger" onClick={() => void revokeSession(session)}>
-                      <TrashIcon size={15} /> Revoke
-                    </button>
-                  )}
-                </div>
-              ))}
-              {!sessions.length && <p className="field-help">No active sessions were returned.</p>}
+              {loading ? (
+                <KeyRowSkeleton count={2} />
+              ) : (
+                <>
+                  {sessions.map((session) => (
+                    <div className="key-row" key={session.id}>
+                      <div>
+                        <strong>{session.isCurrent ? "Current device" : "Signed-in device"}</strong>
+                        <span>
+                          {session.userAgent || "Unknown browser"} · active {tokenDate(session.lastUsedAt)}
+                        </span>
+                      </div>
+                      {session.isCurrent ? (
+                        <span className="session-current">Current</span>
+                      ) : (
+                        <button className="button button-danger" onClick={() => void revokeSession(session)}>
+                          <TrashIcon size={15} /> Revoke
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {!sessions.length && <p className="field-help">No active sessions were returned.</p>}
+                </>
+              )}
             </div>
           )}
           {(section === "general" || section === "tokens") && (
@@ -242,22 +252,28 @@ export function Settings({ section = "general" }: { section?: Section }) {
                   <PlusIcon size={15} weight="bold" /> New token
                 </button>
               </div>
-              {tokens.map((token) => (
-                <div className="key-row" key={token.id}>
-                  <div>
-                    <strong>{token.label}</strong>
-                    <span>
-                      <code>{token.tokenPrefix}…</code> · {token.scopes.join(", ")} · Created{" "}
-                      {tokenDate(token.createdAt)} · Last used{" "}
-                      {token.lastUsedAt ? tokenDate(token.lastUsedAt) : "never"}
-                    </span>
-                  </div>
-                  <button className="button button-danger" onClick={() => void revokeToken(token)}>
-                    <TrashIcon size={15} /> Revoke
-                  </button>
-                </div>
-              ))}
-              {!tokens.length && <p className="field-help">No active personal access tokens.</p>}
+              {loading ? (
+                <KeyRowSkeleton count={2} />
+              ) : (
+                <>
+                  {tokens.map((token) => (
+                    <div className="key-row" key={token.id}>
+                      <div>
+                        <strong>{token.label}</strong>
+                        <span>
+                          <code>{token.tokenPrefix}…</code> · {token.scopes.join(", ")} · Created{" "}
+                          {tokenDate(token.createdAt)} · Last used{" "}
+                          {token.lastUsedAt ? tokenDate(token.lastUsedAt) : "never"}
+                        </span>
+                      </div>
+                      <button className="button button-danger" onClick={() => void revokeToken(token)}>
+                        <TrashIcon size={15} /> Revoke
+                      </button>
+                    </div>
+                  ))}
+                  {!tokens.length && <p className="field-help">No active personal access tokens.</p>}
+                </>
+              )}
             </div>
           )}
           {(section === "general" || section === "clients") && (
@@ -267,18 +283,24 @@ export function Settings({ section = "general" }: { section?: Section }) {
                 These client registrations are fetched from the identity service. Public third-party client creation is
                 not enabled.
               </p>
-              {clients.map((client) => (
-                <div className="key-row" key={client.id}>
-                  <div>
-                    <strong>{client.name}</strong>
-                    <span>
-                      {client.id} · Authorization code + PKCE · {client.redirectUris.join(", ")}
-                    </span>
-                  </div>
-                  <span className="session-current">Active</span>
-                </div>
-              ))}
-              {!clients.length && <p className="field-help">No first-party clients were returned.</p>}
+              {loading ? (
+                <KeyRowSkeleton count={2} />
+              ) : (
+                <>
+                  {clients.map((client) => (
+                    <div className="key-row" key={client.id}>
+                      <div>
+                        <strong>{client.name}</strong>
+                        <span>
+                          {client.id} · Authorization code + PKCE · {client.redirectUris.join(", ")}
+                        </span>
+                      </div>
+                      <span className="session-current">Active</span>
+                    </div>
+                  ))}
+                  {!clients.length && <p className="field-help">No first-party clients were returned.</p>}
+                </>
+              )}
             </div>
           )}
         </section>

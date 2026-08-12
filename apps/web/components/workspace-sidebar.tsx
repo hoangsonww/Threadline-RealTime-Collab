@@ -16,8 +16,12 @@ import {
 import { useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch, selectedOrganization, type IdentityResponse, type Organization, type Room } from "../lib/api";
+import { getPreferredOrgId, setPreferredOrgId } from "../lib/workspace-preference";
 import { AppSelect } from "./app-select";
 import { Brand } from "./brand";
+import { SidebarRoomSkeleton } from "./skeletons";
+
+const ADD_WORKSPACE = "__add_workspace__";
 
 type Active = "home" | "rooms" | "calendar" | "activity" | "settings" | "members";
 type SidebarData = { identity?: IdentityResponse; organization?: Organization; rooms: Room[]; error?: string };
@@ -32,12 +36,13 @@ const initials = (name: string) =>
 
 export function WorkspaceSidebar({ active }: { active: Active }) {
   const [data, setData] = useState<SidebarData>({ rooms: [] });
+  const [loading, setLoading] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const selectedOrgId = searchParams.get("org");
+  const selectedOrgId = searchParams.get("org") ?? getPreferredOrgId();
 
   const logOut = async () => {
     setLoggingOut(true);
@@ -55,16 +60,20 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     void (async () => {
       try {
         const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
         const organization = selectedOrganization(identity, selectedOrgId);
         if (!organization) throw new Error("Your account has no organization.");
+        setPreferredOrgId(organization.id);
         const result = await apiFetch<{ rooms: Room[] }>(`/v1/orgs/${organization.id}/rooms`);
         if (!cancelled) setData({ identity, organization, rooms: result.rooms });
       } catch (error) {
         if (!cancelled)
           setData({ rooms: [], error: error instanceof Error ? error.message : "Unable to load workspace." });
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -74,6 +83,14 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
 
   const org = data.organization;
   const query = org ? `?org=${encodeURIComponent(org.id)}` : "";
+  const switchOrganization = (value: string) => {
+    if (value === ADD_WORKSPACE) {
+      router.push(`/onboarding?returnTo=${encodeURIComponent(pathname)}`);
+      return;
+    }
+    setPreferredOrgId(value);
+    router.push(`${pathname}?org=${encodeURIComponent(value)}`);
+  };
   const canManageMembers = org?.role === "owner" || org?.role === "admin" || org?.attributes?.canManageMembers === true;
   const nav = [
     ["home", `/app${query}`, HouseIcon, "Home"],
@@ -107,21 +124,21 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
         <div className="workspace-switcher" aria-busy={!org}>
           <span className="workspace-monogram">{org ? initials(org.name) : "··"}</span>
           <div className="workspace-switcher-copy">
-            {data.identity && data.identity.organizations.length > 1 ? (
-              <AppSelect
-                ariaLabel="Current organization"
-                id="current-organization"
-                onValueChange={(organizationId) => router.push(`${pathname}?org=${encodeURIComponent(organizationId)}`)}
-                options={data.identity.organizations.map((organization) => ({
+            <AppSelect
+              ariaLabel="Switch workspace"
+              id="current-organization"
+              onValueChange={switchOrganization}
+              options={[
+                ...(data.identity?.organizations.map((organization) => ({
                   value: organization.id,
                   label: organization.name,
-                }))}
-                value={org?.id ?? ""}
-                variant="sidebar"
-              />
-            ) : (
-              <strong>{org?.name ?? "Loading workspace"}</strong>
-            )}
+                })) ?? []),
+                { value: ADD_WORKSPACE, label: "+ Create or join a workspace" },
+              ]}
+              placeholder="Loading workspace…"
+              value={org?.id ?? ""}
+              variant="sidebar"
+            />
             <small>{data.error ? "Connection required" : "Engineering workspace"}</small>
           </div>
         </div>
@@ -134,18 +151,24 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
         </nav>
         <p className="sidebar-label">Recent rooms</p>
         <div className="sidebar-room-list">
-          {data.rooms.slice(0, 5).map((room) => (
-            <Link className="sidebar-room" href={`/app/rooms/${room.id}`} key={room.id}>
-              <span># {room.name}</span>
-              {room.visibility === "restricted" && (
-                <span className="room-lock" aria-label="Restricted room">
-                  ••
-                </span>
+          {loading ? (
+            <SidebarRoomSkeleton count={3} />
+          ) : (
+            <>
+              {data.rooms.slice(0, 5).map((room) => (
+                <Link className="sidebar-room" href={`/app/rooms/${room.id}`} key={room.id}>
+                  <span># {room.name}</span>
+                  {room.visibility === "restricted" && (
+                    <span className="room-lock" aria-label="Restricted room">
+                      ••
+                    </span>
+                  )}
+                </Link>
+              ))}
+              {!data.rooms.length && (
+                <p className="sidebar-empty">{data.error ? "Sign in to load rooms" : "No rooms yet"}</p>
               )}
-            </Link>
-          ))}
-          {!data.rooms.length && (
-            <p className="sidebar-empty">{data.error ? "Sign in to load rooms" : "No rooms yet"}</p>
+            </>
           )}
         </div>
         <div className="sidebar-bottom">

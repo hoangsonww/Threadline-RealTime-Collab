@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./instrument.js";
 import express from "express";
 import { createApp } from "./application.js";
 import { MemoryRepository, MongoRepository, type Repository } from "./repository.js";

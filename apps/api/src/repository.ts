@@ -49,10 +49,14 @@ export interface Repository {
   updateSession(session: Session): Promise<void>;
   listSessions(userId: string): Promise<Session[]>;
   getOrganizationsForUser(userId: string): Promise<Organization[]>;
+  getOrganization(orgId: string): Promise<Organization | undefined>;
+  getOrganizationByJoinCode(joinCode: string): Promise<Organization | undefined>;
   createOrganization(org: Organization, owner: Membership): Promise<void>;
+  updateOrganization(org: Organization): Promise<void>;
   getMembership(orgId: string, userId: string): Promise<Membership | undefined>;
   listMemberships(orgId: string): Promise<Membership[]>;
   createMembership(membership: Membership): Promise<void>;
+  updateMembership(membership: Membership): Promise<void>;
   getRoom(roomId: string): Promise<Room | undefined>;
   listRooms(orgId: string): Promise<Room[]>;
   createRoom(room: Room, member: RoomMembership): Promise<void>;
@@ -143,14 +147,26 @@ export class MemoryRepository implements Repository {
       .map((membership) => membership.orgId);
     return ids.map((id) => this.orgs.get(id)).filter((org): org is Organization => Boolean(org));
   }
+  async getOrganization(orgId: string) {
+    return this.orgs.get(orgId);
+  }
+  async getOrganizationByJoinCode(joinCode: string) {
+    return [...this.orgs.values()].find((org) => org.joinCode === joinCode);
+  }
   async createOrganization(org: Organization, owner: Membership) {
     this.orgs.set(org.id, org);
     this.memberships.set(owner.id, owner);
+  }
+  async updateOrganization(org: Organization) {
+    this.orgs.set(org.id, org);
   }
   async getMembership(orgId: string, userId: string) {
     return [...this.memberships.values()].find(
       (membership) => membership.orgId === orgId && membership.userId === userId,
     );
+  }
+  async updateMembership(membership: Membership) {
+    this.memberships.set(membership.id, membership);
   }
   async listMemberships(orgId: string) {
     return [...this.memberships.values()]
@@ -313,6 +329,7 @@ export class MongoRepository implements Repository {
       db.collection<RoomEvent>("room_events").createIndex({ roomId: 1, createdAt: -1 }),
       db.collection<CalendarEvent>("calendar_events").createIndex({ orgId: 1, startsAt: 1 }),
       db.collection<Membership>("memberships").createIndex({ orgId: 1, userId: 1 }, { unique: true }),
+      db.collection<Organization>("orgs").createIndex({ joinCode: 1 }, { unique: true }),
       db.collection<RoomMembership>("room_members").createIndex({ roomId: 1, userId: 1 }, { unique: true }),
       db.collection<OAuthClient>("oauth_clients").updateOne(
         { id: "threadline-web" },
@@ -383,12 +400,24 @@ export class MongoRepository implements Repository {
     const memberships = await this.memberships.find({ userId }).toArray();
     return this.orgs.find({ id: { $in: memberships.map((item) => item.orgId) } }).toArray();
   }
+  async getOrganization(orgId: string) {
+    return (await this.orgs.findOne({ id: orgId })) ?? undefined;
+  }
+  async getOrganizationByJoinCode(joinCode: string) {
+    return (await this.orgs.findOne({ joinCode })) ?? undefined;
+  }
   async createOrganization(org: Organization, owner: Membership) {
     await this.orgs.insertOne(org);
     await this.memberships.insertOne(owner);
   }
+  async updateOrganization(org: Organization) {
+    await this.orgs.replaceOne({ id: org.id }, org);
+  }
   async getMembership(orgId: string, userId: string) {
     return (await this.memberships.findOne({ orgId, userId })) ?? undefined;
+  }
+  async updateMembership(membership: Membership) {
+    await this.memberships.replaceOne({ id: membership.id }, membership);
   }
   async listMemberships(orgId: string) {
     return this.memberships.find({ orgId }).sort({ createdAt: 1 }).toArray();

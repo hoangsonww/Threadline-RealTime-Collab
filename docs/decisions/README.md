@@ -9,13 +9,14 @@ Each ADR here captures a decision already made in this codebase — the context,
 
 ## Decisions
 
-| ADR                                                | Decision                                                                      |
-| -------------------------------------------------- | ----------------------------------------------------------------------------- |
-| [0001](0001-durable-objects-for-realtime.md)       | One Cloudflare Durable Object per room for live coordination                  |
-| [0002](0002-webrtc-mesh-not-sfu.md)                | Full-mesh WebRTC, not a media server (SFU)                                    |
-| [0003](0003-repository-interface.md)               | A `Repository` interface with in-memory and MongoDB implementations           |
-| [0004](0004-three-auth-surfaces.md)                | Three separate authentication surfaces: session cookie, PAT, first-party OIDC |
-| [0005](0005-sqlite-hibernatable-durable-object.md) | SQLite-backed, hibernatable Durable Object storage                            |
+| ADR                                                | Decision                                                                         |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [0001](0001-durable-objects-for-realtime.md)       | One Cloudflare Durable Object per room for live coordination                     |
+| [0002](0002-webrtc-mesh-not-sfu.md)                | Full-mesh WebRTC, not a media server (SFU)                                       |
+| [0003](0003-repository-interface.md)               | A `Repository` interface with in-memory and MongoDB implementations              |
+| [0004](0004-three-auth-surfaces.md)                | Three separate authentication surfaces: session cookie, PAT, first-party OIDC    |
+| [0005](0005-sqlite-hibernatable-durable-object.md) | SQLite-backed, hibernatable Durable Object storage                               |
+| [0006](0006-self-service-workspace-membership.md)  | Self-service workspace creation and invite-code joining, not org-at-registration |
 
 ## Adding a new ADR
 

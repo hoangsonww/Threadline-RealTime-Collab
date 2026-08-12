@@ -1,4 +1,4 @@
-# Threadline
+# Threadline — A Real-Time Collaboration Platform
 
 ![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
@@ -15,9 +15,17 @@
 ![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
 ![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)
 ![Swagger%20%2F%20OpenAPI](https://img.shields.io/badge/Swagger%20%2F%20OpenAPI-85EA2D?style=flat-square&logo=swagger&logoColor=black)
+![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat-square&logo=sentry&logoColor=white)
+![Argon2](https://img.shields.io/badge/Argon2-1E1E1E?style=flat-square)
+![Helmet](https://img.shields.io/badge/Helmet-0B3D2E?style=flat-square)
+![Pino](https://img.shields.io/badge/Pino-687634?style=flat-square)
+![Framer Motion](https://img.shields.io/badge/Framer_Motion-0055FF?style=flat-square&logo=framer&logoColor=white)
+![GSAP](https://img.shields.io/badge/GSAP-88CE02?style=flat-square&logo=greensock&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
+![GHCR](https://img.shields.io/badge/GHCR-2496ED?style=flat-square&logo=github&logoColor=white)
+![Trivy](https://img.shields.io/badge/Trivy-1904DA?style=flat-square&logo=trivy&logoColor=white)
 ![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
 ![ESLint](https://img.shields.io/badge/ESLint-4B32C3?style=flat-square&logo=eslint&logoColor=white)
@@ -34,19 +42,25 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [Technology stack](#technology-stack)
 - [How the three services fit together](#how-the-three-services-fit-together)
 - [Trust model](#trust-model)
+- [Onboarding and workspace roles](#onboarding-and-workspace-roles)
 - [Engineering principles](#engineering-principles)
+- [Performance and scaling characteristics](#performance-and-scaling-characteristics)
 - [Real incidents found operating this](#real-incidents-found-operating-this)
 - [Testing and quality gates](#testing-and-quality-gates)
+- [Observability](#observability)
 - [What the interface looks like](#what-the-interface-looks-like)
 - [Project structure](#project-structure)
 - [Running it locally](#running-it-locally)
 - [Environment variables](#environment-variables)
 - [Commands](#commands)
 - [Deploying it yourself](#deploying-it-yourself)
+- [FAQ](#faq)
 - [Documentation index](#documentation-index)
 - [License](#license)
 
 ## Overview
+
+Threadline provides a single, unified workspace for a live call and its durable record, with three independent services each owning exactly one responsibility. The system is designed to demonstrate how to structure a realtime product across a serverless web tier, a serverless API tier, and a genuinely stateful coordination tier, with independent authorization checks at every boundary rather than a single shared trust domain.
 
 - **What a room is:** a live WebRTC call (video, audio, screen share) plus a shared whiteboard, shared notes, a shared code editor, direct peer-to-peer file transfer, and chat — all synced in real time across every connected participant.
 - **What persists:** chat messages, document edits, whiteboard updates, and who joined/left are written into a durable, permission-filtered timeline you can revisit after the call ends. Live-only signals (cursor position, WebRTC offers/answers/ICE candidates, individual whiteboard strokes) are deliberately never persisted — they're too high-frequency to be a meaningful record.
@@ -75,20 +89,25 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 ## What's included
 
 - **Web app (`apps/web`):**
-  - Registration, login, password recovery, and email verification.
+  - Registration, login, password recovery, and email verification. Signing up no longer locks an account into any one workspace — see [Onboarding and workspace roles](#onboarding-and-workspace-roles).
+  - A full-screen onboarding step, shown whenever an account has zero workspaces, offering two card-based paths: create a new workspace (becoming its owner) or join an existing one via invite code.
+  - A real workspace switcher in the sidebar — accounts can belong to more than one workspace, switch between them from a dropdown, and the last-used workspace is remembered (`localStorage`) and restored on the next visit.
   - Organization dashboard: recent rooms, recent activity, a room-creation modal.
   - A dedicated rooms directory listing every room the caller can see.
   - A live room view with five panels — chat, shared notes, a drawable whiteboard, direct peer-to-peer file transfer, and a durable event timeline — plus a separate shared code editor mode and camera/mic/screen-share controls.
   - An organization-wide calendar for scheduling sessions, and an org-wide activity feed aggregating durable events across every visible room.
-  - Organization membership management and per-room membership management (granting explicit access to restricted rooms).
+  - Organization membership management: a shareable, regenerable invite code (owner/admin-controlled, optionally delegable to members), per-member role changes (owner/admin/member) with a last-admin self-demotion guard, and per-room membership management (granting explicit access to restricted rooms).
+  - Loading skeletons across every list-driven page (rooms, members, activity, calendar, sessions/tokens/clients) so a still-loading list is never mistaken for a genuinely empty one.
   - Account settings: appearance/theme, active browser sessions (list and revoke), personal access tokens (create, scope, revoke), first-party OIDC clients, and email verification status.
   - A custom, branded 404 page rather than a framework default.
 - **API (`apps/api`):**
   - Identity and session management, with three independent authentication surfaces: browser session cookies, personal access tokens, and first-party OIDC.
   - Organizations, rooms, room membership, and a calendar resource, all protected by attribute-based access control re-derived on every request.
+  - Self-service workspace creation and invite-code-based joining (`POST /v1/orgs`, `POST /v1/join`), decoupled from registration — see [Onboarding and workspace roles](#onboarding-and-workspace-roles).
   - Personal access token issuance, scoping, listing, and revocation.
   - A first-party OpenID Connect provider implementing Authorization Code + PKCE — no implicit grant, no password grant, no public third-party client registration.
   - An internal ingest endpoint that accepts durable events forwarded by the Durable Object, independently re-checking authorization for the event's acting user rather than trusting the forwarding secret alone.
+  - Error and performance monitoring via Sentry, inert by default (no-ops with no `SENTRY_DSN` configured) — see [Observability](#observability).
   - Fully documented as an OpenAPI 3.1 specification, served live at `/api-docs` (Swagger UI) and `/api-docs/redoc` (ReDoc).
 - **Realtime (`apps/realtime`):**
   - One Cloudflare Durable Object per room, created on demand and addressed deterministically from the room's ID.
@@ -119,9 +138,17 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 | JWT                  | Signs room tickets (HS256, 120-second single-purpose tokens) and OIDC access tokens (RS256, 15-minute expiry)                                                              |
 | Zod                  | Request validation throughout `apps/api`                                                                                                                                   |
 | Swagger / OpenAPI    | Live, interactive API documentation generated from `apps/api/src/openapi.ts`                                                                                               |
+| Sentry               | Error and performance monitoring for `apps/api` and `apps/web`, inert by default — see [Observability](#observability)                                                     |
+| Argon2               | Password hashing (`argon2id`) for stored credentials in `apps/api`                                                                                                         |
+| Helmet               | Security response headers on every `apps/api` route                                                                                                                        |
+| Pino                 | Structured, redacting HTTP request logging for `apps/api` (`pino-http`), auth/cookie headers stripped before anything is logged                                            |
+| Framer Motion        | Modal, transition, and onboarding-flow animation across `apps/web`                                                                                                         |
+| GSAP                 | Landing-page scroll and motion effects in `apps/web`                                                                                                                       |
 | Docker               | Local Compose stack (web, API, MongoDB, Wrangler's local Worker emulation) and production container images                                                                 |
 | Kubernetes           | Self-hosted production alternative to Vercel/Render for the stateless web and API tier — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md)      |
 | GitHub Actions       | Multi-stage CI/CD pipeline: format check, lint, typecheck, test, build, and container/Kubernetes validation on every PR, plus image builds published to GHCR on `main`     |
+| GHCR                 | Container registry for published `web`/`api`/`realtime` images, built on `main` after every check passes                                                                   |
+| Trivy                | Vulnerability scan of every built container image in CI, before publish                                                                                                    |
 | Vitest               | Test runner for both `apps/api` (Node environment, `supertest`) and `apps/realtime` (real Workers runtime via `@cloudflare/vitest-pool-workers`)                           |
 | Playwright           | Browser automation used throughout development for live, two-independent-browser-context manual verification — see [Testing and quality gates](#testing-and-quality-gates) |
 | ESLint               | Lint gate across all three workspaces, zero warnings allowed                                                                                                               |
@@ -155,6 +182,24 @@ graph LR
 - Two secrets are shared across two different platforms (Vercel and Cloudflare) with nothing in the code enforcing they match: `ROOM_TICKET_SECRET` and the `INTERNAL_INGEST_SECRET`/`PERSISTENCE_SECRET` pair. Getting either wrong fails silently at runtime — every ticket rejected, or every durable event silently never persisted — not at deploy time.
 - Full secrets inventory, with a diagram of exactly which secret crosses which boundary and what it authorizes: [`docs/security.md`](docs/security.md#secrets-inventory).
 
+## Onboarding and workspace roles
+
+Registration does not create or join a workspace. A brand-new account has zero organizations until it explicitly does one of two things, both reachable from a full-screen onboarding step (mandatory when an account has no workspace, optional and reachable from the sidebar switcher afterward, for adding another one):
+
+- **Create a workspace** (`POST /v1/orgs`) — the caller becomes its `owner`, and a fresh, unique, regenerable join code is generated for it.
+- **Join a workspace** (`POST /v1/join`) — redeems another workspace's join code and creates a `member` membership. Rate limited the same as a password check (10/15min/IP), since it's a caller-supplied secret checked against every organization in the system.
+
+Three roles exist per membership — `owner`, `admin`, `member` — enforced the same way as every other permission in the system: re-derived from the database on every request, never cached or inferred from an ID.
+
+- **Only an owner may grant `admin`.** An admin (or a member with the delegated `canManageMembers` attribute) can manage members and change roles, but cannot escalate anyone to admin.
+- **An admin can self-demote to member only if another admin already exists** in the organization; otherwise the API rejects it (`400 last_admin`) rather than leaving the workspace with no one able to manage it. This guard only applies to a caller changing their own role — an owner-directed demotion of someone else is exempt, since the owner remains a fallback administrator regardless.
+- **The join code is a genuine secret**, never included in any general-purpose response (`GET /v1/auth/me`, `GET /v1/orgs`) — only the dedicated, permission-gated `GET /v1/orgs/:orgId/invite` endpoint returns it. Viewing or regenerating it is available to owners/admins always, and to plain members only when the organization has opted in via `allowMemberInvites`.
+- **A non-member gets an identical `403` whether the organization they're asking about is real or doesn't exist** — the invite endpoints deliberately never leak organization existence through a status-code difference.
+
+Room and call access was already, and remains, gated on organization membership: `effectiveRoomRole()` returns nothing for a caller with no membership row at all, so an account with zero workspaces has no route into any room regardless of how it got there.
+
+Full design and endpoint-by-endpoint detail: [`docs/api.md`](docs/api.md#organizations--rooms) and [`docs/glossary.md`](docs/glossary.md#j).
+
 ## Engineering principles
 
 - **Independent re-verification, not shared trust.** Every plane re-derives authorization from scratch on every request rather than caching a decision or trusting what an upstream plane already claims to have checked.
@@ -163,11 +208,26 @@ graph LR
 - **Fail closed on misconfiguration, at boot, not at request time.** `apps/api/src/index.ts` refuses to start in production with an insecure or incomplete configuration — short secrets, non-HTTPS origins, a missing signing key — rather than starting with a silently weaker default. See [Boot-time validation](docs/security.md#boot-time-validation).
 - **Secrets are single-purpose and never reused across trust boundaries.** The value that authorizes a WebSocket connection is not the value that authorizes a durable-event webhook call, which is not the value that signs an OIDC access token. A leak of one does not compromise what the others protect.
 - **No media server, by design.** WebRTC media takes the shortest path available — peer-to-peer — rather than routing through infrastructure Threadline would have to run, secure, and pay for per minute of call time. The cost of that choice (mesh bandwidth scales with participant count) is written down, not hidden: [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md).
+- **Explicit field whitelists over blacklists when serializing anything from a database driver.** `const { secretField, ...rest } = doc` looks safe but silently includes whatever else the driver happened to attach to that object — the MongoDB driver mutates an inserted document by adding its own `_id`, which leaked into two responses this exact way before being replaced with an explicit `publicOrganization()` whitelist. The identical, still-unfixed pattern elsewhere in the codebase is tracked, not hidden: [`docs/roadmap.md`](docs/roadmap.md).
+- **A unique index on a field added to an already-populated collection is a migration, not just a schema change.** It needs a backfill pass before (or atomically with) rollout, or it can take the whole service down at boot — this one did, in production, for real. See [the incident that taught this](docs/operations.md#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request).
 - **Honesty over polish in the documentation itself.** The incidents, known limitations, and roadmap gaps below are real and current, not a marketing summary — see [Real incidents found operating this](#real-incidents-found-operating-this) and [`docs/roadmap.md`](docs/roadmap.md).
+
+## Performance and scaling characteristics
+
+Concrete numbers, not marketing — what actually happens as usage grows, and where the real ceilings are.
+
+| Dimension                             | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WebRTC mesh bandwidth per participant | O(n − 1) upload connections for a room of _n_ people — a 6-person room means 5 simultaneous outbound video/audio streams from each participant's browser. Fine at the small-team scale this product targets; a 20-person room would mean 19 outbound streams per participant, which most consumer upload bandwidth can't sustain. See [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md) for the SFU alternative and why it wasn't chosen.        |
+| Durable Object idle cost              | Zero ongoing compute for a room with no active WebSocket connections — Cloudflare hibernates the object between messages (`state.acceptWebSocket()`), so an idle-but-connected room costs nothing until the next message arrives. A brand-new room's Durable Object is created lazily, on the first request that names its ID.                                                                                                                        |
+| API request latency                   | Serverless cold start on Vercel for `apps/api` (a few hundred ms on a cold instance, low single-digit ms once warm) plus one MongoDB Atlas round trip per request that touches the database — every ABAC check re-queries membership rather than caching it, which is a deliberate correctness trade-off (see [Engineering principles](#engineering-principles)), not an oversight.                                                                   |
+| Rate limits                           | Login/register/password-reset/email-verification: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. All backed by an atomic Mongo counter, not process-local memory, so the limit holds across every serverless instance handling that IP — see [`docs/security.md`](docs/security.md#rate-limits).                                             |
+| Horizontal scaling (Kubernetes)       | The stateless web/API tier autoscales 2–10 replicas via HPA on CPU, with a PodDisruptionBudget and a soft topology-spread preference so replicas don't collapse onto one node. `apps/realtime` doesn't scale this way at all — it isn't stateless, and Cloudflare's Durable Object placement (one instance per room, globally) is the scaling model, not replica count. See [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). |
+| Room-event history                    | The in-memory timeline broadcast to connected clients keeps the most recent 200 events per room session; the durable `RoomEvent` collection in MongoDB is unbounded and is what the activity feed and timeline actually read from after a reload.                                                                                                                                                                                                     |
 
 ## Real incidents found operating this
 
-This deployment has broken for real, more than once. Every incident — what broke, why, how it was found, how it was fixed — is written up in full in [`docs/operations.md`](docs/operations.md#incidents). All ten, briefly:
+This deployment has broken for real, more than once. Every incident — what broke, why, how it was found, how it was fixed — is written up in full in [`docs/operations.md`](docs/operations.md#incidents). Twelve so far, briefly:
 
 - A WebRTC negotiation bug where two participants could join the same room and simply never connect, because neither side happened to offer first.
 - A Durable Object hibernation quirk where a participant who'd just disconnected kept appearing "present" to everyone else, indefinitely, because the departing socket still counted itself present in the same broadcast that announced its own departure.
@@ -179,6 +239,8 @@ This deployment has broken for real, more than once. Every incident — what bro
 - `WEB_ORIGIN` pointed at `localhost:3000` in a production deployment, silently rejecting every real cross-origin request as a CSRF violation.
 - `OIDC_ISSUER` set to a URL that included a path, which crashed the _entire_ API at boot — every route, not just the OIDC ones — because `parseOrigin()` rejects any value that isn't a bare origin.
 - A seeded first-party OIDC client whose redirect URI never updated when the web app's domain changed, breaking login through that specific flow until the seed logic was made self-healing.
+- Deploying the workspace/role rework's new unique index on organizations' join codes crashed **every** API request in production, because ~22 pre-existing organizations had no `joinCode` at all and the index build failed on duplicate `null`s — fixed with a one-off backfill, not a rollback.
+- Deploying an unrelated feature branch that happened to be based on an older `main` silently reverted the live API to a previous, still-superseded registration schema for several minutes, because the deploy source was the wrong branch rather than the one actually intended.
 
 ## Testing and quality gates
 
@@ -189,6 +251,14 @@ This deployment has broken for real, more than once. Every incident — what bro
   npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
   ```
 - Full test-suite structure, exactly what's covered, and every known coverage gap: [`docs/testing.md`](docs/testing.md).
+
+## Observability
+
+Both `apps/api` (`@sentry/node`) and `apps/web` (`@sentry/nextjs`) are instrumented for error and performance monitoring, and both are fully inert with no configured DSN — every `Sentry.*` call safely no-ops, so nothing about running the app locally or in CI depends on having a Sentry account.
+
+- `apps/api`: `src/instrument.ts` runs as the literal first import of `src/index.ts`, ahead of everything else, so Sentry can instrument what loads after it. The final Express error handler reports only its genuinely-unexpected branch — validation errors (`z.ZodError`) are expected user-input noise and are never sent.
+- `apps/web`: standard App Router instrumentation (`instrumentation.ts` for server/edge, `instrumentation-client.ts` for the browser), plus `next.config.ts` wrapped with `withSentryConfig` for optional source-map upload (skipped, not failed, without an org/auth token — see [Environment variables](#environment-variables)).
+- Enable it by setting `SENTRY_DSN` (API) and `NEXT_PUBLIC_SENTRY_DSN` (web) as environment variables in each deployment target and redeploying — no code changes required.
 
 ## What the interface looks like
 
@@ -244,21 +314,25 @@ Threadline/
 │   │   ├── lib/                apiFetch() HTTP client, PeerMesh WebRTC client
 │   │   └── public/            static assets
 │   ├── api/                   Express REST API (Vercel / any Node 22 host)
+│   │   ├── Dockerfile
 │   │   └── src/
 │   │       ├── domain.ts       entity types (User, Room, Session, PAT, ...)
 │   │       ├── repository.ts   Repository interface + Memory/Mongo implementations
 │   │       ├── policy.ts       ABAC decision logic
 │   │       ├── application.ts  createApp() factory, routes, middleware
 │   │       ├── security.ts     hashing, tokens, cookies
+│   │       ├── instrument.ts   Sentry.init(), imported first in src/index.ts
 │   │       └── openapi.ts      OpenAPI 3.1 document
 │   └── realtime/               Cloudflare Worker + Durable Object
+│       ├── Dockerfile           local Wrangler emulation, not the Cloudflare deploy path
 │       └── src/index.ts        RoomDurableObject
 ├── docs/                      Deep-dive documentation
 │   ├── decisions/               Architecture Decision Records
 │   └── screenshots/             Curated UI screenshots used across the docs
 ├── infra/
-│   ├── docker/                  Dockerfiles and docker-compose.yml
+│   ├── docker/                  Fixtures consumed by apps/realtime/Dockerfile (dev-only secrets)
 │   └── kubernetes/               Kustomize base + overlays
+├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB)
 ├── ARCHITECTURE.md            Root-level architecture reference (this repo's single-file overview)
 └── .github/workflows/         CI pipeline (format, lint, typecheck, test, build)
 ```
@@ -293,13 +367,14 @@ Open `http://localhost:3000`. `npm run dev` starts all three services, wired to 
 
 The three services need different configuration, summarized here — the full table with every variable, its purpose, and production requirements lives in [`docs/deployment.md`](docs/deployment.md).
 
-| Service         | Needs                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time)                                                                        |
-| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` |
-| `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                               |
+| Service         | Needs                                                                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
+| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`              |
+| `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                                                                     |
 
 - `ROOM_TICKET_SECRET` must be identical on `apps/api` and `apps/realtime`. `PERSISTENCE_SECRET` (Worker) must be identical to `INTERNAL_INGEST_SECRET` (API) — different names, same value. Nothing in the code enforces either match; getting one wrong is exactly what caused two of the [real incidents](#real-incidents-found-operating-this) above.
+- Every Sentry variable is optional and additive — omitting all of them leaves both SDKs inert (no-op), never a startup or build failure. See [Observability](#observability).
 - Never put MongoDB, OIDC, room-ticket, email-delivery, or TURN credentials in `NEXT_PUBLIC_*` variables — those are shipped to every browser that loads the page.
 - Local defaults exist for everything except `MONGODB_URI`, so local dev needs no secrets configured at all beyond copying `.dev.vars.example`. Production has no such fallback — see [Boot-time validation](docs/security.md#boot-time-validation).
 
@@ -328,6 +403,32 @@ The three services need different configuration, summarized here — the full ta
 - Zero-cost preview path (free tiers of Vercel + MongoDB Atlas + Cloudflare, no domain purchase): see [`docs/deployment.md`](docs/deployment.md#zero-cost-public-preview).
 - Self-hosting the stateless web/API tier on Kubernetes instead of Vercel/Render, while Cloudflare remains the production owner of room Durable Objects: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
 - Exactly which URLs this project's own live deployment runs at, and how that maps onto the general deployment guide: [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
+
+## FAQ
+
+**Is this used by real teams, or is it a demo?**
+It's a real, running deployment — not a multi-tenant SaaS with paying customers, but not a static demo either. Registering a real account on the [live deployment](#live-deployment) creates a real workspace, backed by the same production database and the same code in this repository. "Production-ready" here means correctly designed and genuinely operated (real incidents, real trust boundaries, real test coverage where it exists), not "battle-tested at scale with a support team."
+
+**Why MongoDB instead of a relational database?**
+The data model — users, rooms, memberships, a growing durable event timeline — is document-shaped, and every read is already scoped by a single indexed ID (organization, room, or user), not a cross-table join. The `Repository` interface ([ADR-0003](docs/decisions/0003-repository-interface.md)) means this choice isn't load-bearing either way — swapping the datastore touches one file, not the route handlers.
+
+**Why a first-party OIDC provider instead of Auth0, Clerk, or NextAuth?**
+Partly to build the actual flow (Authorization Code + PKCE, JWKS, token rotation) rather than configure someone else's, and partly because a third-party auth platform is one more service in the exact trust model this repository is about being honest regarding — see [Trust model](#trust-model).
+
+**Why Cloudflare Durable Objects instead of Redis/Ably/Pusher for presence?**
+Those solve "many stateless servers agree on shared state" by adding a coordination service Threadline would have to run, operate, and pay for. A Durable Object gives one authoritative, in-memory instance per room natively, with no separate service and no consistency protocol to write by hand. [ADR-0001](docs/decisions/0001-durable-objects-for-realtime.md) has the full tradeoff against that alternative.
+
+**Can I run this without Vercel or Cloudflare?**
+`apps/web` and `apps/api` can run anywhere Node 22 runs — Docker, Kubernetes, bare metal — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). `apps/realtime` genuinely cannot: it's written against the Durable Objects API, which is Cloudflare-specific, and there's no portable equivalent without rewriting the presence/signaling layer against a different coordination primitive entirely.
+
+**What happens to an in-progress call if `apps/api` goes down?**
+Nothing, live — chat, presence, and WebRTC signaling all keep working, since none of that path touches the API. New room creation, login, and durable-event history reads fail. Full breakdown: [Failure modes and resilience](ARCHITECTURE.md#failure-modes-and-resilience).
+
+**How much does this cost to run?**
+The [zero-cost public preview](docs/deployment.md#zero-cost-public-preview) path runs on free tiers of Vercel, MongoDB Atlas, and Cloudflare Workers, no domain purchase — real limits apply (cold starts, free-tier caps), but genuinely $0. This project's own [live deployment](#live-deployment) runs this way.
+
+**Why is there no automated test suite for the frontend?**
+Named honestly as the single largest testing gap in the repository rather than hidden — see [Testing and quality gates](#testing-and-quality-gates) for exactly what that means and what catches bugs instead.
 
 ## Documentation index
 

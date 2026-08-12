@@ -27,6 +27,17 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      # A soft preference, not a hard requirement (ScheduleAnyway) — a
+      # single-node cluster (e.g. the development overlay) still schedules
+      # every replica fine, it just stops PodDisruptionBudget/HPA from being
+      # undermined by every replica landing on the one node that goes down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: threadline-api
       containers:
         - name: api
           image: threadline-api:latest
@@ -95,6 +106,15 @@ spec:
                 secretKeyRef:
                   name: threadline-secrets
                   key: AUTH_DELIVERY_SECRET
+            # Optional — error/performance monitoring. Sentry.init() no-ops
+            # without a DSN, so a Secret with no SENTRY_DSN key is fine; the
+            # pod starts identically either way.
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: threadline-secrets
+                  key: SENTRY_DSN
+                  optional: true
           startupProbe:
             httpGet:
               path: /health

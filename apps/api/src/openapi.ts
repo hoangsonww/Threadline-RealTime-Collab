@@ -107,15 +107,12 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         post: {
           tags: ["Authentication"],
           operationId: "register",
-          summary: "Create an account and its first organization",
+          summary: "Create an account",
           description:
-            "Creates a user, an owner membership, and a browser session. A verification action is queued when account-action delivery is configured.",
+            "Creates a user and a browser session only — the account starts with no organization. A verification action is queued when account-action delivery is configured. Direct the person to `POST /v1/orgs` or `POST /v1/join` next.",
           requestBody: { required: true, content: json(schema("RegistrationInput")) },
           responses: {
-            "201": response(
-              "Account and organization created; a session cookie is set.",
-              schema("RegistrationResponse"),
-            ),
+            "201": response("Account created; a session cookie is set.", schema("RegistrationResponse")),
             "409": errors.Conflict,
             "422": errors.Validation,
             "429": errors.RateLimited,
@@ -252,6 +249,38 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           responses: {
             "200": response("Visible organizations.", schema("OrganizationsResponse")),
             "401": errors.Unauthorized,
+          },
+        },
+        post: {
+          tags: ["Organizations"],
+          operationId: "createOrganization",
+          summary: "Create a new workspace",
+          description: "Requires `orgs:write`. The caller becomes the workspace owner with a fresh, unique join code.",
+          security: identitySecurity,
+          requestBody: { required: true, content: json(schema("CreateOrganizationInput")) },
+          responses: {
+            "201": response("Workspace created.", schema("OrganizationResponse")),
+            "401": errors.Unauthorized,
+            "422": errors.Validation,
+          },
+        },
+      },
+      "/v1/join": {
+        post: {
+          tags: ["Organizations"],
+          operationId: "joinOrganization",
+          summary: "Join a workspace by invite code",
+          description:
+            "Requires `orgs:write`. Redeems a workspace's join code and creates a `member` membership. Rate limited 10/15min/IP, the same as a password check, since this is a caller-supplied secret being verified.",
+          security: identitySecurity,
+          requestBody: { required: true, content: json(schema("JoinOrganizationInput")) },
+          responses: {
+            "201": response("Joined the workspace.", schema("OrganizationResponse")),
+            "401": errors.Unauthorized,
+            "404": errors.NotFound,
+            "409": errors.Conflict,
+            "422": errors.Validation,
+            "429": errors.RateLimited,
           },
         },
       },
@@ -416,6 +445,79 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             "403": errors.Forbidden,
             "404": errors.NotFound,
             "409": errors.Conflict,
+            "422": errors.Validation,
+          },
+        },
+      },
+      "/v1/orgs/{orgId}/invite": {
+        get: {
+          tags: ["Organizations"],
+          operationId: "getOrganizationInvite",
+          summary: "Read a workspace's join code",
+          description:
+            "Owners and admins can always read this; a plain member can only when the workspace has `allowMemberInvites` enabled. A caller with no membership in `orgId` gets `403`, the same as a real org they can't view — this endpoint deliberately never distinguishes 'wrong permission' from 'no such organization'.",
+          security: identitySecurity,
+          parameters: [pathParameter("orgId", "Organization identifier.")],
+          responses: {
+            "200": response("The current join code.", schema("InviteResponse")),
+            "401": errors.Unauthorized,
+            "403": errors.Forbidden,
+          },
+        },
+      },
+      "/v1/orgs/{orgId}/invite/regenerate": {
+        post: {
+          tags: ["Organizations"],
+          operationId: "regenerateOrganizationInvite",
+          summary: "Regenerate a workspace's join code",
+          description:
+            "Invalidates the previous code immediately. Same permission gate — and same no-existence-leak behavior — as reading the invite.",
+          security: identitySecurity,
+          parameters: [pathParameter("orgId", "Organization identifier.")],
+          responses: {
+            "200": response("A newly generated join code.", schema("InviteResponse")),
+            "401": errors.Unauthorized,
+            "403": errors.Forbidden,
+          },
+        },
+      },
+      "/v1/orgs/{orgId}/settings": {
+        patch: {
+          tags: ["Organizations"],
+          operationId: "updateOrganizationSettings",
+          summary: "Update workspace settings",
+          description: "Requires `orgs:write` plus `manage_members`. Currently controls `allowMemberInvites`.",
+          security: identitySecurity,
+          parameters: [pathParameter("orgId", "Organization identifier.")],
+          requestBody: { required: true, content: json(schema("UpdateOrganizationSettingsInput")) },
+          responses: {
+            "200": response("Updated settings.", schema("UpdateOrganizationSettingsInput")),
+            "401": errors.Unauthorized,
+            "403": errors.Forbidden,
+            "404": errors.NotFound,
+            "422": errors.Validation,
+          },
+        },
+      },
+      "/v1/orgs/{orgId}/members/{userId}": {
+        patch: {
+          tags: ["Organizations"],
+          operationId: "updateOrganizationMemberRole",
+          summary: "Change a member's role",
+          description:
+            "Requires `orgs:write` plus `manage_members`; only an owner may assign `admin`. The owner's own role cannot be changed here, and an admin cannot self-demote to member while they are the organization's only admin.",
+          security: identitySecurity,
+          parameters: [
+            pathParameter("orgId", "Organization identifier."),
+            pathParameter("userId", "Target user identifier."),
+          ],
+          requestBody: { required: true, content: json(schema("UpdateOrganizationMemberInput")) },
+          responses: {
+            "200": response("Updated member.", schema("OrganizationMemberResponse")),
+            "400": errors.BadRequest,
+            "401": errors.Unauthorized,
+            "403": errors.Forbidden,
+            "404": errors.NotFound,
             "422": errors.Validation,
           },
         },
@@ -691,15 +793,20 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         Organization: {
           type: "object",
-          required: ["id", "name", "slug", "createdAt"],
+          required: ["id", "name", "slug", "allowMemberInvites", "createdAt"],
           properties: {
             id: { type: "string", format: "uuid" },
             name: { type: "string" },
             slug: { type: "string" },
+            allowMemberInvites: {
+              type: "boolean",
+              description: "When true, any member (not just owner/admin) may read and share the join code.",
+            },
             createdAt: { type: "string", format: "date-time" },
             role: { type: "string", enum: ["owner", "admin", "member"] },
             attributes: schema("MembershipAttributes"),
           },
+          description: "The join code is never included here — see `GET /v1/orgs/{orgId}/invite`.",
         },
         MembershipAttributes: {
           type: "object",
@@ -822,13 +929,12 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RegistrationInput: {
           type: "object",
-          required: ["email", "username", "displayName", "password", "organizationName"],
+          required: ["email", "username", "displayName", "password"],
           properties: {
             email: { type: "string", format: "email" },
             username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
             displayName: { type: "string", minLength: 2, maxLength: 80 },
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
-            organizationName: { type: "string", minLength: 2, maxLength: 80 },
           },
         },
         LoginInput: {
@@ -879,6 +985,31 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             role: { type: "string", enum: ["admin", "member"], default: "member" },
             attributes: schema("MembershipAttributes"),
           },
+        },
+        CreateOrganizationInput: {
+          type: "object",
+          required: ["name"],
+          properties: { name: { type: "string", minLength: 2, maxLength: 80 } },
+        },
+        JoinOrganizationInput: {
+          type: "object",
+          required: ["code"],
+          properties: {
+            code: {
+              type: "string",
+              description: "An 8-character join code. Case-insensitive; whitespace is ignored.",
+            },
+          },
+        },
+        UpdateOrganizationSettingsInput: {
+          type: "object",
+          required: ["allowMemberInvites"],
+          properties: { allowMemberInvites: { type: "boolean" } },
+        },
+        UpdateOrganizationMemberInput: {
+          type: "object",
+          required: ["role"],
+          properties: { role: { type: "string", enum: ["admin", "member"] } },
         },
         AddRoomMemberInput: {
           type: "object",
@@ -962,8 +1093,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RegistrationResponse: {
           type: "object",
-          required: ["user", "organization"],
-          properties: { user: schema("User"), organization: schema("Organization") },
+          required: ["user"],
+          properties: { user: schema("User") },
         },
         LoginResponse: { type: "object", required: ["user"], properties: { user: schema("User") } },
         AcceptedMessage: { type: "object", required: ["message"], properties: { message: { type: "string" } } },
@@ -989,6 +1120,19 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           type: "object",
           required: ["organizations"],
           properties: { organizations: { type: "array", items: schema("Organization") } },
+        },
+        OrganizationResponse: {
+          type: "object",
+          required: ["organization"],
+          properties: { organization: schema("Organization") },
+        },
+        InviteResponse: {
+          type: "object",
+          required: ["joinCode", "allowMemberInvites"],
+          properties: {
+            joinCode: { type: "string" },
+            allowMemberInvites: { type: "boolean" },
+          },
         },
         RoomsResponse: {
           type: "object",

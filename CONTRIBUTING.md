@@ -63,7 +63,7 @@ See [`docs/testing.md`](docs/testing.md#full-local-check-mirrors-what-should-gat
 
 - Keep the PR description focused on _why_, with a short test plan — what you ran, what you observed. If the change fixes a bug, describe the symptom before the fix, the way the incidents in [`docs/operations.md`](docs/operations.md#incidents) are written up.
 - Reference the doc(s) you updated alongside the code change. A behavior change without a doc update is treated as incomplete, not as a follow-up — undocumented decisions get silently re-litigated later.
-- If the change is a genuine architectural decision (a new dependency, a new data model relationship, a new trust boundary) rather than an incremental fix, it likely deserves its own ADR in [`docs/decisions/`](docs/decisions/README.md), numbered after [0005](docs/decisions/0005-sqlite-hibernatable-durable-object.md).
+- If the change is a genuine architectural decision (a new dependency, a new data model relationship, a new trust boundary) rather than an incremental fix, it likely deserves its own ADR in [`docs/decisions/`](docs/decisions/README.md), numbered after [0006](docs/decisions/0006-self-service-workspace-membership.md).
 
 ## Reporting a security issue
 
