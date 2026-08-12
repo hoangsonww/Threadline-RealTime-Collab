@@ -240,11 +240,24 @@ export function createApp(options: AppOptions, app = express()) {
   // The join code is deliberately never included here — it's only ever returned by
   // the dedicated, permission-checked GET /v1/orgs/:orgId/invite endpoint, so a
   // member without invite permission can never read it off /v1/auth/me or GET /v1/orgs.
+  // An explicit whitelist rather than a `{ joinCode: _joinCode, ...rest }`
+  // destructure — the driver's `insertOne` mutates the object passed to it by
+  // adding Mongo's internal `_id`, and a blacklist-by-destructure would let
+  // that (and anything else added to the raw document later) leak straight
+  // into the response right along with it.
+  const publicOrganization = (org: Organization) => ({
+    id: org.id,
+    name: org.name,
+    slug: org.slug,
+    allowMemberInvites: org.allowMemberInvites,
+    createdAt: org.createdAt,
+  });
+
   const organizationsForUser = async (userId: string) => {
     const organizations = await options.repository.getOrganizationsForUser(userId);
     return Promise.all(
       organizations.map(async (organization) => {
-        const { joinCode: _joinCode, ...publicOrg } = organization;
+        const publicOrg = publicOrganization(organization);
         const membership = await options.repository.getMembership(organization.id, userId);
         return membership ? { ...publicOrg, role: membership.role, attributes: membership.attributes } : publicOrg;
       }),
@@ -362,8 +375,7 @@ export function createApp(options: AppOptions, app = express()) {
         targetId: org.id,
         createdAt: now(),
       });
-      const { joinCode: _joinCode, ...publicOrg } = org;
-      response.status(201).json({ organization: { ...publicOrg, role: "owner" as const } });
+      response.status(201).json({ organization: { ...publicOrganization(org), role: "owner" as const } });
     } catch (error) {
       next(error);
     }
@@ -402,8 +414,7 @@ export function createApp(options: AppOptions, app = express()) {
         metadata: { orgId: org.id, via: "join_code" },
         createdAt: now(),
       });
-      const { joinCode: _joinCode, ...publicOrg } = org;
-      response.status(201).json({ organization: { ...publicOrg, role: membership.role } });
+      response.status(201).json({ organization: { ...publicOrganization(org), role: membership.role } });
     } catch (error) {
       next(error);
     }
