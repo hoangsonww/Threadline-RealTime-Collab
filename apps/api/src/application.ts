@@ -1134,7 +1134,8 @@ export function createApp(options: AppOptions, app = express()) {
 
   app.post("/oauth/token", async (request, response, next) => {
     try {
-      const grant = z.string().parse(request.body.grant_type);
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      const grant = z.string().parse(body.grant_type);
       if (grant === "authorization_code") {
         const input = z
           .object({
@@ -1144,7 +1145,7 @@ export function createApp(options: AppOptions, app = express()) {
             redirect_uri: z.string().url(),
             code_verifier: z.string().min(43).max(128),
           })
-          .parse(request.body);
+          .parse(body);
         const code = await options.repository.consumeAuthorizationCode(digest(input.code));
         if (
           !code ||
@@ -1189,7 +1190,7 @@ export function createApp(options: AppOptions, app = express()) {
       if (grant === "refresh_token") {
         const input = z
           .object({ grant_type: z.literal("refresh_token"), refresh_token: z.string().min(20), client_id: z.string() })
-          .parse(request.body);
+          .parse(body);
         const refresh = await options.repository.consumeRefreshToken(digest(input.refresh_token));
         if (!refresh || refresh.expiresAt <= now() || refresh.revokedAt || refresh.clientId !== input.client_id)
           return clientError(response, 400, "invalid_grant", "The refresh token is invalid or expired.");
