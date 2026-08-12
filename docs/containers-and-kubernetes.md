@@ -75,15 +75,17 @@ WEB_ORIGIN
 OIDC_ISSUER
 AUTH_ACTION_ORIGIN
 COOKIE_SECURE=true
+SENTRY_DSN            # optional — error/performance monitoring, inert if unset
 ```
 
-Next.js substitutes `NEXT_PUBLIC_*` values during its build, so the web image needs its public configuration when it is built. `THREADLINE_API_ORIGIN` is server-only: it tells Next.js where to proxy `/api/identity/*` and must be reachable from the web container.
+Next.js substitutes `NEXT_PUBLIC_*` values during its build, so the web image needs its public configuration when it is built. `THREADLINE_API_ORIGIN` is server-only: it tells Next.js where to proxy `/api/identity/*` and must be reachable from the web container. `NEXT_PUBLIC_SENTRY_DSN` is optional — a build without it produces an image where Sentry stays inert at runtime.
 
 ```bash
 docker build -f apps/web/Dockerfile \
   --build-arg THREADLINE_API_ORIGIN=http://threadline-api:4000 \
   --build-arg NEXT_PUBLIC_API_ORIGIN=/api/identity \
   --build-arg NEXT_PUBLIC_REALTIME_ORIGIN=https://threadline-realtime.<account>.workers.dev \
+  --build-arg NEXT_PUBLIC_SENTRY_DSN=https://<key>@o<org-id>.ingest.us.sentry.io/<project-id> \
   -t threadline-web:1.0.0 .
 
 docker build -f apps/api/Dockerfile -t threadline-api:1.0.0 .
@@ -138,6 +140,8 @@ kubectl -n threadline-production create secret generic threadline-secrets \
   --from-literal=AUTH_DELIVERY_SECRET="$(openssl rand -hex 32)"
 ```
 
+`SENTRY_DSN` is deliberately not in that command — `api-deployment.yaml` references it as an `optional: true` secret key, so the pod starts identically whether or not it's present. Add it the same way, `--from-literal=SENTRY_DSN='https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>'`, only if you want error/performance monitoring active; the container never fails to start over a missing key.
+
 Store the two generated secrets in your password manager or secret manager. Set the same `ROOM_TICKET_SECRET` in Cloudflare as `ROOM_TICKET_SECRET`, and set the same `INTERNAL_INGEST_SECRET` in Cloudflare as `PERSISTENCE_SECRET`. Set the Worker `PERSISTENCE_WEBHOOK` to the public API host:
 
 ```text
@@ -164,7 +168,7 @@ kubectl -n threadline-production rollout status deployment/threadline-api
 kubectl -n threadline-production rollout status deployment/threadline-web
 ```
 
-The base includes non-root containers, read-only filesystems, health probes, PodDisruptionBudgets, and CPU autoscaling. Start with the development overlay for a one-replica verification deployment; it shares the same production safeguards but lowers replicas.
+The base includes non-root containers, read-only filesystems (each with a writable `emptyDir` mounted at `/tmp`, the one path either runtime needs to write to), health probes, PodDisruptionBudgets, CPU autoscaling, and a soft topology spread constraint per deployment (`whenUnsatisfiable: ScheduleAnyway`) so a multi-node cluster prefers not to land every replica of the same service on one node — a single-node cluster, like the development overlay's, still schedules everything without issue. Start with the development overlay for a one-replica verification deployment; it shares the same production safeguards but lowers replicas.
 
 ## More than one cluster
 

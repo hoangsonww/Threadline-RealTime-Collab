@@ -30,6 +30,9 @@ services:
       MONGODB_URI: mongodb://mongo:27017/threadline
       ROOM_TICKET_SECRET: development-ticket-secret-change-me
       INTERNAL_INGEST_SECRET: development-ingest-secret-change-me
+      # Optional — unset means Sentry stays inactive. Only picked up from the
+      # host shell; nothing here requires it to be set.
+      SENTRY_DSN: ${SENTRY_DSN:-}
     ports:
       - "4000:4000"
     depends_on:
@@ -79,6 +82,9 @@ services:
         THREADLINE_API_ORIGIN: http://api:4000
         NEXT_PUBLIC_API_ORIGIN: /api/identity
         NEXT_PUBLIC_REALTIME_ORIGIN: http://localhost:8787
+        # Optional — unset means Sentry stays inactive. Build-time only, like
+        # every other NEXT_PUBLIC_* value.
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
     restart: unless-stopped
     ports:
       - "3000:3000"
