@@ -420,3 +420,14 @@ describe("Threadline identity API", () => {
     expect(response.body.error).toBe("invalid_request");
   });
 });
+
+describe("POST /oauth/token grant_type validation", () => {
+  it("returns 400 invalid_request for blank or missing grant_type", async () => {
+    const { app } = await createTestApp();
+    for (const payload of [{}, { grant_type: "" }, { grant_type: "   " }]) {
+      const res = await request(app).post("/oauth/token").send(payload);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("invalid_request");
+    }
+  });
+});

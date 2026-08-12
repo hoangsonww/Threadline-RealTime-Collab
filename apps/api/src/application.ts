@@ -1,4 +1,4 @@
-﻿import { createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -1135,7 +1135,7 @@ export function createApp(options: AppOptions, app = express()) {
   app.post("/oauth/token", async (request, response, next) => {
     try {
       const body = (request.body ?? {}) as Record<string, unknown>;
-      const grant = z.string().parse(body.grant_type);
+      const grant = z.string().trim().min(1).parse(body.grant_type);
       if (grant === "authorization_code") {
         const input = z
           .object({
