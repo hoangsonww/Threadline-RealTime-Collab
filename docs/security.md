@@ -8,6 +8,7 @@ This is the trust model in one sentence: **every plane re-verifies authorization
 - [Password & credential storage](#password--credential-storage)
 - [Session cookies](#session-cookies)
 - [Rate limits](#rate-limits)
+- [Workspace invite codes and role changes](#workspace-invite-codes-and-role-changes)
 - [Personal access tokens](#personal-access-tokens)
 - [Room tickets](#room-tickets)
 - [Realtime → API ingest secret](#realtime--api-ingest-secret)
@@ -16,6 +17,7 @@ This is the trust model in one sentence: **every plane re-verifies authorization
 - [Boot-time validation](#boot-time-validation)
 - [Audit log](#audit-log)
 - [Content Security Policy](#content-security-policy)
+- [Error monitoring (Sentry)](#error-monitoring-sentry)
 - [Reporting a vulnerability](#reporting-a-vulnerability)
 
 ## Secrets inventory
@@ -83,6 +85,9 @@ flowchart LR
 | `POST /v1/auth/register`                   | 8 / hour    | same                           |
 | `POST /v1/auth/password-reset/request`     | 5 / hour    | same                           |
 | `POST /v1/auth/email-verification/request` | 5 / hour    | same                           |
+| `POST /v1/join`                            | 10 / 15 min | same                           |
+
+`POST /v1/join` checks a caller-supplied secret (an organization's invite code) against every organization in the system — the same shape of risk as a password check, and it's rate limited at the same tier as login rather than left unlimited, to keep guessing codes at scale (across however many organizations exist) from being free.
 
 IPs are hashed (never stored raw) even in the rate-limit bucket key. Counters are stored via `Repository.incrementRateLimit` (an atomic, upsert-based Mongo aggregation-pipeline update in production, a plain `Map` in `MemoryRepository`) rather than process-local memory, so the limit is genuinely shared across every serverless instance handling that IP — a naive in-process `Map` gets a fresh, empty bucket per cold start on Vercel, which made the limit trivially bypassable (and, worse, inconsistently enforced for legitimate users) before this was fixed. The key uses `request.baseUrl`, not `request.path` — Express rebases `req.path` to be relative to an `app.use` mount point, so an exact-path mount like `app.use("/v1/auth/login", ...)` sees `req.path === "/"` for every request regardless of which of the four routes matched; `request.baseUrl` is the literal mounted path and is what actually distinguishes one rate-limited endpoint's bucket from another's. Getting this wrong doesn't error — it silently merges all four endpoints' budgets into one shared counter. See [`containers-and-kubernetes.md`](containers-and-kubernetes.md) for how the API is scaled in practice.
 
@@ -116,6 +121,18 @@ flowchart TB
 ```
 
 Four independent, correctly-isolated buckets, consistent no matter which of Vercel's serverless instances happens to serve a given request. See [`operations.md`](operations.md#incident-rate-limiter-shared-one-bucket-across-every-endpoint) for how this was actually found.
+
+## Workspace invite codes and role changes
+
+An organization's `joinCode` is a genuine secret, treated the same way as a password or token elsewhere in this document — not a value that happens to be inconvenient to guess.
+
+- **Never returned by any general-purpose response.** `GET /v1/auth/me` and `GET /v1/orgs` both serialize organizations through a `publicOrganization()` whitelist that simply doesn't include `joinCode` as a field — it isn't blacklisted out of a broader object, it was never put in. The only endpoint that ever returns it is `GET /v1/orgs/:orgId/invite`.
+- **Gated by `canInviteToOrganization(membership, organization)`** (`apps/api/src/policy.ts`): an owner or admin can always view or regenerate it; a plain member can only when the organization has explicitly opted in via `organization.allowMemberInvites`. That flag defaults to `false` on every new workspace.
+- **No organization-existence oracle.** `GET /v1/orgs/:orgId/invite` and `POST /v1/orgs/:orgId/invite/regenerate` check the caller's membership row _before_ looking up the organization at all — a caller with no membership gets `403` whether `orgId` belongs to a real organization they're not part of or doesn't exist. This mirrors the existing convention set by `GET /v1/orgs/:orgId/members`, which has always worked this way. An earlier version of these two new endpoints checked organization existence first (`404` if absent) and permission second, which meant a `403` vs `404` response let any authenticated caller enumerate which organization IDs were real — caught before merge, not in production.
+- **Regenerating invalidates the previous code immediately** — the field is simply overwritten, so a leaked code stops working the moment someone with permission notices and regenerates.
+- **Role changes are re-derived, never cached.** Only an organization's `owner` may grant the `admin` role; an admin (or a member with the delegated `canManageMembers` attribute) can manage members and change roles between `admin`/`member`, but the API independently re-checks `caller?.role !== "owner"` on every such request rather than trusting anything the client asserts. An admin can self-demote to `member` only if another admin already exists in the organization (`400 last_admin` otherwise) — but this guard applies only when the caller is changing their _own_ role; an owner may demote any admin, including the last one, since the owner remains a fallback administrator regardless of how many admins exist.
+
+**A broader pattern worth naming**, since it's caused a real bug here and could recur elsewhere: constructing a response by _excluding_ specific fields from an object that came straight out of a driver call (`const { joinCode: _joinCode, ...rest } = org`) is fragile, because it silently includes anything else that object happens to carry — including fields the application never intended to expose. The MongoDB driver's `insertOne()` mutates the object passed to it by adding its own `_id` (an `ObjectId`), which was leaking into `POST /v1/orgs` and `POST /v1/join` responses through exactly this pattern before it was replaced with an explicit `publicOrganization()` field whitelist. That fix only covers the organization-serialization path touched by this change — the pre-existing, unrelated `POST /v1/orgs/:orgId/rooms` handler builds its response the same blacklist-by-destructure way and has the identical `_id` leak today. It's low severity (an internal database identifier, not a credential or personal data) but is a known, open gap — see [`roadmap.md`](roadmap.md).
 
 ## Personal access tokens
 
@@ -182,6 +199,14 @@ Every sensitive mutation writes an `AuditLog` row: `auth.register`, `auth.login`
 ## Content Security Policy
 
 The Express app applies `helmet`'s defaults to every API response. The documentation pages (`/api-docs`, `/api-docs/redoc`) serve a separately-scoped, stricter CSP (`apps/api/src/api-docs.ts`) that only allow-lists the specific CDN origins Swagger UI/ReDoc need (`cdn.jsdelivr.net`, Google Fonts) — nothing else, and `object-src`/`base-uri` are locked to `'none'`.
+
+## Error monitoring (Sentry)
+
+Both `apps/api` (`@sentry/node`) and `apps/web` (`@sentry/nextjs`) are wired for Sentry, and both are completely inert without `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN` configured — `Sentry.init()` is simply never called (`apps/api/src/instrument.ts` guards it behind `if (process.env.SENTRY_DSN)`), and every `Sentry.*` call elsewhere no-ops without an active client.
+
+When a DSN _is_ configured, both SDKs run with their stock defaults — `apps/api/src/instrument.ts` and `apps/web`'s `sentry.*.config.ts`/`instrumentation-client.ts` files only set `dsn`, `environment`, and `tracesSampleRate` (20% of transactions in production, 100% in development; error events are not sampled). Nothing here adds a `beforeSend` hook, a custom `integrations` list, or any explicit data-scrubbing beyond what the SDK does on its own — the API's response body is never sent to Sentry, but an exception's own message and stack trace are, verbatim. Concretely: if application code ever threw an error whose message included something sensitive (an email address, a token), that would reach Sentry. The codebase doesn't currently do this deliberately anywhere, but it also isn't independently guarded against — worth knowing before treating "we use Sentry" as a blanket no-PII guarantee. `sendDefaultPii` is not enabled, so the SDK does not automatically attach request IP addresses or user identifiers to events on its own.
+
+Source-map upload for `apps/web` (readable, un-minified stack traces) is a separate, optional, build-time-only step gated behind `SENTRY_ORG`/`SENTRY_AUTH_TOKEN` — skipping it only means stack traces stay minified in Sentry's UI; it never fails a build or affects runtime behavior.
 
 ## Reporting a vulnerability
 

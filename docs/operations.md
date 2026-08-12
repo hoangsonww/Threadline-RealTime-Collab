@@ -17,6 +17,8 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
   - [Incident: Vercel build broken by a floating `next` version](#incident-vercel-build-broken-by-a-floating-next-version)
   - [Incident: the seeded OIDC client's redirect URI never updated](#incident-the-seeded-oidc-clients-redirect-uri-never-updated)
   - [Incident: stale presence after disconnect, and the whiteboard off-tab loss](#incident-stale-presence-after-disconnect-and-the-whiteboard-off-tab-loss)
+  - [Incident: a unique index on a pre-existing collection took down every request](#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request)
+  - [Incident: deploying from the wrong branch silently reverted production](#incident-deploying-from-the-wrong-branch-silently-reverted-production)
 - [Known gaps carried here from live testing](#known-gaps-carried-here-from-live-testing)
 
 ## Monitoring and health checks
@@ -130,6 +132,26 @@ flowchart TD
 ### Incident: stale presence after disconnect, and the whiteboard off-tab loss
 
 Both are real UI/realtime bugs (not configuration), each with its own root-cause diagram in the doc that owns that code: the presence race in [`realtime.md`](realtime.md#a-second-quieter-hibernation-quirk-the-departing-socket-counts-itself-present), the whiteboard mount lifecycle in [`frontend.md`](frontend.md#the-whiteboard-had-to-stay-mounted-off-tab). Both were found the same way — two genuinely independent, cookie-isolated browser sessions against the live deployment, not a single-session smoke test — which is also why neither showed up in earlier single-participant screenshot passes of this exact app.
+
+### Incident: a unique index on a pre-existing collection took down every request
+
+**Symptom:** Immediately after deploying the org/workspace rework, **every** API request started returning `FUNCTION_INVOCATION_FAILED` — identical failure mode to the `OIDC_ISSUER` incident above, but a completely different cause.
+
+**Root cause:** The new `Organization.joinCode` field shipped with a unique index — `db.collection<Organization>("orgs").createIndex({ joinCode: 1 }, { unique: true })` in `MongoRepository.connect()` — added on the assumption that the collection would only ever contain documents created under the new schema. Production Mongo already had roughly 22 organizations from before this change, none of which had a `joinCode` field at all, so Mongo treated every one of them as `joinCode: null` for indexing purposes. A unique index tolerates at most one `null`; building it against 22 failed outright, and because index creation happens inside `connect()` — before the app finishes booting — the failure took the entire process down on every cold start, not just requests that touched an organization.
+
+**Found by:** `vercel logs` on the failing deployment, which surfaced the actual driver error directly: `MongoServerError: Index build failed ... E11000 duplicate key error collection: threadline.orgs index: joinCode_1 dup key: { joinCode: null }`.
+
+**Fix:** A one-off script connected to the production database directly, found every organization missing a `joinCode`, and backfilled each with a freshly generated, mutually unique code (plus `allowMemberInvites: false` where that was also missing) before the next boot attempted to build the index again. No code change was needed — the index definition was correct for the schema going forward; the data just had to catch up to it first. The general lesson: a unique index added for a field on an _existing_ collection is a migration, not just a schema change, and needs a backfill pass before (or atomically with) rollout whenever the collection might already have rows.
+
+### Incident: deploying from the wrong branch silently reverted production
+
+**Symptom:** Shortly after adding Sentry instrumentation on a separate branch and deploying `apps/api` to production, live registration through the actual deployed app started requiring a workspace name again — behavior from before the org/workspace rework, which had already been live in production for hours.
+
+**Root cause:** The Sentry work had been branched from `main` before the org/workspace rework's PR was merged into it, since that PR was still open. Deploying that branch straight to Vercel with `vercel --prod` deployed exactly what was on it — a version of `apps/api` older than what was already live — silently rolling production back to the pre-rework registration schema. Nothing about the deploy command or its output indicated this; a `vercel --prod` deploy from the "wrong" branch looks identical to one from the right branch.
+
+**Found by:** Testing the live registration flow against the actual production URL immediately after the deploy, as a matter of habit, rather than trusting a green build.
+
+**Fix:** Cherry-picked the Sentry commit onto the correct branch (the one with the org/workspace rework already on it) instead of the stale one, redeployed `apps/api` and `apps/web` from that combined branch, and re-verified the registration flow lived. The standalone Sentry pull request was closed in favor of folding its one commit into the existing, still-open PR, so there is exactly one branch to deploy from going forward rather than two that can silently diverge.
 
 ## Known gaps carried here from live testing
 

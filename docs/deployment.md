@@ -2,11 +2,13 @@
 
 Threadline uses three production runtimes by design.
 
-| Component       | Target                     | Required configuration                                                                                                                                          |
-| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         |
-| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` |
-| `apps/realtime` | Cloudflare Workers         | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK=<api>/v1/internal/room-events`, `PERSISTENCE_SECRET`                                                                 |
+| Component       | Target                     | Required configuration                                                                                                                                          | Optional                                                                  |
+| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (source maps) |
+| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` | `SENTRY_DSN`                                                              |
+| `apps/realtime` | Cloudflare Workers         | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK=<api>/v1/internal/room-events`, `PERSISTENCE_SECRET`                                                                 | —                                                                         |
+
+Every "Optional" variable above is additive only — omitting all of them leaves Sentry inert (both SDKs no-op without a DSN) and never fails a build or a boot. See [`security.md`](security.md#error-monitoring-sentry) for exactly what each does and doesn't capture.
 
 For Docker Compose and Kubernetes—including one or more clusters—see [`containers-and-kubernetes.md`](containers-and-kubernetes.md). Kubernetes self-hosts only the stateless web/API plane; Cloudflare remains the production owner of room Durable Objects.
 
@@ -94,6 +96,8 @@ Free-provider hostnames do not share a cookie site. The web app includes a Verce
 THREADLINE_API_ORIGIN=https://threadline-api.onrender.com
 NEXT_PUBLIC_API_ORIGIN=/api/identity
 NEXT_PUBLIC_REALTIME_ORIGIN=https://threadline-realtime.<account>.workers.dev
+# Optional — error/performance monitoring, inert without it:
+# NEXT_PUBLIC_SENTRY_DSN=https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>
 ```
 
 Set the API configuration to:
@@ -109,6 +113,8 @@ INTERNAL_INGEST_SECRET=<different long random value>
 OIDC_PRIVATE_JWK=<output from generate:oidc-key>
 AUTH_DELIVERY_WEBHOOK=<email delivery endpoint>
 AUTH_DELIVERY_SECRET=<long random value>
+# Optional — error/performance monitoring, inert without it:
+# SENTRY_DSN=https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>
 ```
 
 `OIDC_ISSUER` (and `WEB_ORIGIN`) must be a bare origin — no path, no trailing slash. `index.ts`'s `parseOrigin()` enforces this by round-tripping the value through `new URL(value).origin` and rejecting anything that doesn't match exactly; a value like `https://host/api/identity` throws at boot and takes down every request (`FUNCTION_INVOCATION_FAILED` on Vercel), not just OIDC routes. `OIDC_ISSUER` identifies the API itself (it ends up in signed ticket and token `iss` claims) — it is not the browser-facing URL the OIDC flow is reachable at, so it does not need to encode the same-origin rewrite path.

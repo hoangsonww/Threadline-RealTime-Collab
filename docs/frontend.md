@@ -10,6 +10,7 @@ Next.js App Router, no global state library, no server-side data fetching for au
 - [Shell composition](#shell-composition)
 - [`lib/api.ts`: the entire HTTP client](#libapits-the-entire-http-client)
 - [Theme](#theme)
+- [Loading states](#loading-states)
 - [Component inventory](#component-inventory)
 - [Room workspace: connection lifecycle and reconnection](#room-workspace-connection-lifecycle-and-reconnection)
 - [Client-side ABAC is UX only](#client-side-abac-is-ux-only)
@@ -112,7 +113,14 @@ Every `/app/**` page except the room view follows the same shape:
 
 ### The `?org=` convention
 
-Every org-scoped page (`dashboard`, `rooms-directory`, `calendar-view`, `activity-feed`, `workspace-sidebar`, `workspace-topbar`) reads the active organization from a `?org=<id>` search param via `useSearchParams()`, and resolves it with the same helper every time:
+Every org-scoped page (`dashboard`, `rooms-directory`, `calendar-view`, `activity-feed`, `workspace-sidebar`, `workspace-topbar`) resolves the active organization the same three-step way: an explicit `?org=<id>` search param, else the last workspace the caller switched to (`lib/workspace-preference.ts`, a `localStorage` read — same pattern as the theme preference below, key `threadline-last-org`), else the account's first organization. Every page computes its `selectedOrgId` the same way:
+
+```ts
+// each org-scoped page
+const selectedOrgId = searchParams.get("org") ?? getPreferredOrgId();
+```
+
+...and then resolves the actual `Organization` object with the same helper every page shares:
 
 ```ts
 // lib/api.ts
@@ -121,7 +129,7 @@ export function selectedOrganization(identity: IdentityResponse, organizationId?
 }
 ```
 
-No component owns "the current organization" as shared state — the URL is the only source of truth, and every page independently falls back to the caller's first organization when the param is absent or doesn't match. Switching organizations in the sidebar is a `router.push` that changes only the query string.
+No component owns "the current organization" as shared React state — the URL plus `localStorage` are the only sources of truth, and every page independently resolves the same way. Switching organizations in the sidebar's workspace switcher (`workspace-sidebar.tsx`, always a real dropdown listing every organization the account belongs to, plus a "+ Create or join a workspace" entry that routes to `/onboarding`) does two things: `setPreferredOrgId(orgId)` and a `router.push` that changes the query string — so the choice both takes effect immediately and persists across the next visit with no `?org=` param at all, including right after login.
 
 ## `lib/api.ts`: the entire HTTP client
 
@@ -159,26 +167,35 @@ The server always renders `data-theme="dark"` — there's no cookie-based theme 
 
 Fonts are `next/font/google`: **Manrope** for `--font-geist` (variable weight) and **IBM Plex Mono** for `--font-geist-mono` (weights 400/500/600/700) — the CSS variable names are legacy (kept to avoid touching every `var(--font-geist)` reference in `globals.css` when the font itself changed) and don't literally mean "Geist" anymore.
 
+## Loading states
+
+Every list-driven page (dashboard, rooms directory, activity feed, calendar, org members, room members, the sidebar's recent-rooms list, settings' sessions/tokens/clients lists, and the room chat/timeline panels) used to initialize its data as an empty array and render its "genuinely empty" copy ("No rooms yet", "No members loaded", …) from that same initial state — so on every load, before the first fetch actually resolved, the UI briefly showed "there's nothing here" even when there was. This is invisible on a fast local network and only shows up as a real flash under production-like latency.
+
+Each affected page now tracks an explicit `loading` boolean (or, in `room-workspace.tsx`, reuses an existing "not yet fetched" signal — `!room && !roomError`) and renders one of three states in order: a skeleton while loading, the real content once it resolves, or the true empty state only if the fetch resolved and the list is actually empty. `skeletons.tsx` provides the shared `Skeleton` primitive plus per-shape row/card skeletons, each built from the exact same container class as the real row (`.room-card`, `.member-row`, `.activity-item`, `.calendar-event`, `.key-row`, `.sidebar-room`, …) so nothing shifts dimensions when real data swaps in.
+
+This class of bug is invisible in code review — it only manifests during an actual network round trip — so it was verified live rather than by inspection: a Playwright script using `page.context().newCDPSession(page)` + `Network.emulateNetworkConditions` (or, for a single endpoint, `page.route()` with an injected `page.waitForTimeout()` delay) to slow down specific API responses, then screenshotting mid-load to confirm the skeleton actually renders before the real state takes over.
+
 ## Component inventory
 
-| Component                                                           | Role                                                                                                                                           |
-| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace-gate.tsx`                                                | The one auth checkpoint for `/app/**`                                                                                                          |
-| `app-shell.tsx`, `workspace-sidebar.tsx`, `workspace-topbar.tsx`    | Persistent chrome for every non-room `/app/**` page                                                                                            |
-| `brand.tsx`                                                         | Logo mark, reused in the landing nav and both auth panes                                                                                       |
-| `auth-shell.tsx`, `auth-form.tsx`, `password-recovery.tsx`          | Login/register/forgot/reset/verify screens                                                                                                     |
-| `onboarding-flow.tsx`                                               | `/onboarding`: create-a-workspace / join-by-invite-code cards, shown whenever the account has zero organizations                               |
-| `landing-atmosphere.tsx`, `landing-motion.tsx`, `landing-scene.tsx` | Marketing page visuals and GSAP/motion interaction                                                                                             |
-| `dashboard.tsx`                                                     | `/app` home: recent rooms, recent activity, room-creation modal                                                                                |
-| `rooms-directory.tsx`                                               | `/app/rooms`: full room list                                                                                                                   |
-| `calendar-view.tsx`                                                 | `/app/calendar`: event list + scheduling modal                                                                                                 |
-| `activity-feed.tsx`                                                 | `/app/activity`: durable event stream across visible rooms                                                                                     |
-| `members-page.tsx`                                                  | `/app/org/:orgId/members`: organization membership, invite-code panel, role management                                                         |
-| `room-members-page.tsx`                                             | `/app/rooms/:roomId/members`: explicit room membership, only route with a "grant access" flow                                                  |
-| `settings.tsx`                                                      | `/app/settings(/security,/sessions,/tokens,/clients)`: appearance, sessions, PATs, OIDC clients, email verification                            |
-| `room-workspace.tsx`                                                | The live room: chat, notes, whiteboard, files, timeline, WebRTC controls — see [`realtime.md`](realtime.md)                                    |
-| `app-select.tsx`                                                    | Custom accessible listbox/combobox used by every form that isn't a plain text input (role select, room visibility, calendar room picker, etc.) |
-| `theme-sync.tsx`, `theme-preference.tsx`                            | Theme application (mount-time) and the user-facing toggle                                                                                      |
+| Component                                                           | Role                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workspace-gate.tsx`                                                | The one auth checkpoint for `/app/**`                                                                                                                                                                                                                             |
+| `app-shell.tsx`, `workspace-sidebar.tsx`, `workspace-topbar.tsx`    | Persistent chrome for every non-room `/app/**` page                                                                                                                                                                                                               |
+| `brand.tsx`                                                         | Logo mark, reused in the landing nav and both auth panes                                                                                                                                                                                                          |
+| `auth-shell.tsx`, `auth-form.tsx`, `password-recovery.tsx`          | Login/register/forgot/reset/verify screens                                                                                                                                                                                                                        |
+| `onboarding-flow.tsx`                                               | `/onboarding`: create-a-workspace / join-by-invite-code cards. Two modes — mandatory (zero organizations, no way out) and optional "add another workspace" (reached from the sidebar switcher, has a close button back to the current workspace)                  |
+| `landing-atmosphere.tsx`, `landing-motion.tsx`, `landing-scene.tsx` | Marketing page visuals and GSAP/motion interaction                                                                                                                                                                                                                |
+| `dashboard.tsx`                                                     | `/app` home: recent rooms, recent activity, room-creation modal                                                                                                                                                                                                   |
+| `rooms-directory.tsx`                                               | `/app/rooms`: full room list                                                                                                                                                                                                                                      |
+| `calendar-view.tsx`                                                 | `/app/calendar`: event list + scheduling modal                                                                                                                                                                                                                    |
+| `activity-feed.tsx`                                                 | `/app/activity`: durable event stream across visible rooms                                                                                                                                                                                                        |
+| `members-page.tsx`                                                  | `/app/org/:orgId/members`: organization membership, invite-code panel, role management                                                                                                                                                                            |
+| `room-members-page.tsx`                                             | `/app/rooms/:roomId/members`: explicit room membership, only route with a "grant access" flow                                                                                                                                                                     |
+| `settings.tsx`                                                      | `/app/settings(/security,/sessions,/tokens,/clients)`: appearance, sessions, PATs, OIDC clients, email verification                                                                                                                                               |
+| `room-workspace.tsx`                                                | The live room: chat, notes, whiteboard, files, timeline, WebRTC controls — see [`realtime.md`](realtime.md)                                                                                                                                                       |
+| `app-select.tsx`                                                    | Custom accessible listbox/combobox used by every form that isn't a plain text input (role select, room visibility, calendar room picker, etc.)                                                                                                                    |
+| `skeletons.tsx`                                                     | Shimmer loading placeholders (rooms, members, activity, calendar, sessions/tokens/clients) built from the same container classes as the real content, so a still-loading list is never mistaken for a genuinely empty one — see [Loading states](#loading-states) |
+| `theme-sync.tsx`, `theme-preference.tsx`                            | Theme application (mount-time) and the user-facing toggle                                                                                                                                                                                                         |
 
 ## Room workspace: connection lifecycle and reconnection
 

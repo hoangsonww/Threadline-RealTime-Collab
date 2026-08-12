@@ -15,9 +15,17 @@
 ![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
 ![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)
 ![Swagger%20%2F%20OpenAPI](https://img.shields.io/badge/Swagger%20%2F%20OpenAPI-85EA2D?style=flat-square&logo=swagger&logoColor=black)
+![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat-square&logo=sentry&logoColor=white)
+![Argon2](https://img.shields.io/badge/Argon2-1E1E1E?style=flat-square)
+![Helmet](https://img.shields.io/badge/Helmet-0B3D2E?style=flat-square)
+![Pino](https://img.shields.io/badge/Pino-687634?style=flat-square)
+![Framer Motion](https://img.shields.io/badge/Framer_Motion-0055FF?style=flat-square&logo=framer&logoColor=white)
+![GSAP](https://img.shields.io/badge/GSAP-88CE02?style=flat-square&logo=greensock&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
+![GHCR](https://img.shields.io/badge/GHCR-2496ED?style=flat-square&logo=github&logoColor=white)
+![Trivy](https://img.shields.io/badge/Trivy-1904DA?style=flat-square&logo=trivy&logoColor=white)
 ![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
 ![ESLint](https://img.shields.io/badge/ESLint-4B32C3?style=flat-square&logo=eslint&logoColor=white)
@@ -34,9 +42,11 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [Technology stack](#technology-stack)
 - [How the three services fit together](#how-the-three-services-fit-together)
 - [Trust model](#trust-model)
+- [Onboarding and workspace roles](#onboarding-and-workspace-roles)
 - [Engineering principles](#engineering-principles)
 - [Real incidents found operating this](#real-incidents-found-operating-this)
 - [Testing and quality gates](#testing-and-quality-gates)
+- [Observability](#observability)
 - [What the interface looks like](#what-the-interface-looks-like)
 - [Project structure](#project-structure)
 - [Running it locally](#running-it-locally)
@@ -75,20 +85,25 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 ## What's included
 
 - **Web app (`apps/web`):**
-  - Registration, login, password recovery, and email verification.
+  - Registration, login, password recovery, and email verification. Signing up no longer locks an account into any one workspace — see [Onboarding and workspace roles](#onboarding-and-workspace-roles).
+  - A full-screen onboarding step, shown whenever an account has zero workspaces, offering two card-based paths: create a new workspace (becoming its owner) or join an existing one via invite code.
+  - A real workspace switcher in the sidebar — accounts can belong to more than one workspace, switch between them from a dropdown, and the last-used workspace is remembered (`localStorage`) and restored on the next visit.
   - Organization dashboard: recent rooms, recent activity, a room-creation modal.
   - A dedicated rooms directory listing every room the caller can see.
   - A live room view with five panels — chat, shared notes, a drawable whiteboard, direct peer-to-peer file transfer, and a durable event timeline — plus a separate shared code editor mode and camera/mic/screen-share controls.
   - An organization-wide calendar for scheduling sessions, and an org-wide activity feed aggregating durable events across every visible room.
-  - Organization membership management and per-room membership management (granting explicit access to restricted rooms).
+  - Organization membership management: a shareable, regenerable invite code (owner/admin-controlled, optionally delegable to members), per-member role changes (owner/admin/member) with a last-admin self-demotion guard, and per-room membership management (granting explicit access to restricted rooms).
+  - Loading skeletons across every list-driven page (rooms, members, activity, calendar, sessions/tokens/clients) so a still-loading list is never mistaken for a genuinely empty one.
   - Account settings: appearance/theme, active browser sessions (list and revoke), personal access tokens (create, scope, revoke), first-party OIDC clients, and email verification status.
   - A custom, branded 404 page rather than a framework default.
 - **API (`apps/api`):**
   - Identity and session management, with three independent authentication surfaces: browser session cookies, personal access tokens, and first-party OIDC.
   - Organizations, rooms, room membership, and a calendar resource, all protected by attribute-based access control re-derived on every request.
+  - Self-service workspace creation and invite-code-based joining (`POST /v1/orgs`, `POST /v1/join`), decoupled from registration — see [Onboarding and workspace roles](#onboarding-and-workspace-roles).
   - Personal access token issuance, scoping, listing, and revocation.
   - A first-party OpenID Connect provider implementing Authorization Code + PKCE — no implicit grant, no password grant, no public third-party client registration.
   - An internal ingest endpoint that accepts durable events forwarded by the Durable Object, independently re-checking authorization for the event's acting user rather than trusting the forwarding secret alone.
+  - Error and performance monitoring via Sentry, inert by default (no-ops with no `SENTRY_DSN` configured) — see [Observability](#observability).
   - Fully documented as an OpenAPI 3.1 specification, served live at `/api-docs` (Swagger UI) and `/api-docs/redoc` (ReDoc).
 - **Realtime (`apps/realtime`):**
   - One Cloudflare Durable Object per room, created on demand and addressed deterministically from the room's ID.
@@ -119,9 +134,17 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 | JWT                  | Signs room tickets (HS256, 120-second single-purpose tokens) and OIDC access tokens (RS256, 15-minute expiry)                                                              |
 | Zod                  | Request validation throughout `apps/api`                                                                                                                                   |
 | Swagger / OpenAPI    | Live, interactive API documentation generated from `apps/api/src/openapi.ts`                                                                                               |
+| Sentry               | Error and performance monitoring for `apps/api` and `apps/web`, inert by default — see [Observability](#observability)                                                     |
+| Argon2               | Password hashing (`argon2id`) for stored credentials in `apps/api`                                                                                                         |
+| Helmet               | Security response headers on every `apps/api` route                                                                                                                        |
+| Pino                 | Structured, redacting HTTP request logging for `apps/api` (`pino-http`), auth/cookie headers stripped before anything is logged                                            |
+| Framer Motion        | Modal, transition, and onboarding-flow animation across `apps/web`                                                                                                         |
+| GSAP                 | Landing-page scroll and motion effects in `apps/web`                                                                                                                       |
 | Docker               | Local Compose stack (web, API, MongoDB, Wrangler's local Worker emulation) and production container images                                                                 |
 | Kubernetes           | Self-hosted production alternative to Vercel/Render for the stateless web and API tier — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md)      |
 | GitHub Actions       | Multi-stage CI/CD pipeline: format check, lint, typecheck, test, build, and container/Kubernetes validation on every PR, plus image builds published to GHCR on `main`     |
+| GHCR                 | Container registry for published `web`/`api`/`realtime` images, built on `main` after every check passes                                                                   |
+| Trivy                | Vulnerability scan of every built container image in CI, before publish                                                                                                    |
 | Vitest               | Test runner for both `apps/api` (Node environment, `supertest`) and `apps/realtime` (real Workers runtime via `@cloudflare/vitest-pool-workers`)                           |
 | Playwright           | Browser automation used throughout development for live, two-independent-browser-context manual verification — see [Testing and quality gates](#testing-and-quality-gates) |
 | ESLint               | Lint gate across all three workspaces, zero warnings allowed                                                                                                               |
@@ -155,6 +178,24 @@ graph LR
 - Two secrets are shared across two different platforms (Vercel and Cloudflare) with nothing in the code enforcing they match: `ROOM_TICKET_SECRET` and the `INTERNAL_INGEST_SECRET`/`PERSISTENCE_SECRET` pair. Getting either wrong fails silently at runtime — every ticket rejected, or every durable event silently never persisted — not at deploy time.
 - Full secrets inventory, with a diagram of exactly which secret crosses which boundary and what it authorizes: [`docs/security.md`](docs/security.md#secrets-inventory).
 
+## Onboarding and workspace roles
+
+Registration does not create or join a workspace. A brand-new account has zero organizations until it explicitly does one of two things, both reachable from a full-screen onboarding step (mandatory when an account has no workspace, optional and reachable from the sidebar switcher afterward, for adding another one):
+
+- **Create a workspace** (`POST /v1/orgs`) — the caller becomes its `owner`, and a fresh, unique, regenerable join code is generated for it.
+- **Join a workspace** (`POST /v1/join`) — redeems another workspace's join code and creates a `member` membership. Rate limited the same as a password check (10/15min/IP), since it's a caller-supplied secret checked against every organization in the system.
+
+Three roles exist per membership — `owner`, `admin`, `member` — enforced the same way as every other permission in the system: re-derived from the database on every request, never cached or inferred from an ID.
+
+- **Only an owner may grant `admin`.** An admin (or a member with the delegated `canManageMembers` attribute) can manage members and change roles, but cannot escalate anyone to admin.
+- **An admin can self-demote to member only if another admin already exists** in the organization; otherwise the API rejects it (`400 last_admin`) rather than leaving the workspace with no one able to manage it. This guard only applies to a caller changing their own role — an owner-directed demotion of someone else is exempt, since the owner remains a fallback administrator regardless.
+- **The join code is a genuine secret**, never included in any general-purpose response (`GET /v1/auth/me`, `GET /v1/orgs`) — only the dedicated, permission-gated `GET /v1/orgs/:orgId/invite` endpoint returns it. Viewing or regenerating it is available to owners/admins always, and to plain members only when the organization has opted in via `allowMemberInvites`.
+- **A non-member gets an identical `403` whether the organization they're asking about is real or doesn't exist** — the invite endpoints deliberately never leak organization existence through a status-code difference.
+
+Room and call access was already, and remains, gated on organization membership: `effectiveRoomRole()` returns nothing for a caller with no membership row at all, so an account with zero workspaces has no route into any room regardless of how it got there.
+
+Full design and endpoint-by-endpoint detail: [`docs/api.md`](docs/api.md#organizations--rooms) and [`docs/glossary.md`](docs/glossary.md#j).
+
 ## Engineering principles
 
 - **Independent re-verification, not shared trust.** Every plane re-derives authorization from scratch on every request rather than caching a decision or trusting what an upstream plane already claims to have checked.
@@ -167,7 +208,7 @@ graph LR
 
 ## Real incidents found operating this
 
-This deployment has broken for real, more than once. Every incident — what broke, why, how it was found, how it was fixed — is written up in full in [`docs/operations.md`](docs/operations.md#incidents). All ten, briefly:
+This deployment has broken for real, more than once. Every incident — what broke, why, how it was found, how it was fixed — is written up in full in [`docs/operations.md`](docs/operations.md#incidents). Twelve so far, briefly:
 
 - A WebRTC negotiation bug where two participants could join the same room and simply never connect, because neither side happened to offer first.
 - A Durable Object hibernation quirk where a participant who'd just disconnected kept appearing "present" to everyone else, indefinitely, because the departing socket still counted itself present in the same broadcast that announced its own departure.
@@ -179,6 +220,8 @@ This deployment has broken for real, more than once. Every incident — what bro
 - `WEB_ORIGIN` pointed at `localhost:3000` in a production deployment, silently rejecting every real cross-origin request as a CSRF violation.
 - `OIDC_ISSUER` set to a URL that included a path, which crashed the _entire_ API at boot — every route, not just the OIDC ones — because `parseOrigin()` rejects any value that isn't a bare origin.
 - A seeded first-party OIDC client whose redirect URI never updated when the web app's domain changed, breaking login through that specific flow until the seed logic was made self-healing.
+- Deploying the workspace/role rework's new unique index on organizations' join codes crashed **every** API request in production, because ~22 pre-existing organizations had no `joinCode` at all and the index build failed on duplicate `null`s — fixed with a one-off backfill, not a rollback.
+- Deploying an unrelated feature branch that happened to be based on an older `main` silently reverted the live API to a previous, still-superseded registration schema for several minutes, because the deploy source was the wrong branch rather than the one actually intended.
 
 ## Testing and quality gates
 
@@ -189,6 +232,14 @@ This deployment has broken for real, more than once. Every incident — what bro
   npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
   ```
 - Full test-suite structure, exactly what's covered, and every known coverage gap: [`docs/testing.md`](docs/testing.md).
+
+## Observability
+
+Both `apps/api` (`@sentry/node`) and `apps/web` (`@sentry/nextjs`) are instrumented for error and performance monitoring, and both are fully inert with no configured DSN — every `Sentry.*` call safely no-ops, so nothing about running the app locally or in CI depends on having a Sentry account.
+
+- `apps/api`: `src/instrument.ts` runs as the literal first import of `src/index.ts`, ahead of everything else, so Sentry can instrument what loads after it. The final Express error handler reports only its genuinely-unexpected branch — validation errors (`z.ZodError`) are expected user-input noise and are never sent.
+- `apps/web`: standard App Router instrumentation (`instrumentation.ts` for server/edge, `instrumentation-client.ts` for the browser), plus `next.config.ts` wrapped with `withSentryConfig` for optional source-map upload (skipped, not failed, without an org/auth token — see [Environment variables](#environment-variables)).
+- Enable it by setting `SENTRY_DSN` (API) and `NEXT_PUBLIC_SENTRY_DSN` (web) as environment variables in each deployment target and redeploying — no code changes required.
 
 ## What the interface looks like
 
@@ -244,21 +295,25 @@ Threadline/
 │   │   ├── lib/                apiFetch() HTTP client, PeerMesh WebRTC client
 │   │   └── public/            static assets
 │   ├── api/                   Express REST API (Vercel / any Node 22 host)
+│   │   ├── Dockerfile
 │   │   └── src/
 │   │       ├── domain.ts       entity types (User, Room, Session, PAT, ...)
 │   │       ├── repository.ts   Repository interface + Memory/Mongo implementations
 │   │       ├── policy.ts       ABAC decision logic
 │   │       ├── application.ts  createApp() factory, routes, middleware
 │   │       ├── security.ts     hashing, tokens, cookies
+│   │       ├── instrument.ts   Sentry.init(), imported first in src/index.ts
 │   │       └── openapi.ts      OpenAPI 3.1 document
 │   └── realtime/               Cloudflare Worker + Durable Object
+│       ├── Dockerfile           local Wrangler emulation, not the Cloudflare deploy path
 │       └── src/index.ts        RoomDurableObject
 ├── docs/                      Deep-dive documentation
 │   ├── decisions/               Architecture Decision Records
 │   └── screenshots/             Curated UI screenshots used across the docs
 ├── infra/
-│   ├── docker/                  Dockerfiles and docker-compose.yml
+│   ├── docker/                  Fixtures consumed by apps/realtime/Dockerfile (dev-only secrets)
 │   └── kubernetes/               Kustomize base + overlays
+├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB)
 ├── ARCHITECTURE.md            Root-level architecture reference (this repo's single-file overview)
 └── .github/workflows/         CI pipeline (format, lint, typecheck, test, build)
 ```
@@ -293,13 +348,14 @@ Open `http://localhost:3000`. `npm run dev` starts all three services, wired to 
 
 The three services need different configuration, summarized here — the full table with every variable, its purpose, and production requirements lives in [`docs/deployment.md`](docs/deployment.md).
 
-| Service         | Needs                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time)                                                                        |
-| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` |
-| `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                               |
+| Service         | Needs                                                                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
+| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`              |
+| `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                                                                     |
 
 - `ROOM_TICKET_SECRET` must be identical on `apps/api` and `apps/realtime`. `PERSISTENCE_SECRET` (Worker) must be identical to `INTERNAL_INGEST_SECRET` (API) — different names, same value. Nothing in the code enforces either match; getting one wrong is exactly what caused two of the [real incidents](#real-incidents-found-operating-this) above.
+- Every Sentry variable is optional and additive — omitting all of them leaves both SDKs inert (no-op), never a startup or build failure. See [Observability](#observability).
 - Never put MongoDB, OIDC, room-ticket, email-delivery, or TURN credentials in `NEXT_PUBLIC_*` variables — those are shipped to every browser that loads the page.
 - Local defaults exist for everything except `MONGODB_URI`, so local dev needs no secrets configured at all beyond copying `.dev.vars.example`. Production has no such fallback — see [Boot-time validation](docs/security.md#boot-time-validation).
 

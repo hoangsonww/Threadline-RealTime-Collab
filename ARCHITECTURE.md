@@ -173,24 +173,24 @@ These are the recurring rules that show up, applied consistently, across all thr
   - This is what lets the same `createApp()` boot identically on Vercel, Docker, Kubernetes, or a test runner.
 - **The fifteen durable entities, briefly:**
 
-  | Entity                | Owns                                                                                                                                         |
-  | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `User`                | Identity: email, username, display name                                                                                                      |
-  | `Credential`          | Password hash — kept in a separate table from `User` so a user object can be logged/returned with zero risk of a hash traveling alongside it |
-  | `Session`             | Browser session state: hashed refresh token, sliding 30-day expiry, last-used timestamp                                                      |
-  | `Organization`        | The top-level tenant; every user's first org is created automatically at registration                                                        |
-  | `Membership`          | A user's role (`owner`/`admin`/`member`) and delegated attributes within one organization                                                    |
-  | `Room`                | A collaboration room: name, visibility, classification, owning organization                                                                  |
-  | `RoomMembership`      | A user's _explicit_ role in one specific room, required only for restricted or confidential rooms                                            |
-  | `CalendarEvent`       | A scheduled session on an organization's calendar                                                                                            |
-  | `PersonalAccessToken` | A scoped, revocable automation credential — only its hash and display prefix are stored                                                      |
-  | `OAuthClient`         | A registered first-party OIDC client and its allowed redirect URIs/scopes                                                                    |
-  | `AuthorizationCode`   | A single-use, PKCE-bound OIDC authorization code, 5-minute expiry                                                                            |
-  | `RefreshToken`        | A rotated OIDC refresh token, stored as a hash, invalidated the moment it's used                                                             |
-  | `AccountActionToken`  | A single-use, hashed token backing password reset and email verification links                                                               |
-  | `AuditLog`            | An immutable record of every sensitive mutation (actor, action, target, metadata — never secrets)                                            |
-  | `RoomEvent`           | A durably persisted, timestamped record of something that happened in a room                                                                 |
-  | `RateLimitEntry`      | An atomic counter bucket keyed by route and hashed IP, with a Mongo TTL index for automatic expiry                                           |
+  | Entity                | Owns                                                                                                                                                                     |
+  | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `User`                | Identity: email, username, display name                                                                                                                                  |
+  | `Credential`          | Password hash — kept in a separate table from `User` so a user object can be logged/returned with zero risk of a hash traveling alongside it                             |
+  | `Session`             | Browser session state: hashed refresh token, sliding 30-day expiry, last-used timestamp                                                                                  |
+  | `Organization`        | The top-level tenant; created via self-service (`POST /v1/orgs`) or joined via a regenerable invite code (`POST /v1/join`) — registration itself creates no organization |
+  | `Membership`          | A user's role (`owner`/`admin`/`member`) and delegated attributes within one organization                                                                                |
+  | `Room`                | A collaboration room: name, visibility, classification, owning organization                                                                                              |
+  | `RoomMembership`      | A user's _explicit_ role in one specific room, required only for restricted or confidential rooms                                                                        |
+  | `CalendarEvent`       | A scheduled session on an organization's calendar                                                                                                                        |
+  | `PersonalAccessToken` | A scoped, revocable automation credential — only its hash and display prefix are stored                                                                                  |
+  | `OAuthClient`         | A registered first-party OIDC client and its allowed redirect URIs/scopes                                                                                                |
+  | `AuthorizationCode`   | A single-use, PKCE-bound OIDC authorization code, 5-minute expiry                                                                                                        |
+  | `RefreshToken`        | A rotated OIDC refresh token, stored as a hash, invalidated the moment it's used                                                                                         |
+  | `AccountActionToken`  | A single-use, hashed token backing password reset and email verification links                                                                                           |
+  | `AuditLog`            | An immutable record of every sensitive mutation (actor, action, target, metadata — never secrets)                                                                        |
+  | `RoomEvent`           | A durably persisted, timestamped record of something that happened in a room                                                                                             |
+  | `RateLimitEntry`      | An atomic counter bucket keyed by route and hashed IP, with a Mongo TTL index for automatic expiry                                                                       |
 
 - Full ER diagram with every field and relationship: [`docs/architecture.md`](docs/architecture.md#data-model). Rationale for the interface split: [ADR-0003](docs/decisions/0003-repository-interface.md).
 - **One subtlety in the room-event timeline:** the API writes to it directly exactly once — when a room is created. Every other event (join/leave, chat, document edits, screen-share toggles) is written by the Durable Object via its webhook. Cursor movement, WebRTC signaling, and individual whiteboard strokes are broadcast live but deliberately **never** persisted — too high-frequency to be a meaningful record.
@@ -225,6 +225,7 @@ What happens, specifically, when each plane is unavailable or misbehaving — be
 - **The Durable Object → API webhook fails once:** invisible to every connected participant, because the live broadcast already succeeded independently. The event is queued and retried via a Cloudflare alarm roughly 30 seconds later.
 - **The shared `ROOM_TICKET_SECRET` or ingest secret is wrong on one side:** fails closed, not open — every ticket is rejected, or every ingest webhook call is rejected — but fails _silently_ from a monitoring perspective, since nothing crashes and no plane's own `/health` check can see a cross-plane value mismatch. This is why [`docs/operations.md`](docs/operations.md#monitoring-and-health-checks) treats a real end-to-end probe (register, connect, send, re-fetch) as the only test that actually proves the system works, not three independent `/health` checks.
 - **A participant's browser loses its WebSocket mid-session:** `apps/web`'s reconnect logic retries with exponential backoff (capped at 15 seconds) and resumes the same room automatically; an intentional "Leave" click or navigating away is distinguished from an unexpected drop so the client doesn't keep reconnecting to a room the user has actually left. See [`docs/frontend.md`](docs/frontend.md#room-workspace-connection-lifecycle-and-reconnection).
+- **`apps/api` or `apps/web` throws an unexpected exception:** unlike a silent cross-plane secret mismatch, this is actually visible — both are instrumented with Sentry (inert without a configured DSN; see [Observability](README.md#observability)), so a genuine bug surfaces as a captured error rather than only as a user report.
 
 ## Live deployment topology
 
@@ -281,7 +282,7 @@ Each of these was chosen over at least one credible alternative, not by default:
 
 ## Known limitations
 
-- No way to revoke an individual person's access to a restricted room — only removing them from the whole organization.
+- No way to transfer an organization's ownership — `PATCH /v1/orgs/:orgId/members/:userId` explicitly refuses to change the owner's own role (`400 cannot_change_owner`), and there's no other endpoint that reassigns it.
 - TURN relay isn't wired into the browser client yet — real-world networks behind symmetric NATs or locked-down firewalls may fail to connect at all.
 - Full-mesh WebRTC cost per participant scales with the number of _other_ participants — a real, known ceiling at this product's target room sizes, not an oversight.
 - No automated test suite for the Next.js frontend. Every UI bug found in this project, including subtle realtime-sync bugs, was found through live manual testing against the running app.
