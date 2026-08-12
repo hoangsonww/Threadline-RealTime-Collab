@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+﻿import { createHash } from "node:crypto";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -95,7 +95,7 @@ export function createApp(options: AppOptions, app = express()) {
       try {
         // request.path is relative to this middleware's mount point (Express rebases
         // it inside app.use), so an exact-path mount always sees "/" here regardless
-        // of which route matched — baseUrl is the literal mounted path instead, which
+        // of which route matched â€” baseUrl is the literal mounted path instead, which
         // is what actually distinguishes one rate-limited route from another.
         const key = `${request.baseUrl}:${ipHash(request)}`;
         const bucket = await options.repository.incrementRateLimit(key, windowMs);
@@ -1217,6 +1217,10 @@ export function createApp(options: AppOptions, app = express()) {
       }
       return clientError(response, 400, "unsupported_grant_type", "This grant type is not enabled.");
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        clientError(response, 400, "invalid_request", error.issues[0]?.message ?? "The token request is malformed.");
+        return;
+      }
       next(error);
     }
   });
