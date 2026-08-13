@@ -25,6 +25,7 @@
     "lint:fix": "eslint apps --fix",
     "prepare": "husky",
     "test": "vitest run --passWithNoTests && npm run test --workspace=@threadline/realtime",
+    "test:browser": "playwright test --config=playwright.config.ts",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

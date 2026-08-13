@@ -3740,8 +3740,10 @@ textarea:focus-visible {
 }
 
 .room-panel {
+  z-index: 1;
   border-color: var(--line);
   background: color-mix(in srgb, var(--surface) 88%, transparent);
+  overflow: visible;
 }
 
 .room-panel-resizer {
