@@ -1023,7 +1023,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               </button>
             ))}
           </div>
-          <div className={`panel-content ${connected ? "" : "is-connection-blocked"}`}>
+          <div className={`panel-content ${connected ? "" : "is-connection-blocked"}`} data-panel={panel}>
             {!connected && (
               <div className="panel-connection-gate" role="status">
                 <span className="panel-connection-gate-icon">
