@@ -36,8 +36,6 @@ ENV NODE_ENV=production \
 COPY --chown=node:node --from=builder /app/apps/web/.next/standalone ./
 COPY --chown=node:node --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --chown=node:node --from=builder /app/apps/web/public ./apps/web/public
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-    && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 USER node
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]

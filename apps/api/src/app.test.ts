@@ -5,8 +5,6 @@ import { createApp } from "./application.js";
 import { MemoryRepository } from "./repository.js";
 import { OidcSigner } from "./security.js";
 
-const signerPromise = OidcSigner.create();
-
 async function registerWithOrg(
   app: Parameters<typeof request.agent>[0],
   user: { email: string; username: string; displayName: string; password?: string },
@@ -30,7 +28,7 @@ async function createTestApp(
     userId: string,
   ) => Promise<Array<{ urls: string | string[]; username?: string; credential?: string }>>,
 ) {
-  const signer = await signerPromise;
+  const signer = await OidcSigner.create();
   const delivered: Array<{ type: string; actionUrl: string }> = [];
   const app = createApp({
     repository: new MemoryRepository(),

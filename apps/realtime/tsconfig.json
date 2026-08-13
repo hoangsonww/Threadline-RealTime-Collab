@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["@cloudflare/vitest-pool-workers/types"]
+    "types": ["@cloudflare/vitest-pool-workers"]
   },
   "include": ["src/**/*.ts", "worker-configuration.d.ts"]
 }
