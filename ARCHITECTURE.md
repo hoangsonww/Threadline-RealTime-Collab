@@ -900,7 +900,7 @@ The largest quality gap is browser automation. The repository has manually valid
 | Decision / constraint | Consequence |
 | --- | --- |
 | Full WebRTC mesh, no SFU | Appropriate for small engineering rooms; per-participant bandwidth and CPU grow with every additional peer, and total connections grow quadratically |
-| TURN not wired through current web configuration | The default public STUN server will not establish sessions on every symmetric-NAT or locked-down corporate network |
+| TURN credentials omitted from API configuration | The STUN-only fallback will not establish sessions on every symmetric-NAT or locked-down corporate network; set `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` |
 | Event outbox has no idempotency key | Reliable retry favors durability but can duplicate a durable event after an ambiguous successful API request |
 | Whiteboard state is transient | Strokes are available live only; a refresh or new participant cannot reconstruct prior board content |
 | Files are direct-transfer only | No server cost or retained files, but no durable artifact catalog, delivery confirmation, or recovery |

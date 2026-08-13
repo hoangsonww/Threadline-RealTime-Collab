@@ -22,6 +22,10 @@ type Peer = {
   incomingFile?: { name: string; type: string };
   senders: Partial<Record<TrackKind, RTCRtpSender>>;
   makingOffer: boolean;
+  ignoreOffer: boolean;
+  isSettingRemoteAnswerPending: boolean;
+  pendingCandidates: Array<RTCIceCandidateInit | null>;
+  signalQueue: Promise<void>;
 };
 
 /**
@@ -56,28 +60,17 @@ export class PeerMesh {
 
   async receiveSignal(peerId: string, signal: SignalPayload) {
     const peer = this.ensurePeer(peerId);
-    try {
-      if (signal.description) {
-        const isOffer = signal.description.type === "offer";
-        // Signaling glare: both sides started an offer around the same time. The
-        // "polite" side (a stable, symmetric tie-break on the two peer IDs) backs off
-        // its own offer in favor of the incoming one; the impolite side ignores the
-        // incoming offer and lets its own proceed.
-        const collision = isOffer && (peer.makingOffer || peer.connection.signalingState !== "stable");
-        if (collision && !this.isPolite(peerId)) return;
-        if (collision) await peer.connection.setLocalDescription({ type: "rollback" });
-        await peer.connection.setRemoteDescription(signal.description);
-        if (isOffer) {
-          const answer = await peer.connection.createAnswer();
-          await peer.connection.setLocalDescription(answer);
-          this.options.sendSignal(peerId, { description: peer.connection.localDescription?.toJSON() });
-        }
-      }
-      if (signal.candidate) await peer.connection.addIceCandidate(signal.candidate);
-    } catch {
-      // A dropped signal here just means this specific renegotiation retries on the
-      // next negotiationneeded/ICE event rather than tearing the connection down.
-    }
+    // WebSocket messages arrive in order, but their async WebRTC operations do not
+    // unless we explicitly serialize them. Without this queue, addIceCandidate can
+    // run while an earlier setRemoteDescription is still pending and the candidate
+    // is permanently lost.
+    peer.signalQueue = peer.signalQueue
+      .then(() => this.applySignal(peerId, peer, signal))
+      .catch(() => {
+        // One malformed/stale signal must not poison the queue for every signal that
+        // follows it. A failed connection also gets an ICE restart below.
+      });
+    return peer.signalQueue;
   }
 
   /** A stable, symmetric tie-break — exactly one side is polite for any given pair. */
@@ -106,19 +99,39 @@ export class PeerMesh {
     this.peers.clear();
   }
 
+  disconnect(peerId: string) {
+    this.peers.get(peerId)?.connection.close();
+    this.peers.delete(peerId);
+  }
+
   private ensurePeer(peerId: string) {
     const existing = this.peers.get(peerId);
     if (existing) return existing;
     const connection = new RTCPeerConnection({
       iceServers: this.options.iceServers ?? [{ urls: "stun:stun.l.google.com:19302" }],
     });
-    const peer: Peer = { connection, fileParts: [], senders: {}, makingOffer: false };
+    const peer: Peer = {
+      connection,
+      fileParts: [],
+      senders: {},
+      makingOffer: false,
+      ignoreOffer: false,
+      isSettingRemoteAnswerPending: false,
+      pendingCandidates: [],
+      signalQueue: Promise.resolve(),
+    };
     connection.onicecandidate = (event) => {
       if (event.candidate) this.options.sendSignal(peerId, { candidate: event.candidate.toJSON() });
     };
     connection.ontrack = (event) => this.options.onRemoteStream(peerId, event.streams[0]);
     connection.ondatachannel = (event) => {
       peer.channel = this.configureChannel(peerId, event.channel);
+    };
+    connection.onconnectionstatechange = () => {
+      // A transient "disconnected" state often heals by itself. "failed" does not,
+      // so ask the browser for fresh ICE candidates and let perfect negotiation send
+      // the restart offer rather than leaving media and files dead forever.
+      if (connection.connectionState === "failed") connection.restartIce();
     };
     // Fires whenever a track or data channel is added/removed, at ANY point in this
     // connection's life — not just at initial setup. This is what actually lets a
@@ -129,8 +142,9 @@ export class PeerMesh {
       void (async () => {
         try {
           peer.makingOffer = true;
-          const offer = await connection.createOffer();
-          await connection.setLocalDescription(offer);
+          // With no argument the browser creates the correct offer (or answer) for
+          // the current signaling state, including offers requested by restartIce().
+          await connection.setLocalDescription();
           this.options.sendSignal(peerId, { description: connection.localDescription?.toJSON() });
         } catch {
           // Ignore — a later negotiationneeded event or a signal from the remote peer
@@ -143,6 +157,45 @@ export class PeerMesh {
     this.applyStream(peer);
     this.peers.set(peerId, peer);
     return peer;
+  }
+
+  private async applySignal(peerId: string, peer: Peer, signal: SignalPayload) {
+    const { connection } = peer;
+    if (signal.description) {
+      const readyForOffer =
+        !peer.makingOffer && (connection.signalingState === "stable" || peer.isSettingRemoteAnswerPending);
+      const offerCollision = signal.description.type === "offer" && !readyForOffer;
+
+      // Exactly one side is polite. The impolite side keeps its own offer during
+      // glare; the polite side accepts the incoming offer and the browser performs
+      // the required rollback as part of setRemoteDescription.
+      peer.ignoreOffer = !this.isPolite(peerId) && offerCollision;
+      if (peer.ignoreOffer) return;
+
+      peer.isSettingRemoteAnswerPending = signal.description.type === "answer";
+      try {
+        await connection.setRemoteDescription(signal.description);
+      } finally {
+        peer.isSettingRemoteAnswerPending = false;
+      }
+
+      for (const candidate of peer.pendingCandidates.splice(0)) await connection.addIceCandidate(candidate);
+
+      if (signal.description.type === "offer") {
+        await connection.setLocalDescription();
+        this.options.sendSignal(peerId, { description: connection.localDescription?.toJSON() });
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(signal, "candidate")) {
+      const candidate = signal.candidate ?? null;
+      if (peer.ignoreOffer) return;
+      if (!connection.remoteDescription) {
+        peer.pendingCandidates.push(candidate);
+        return;
+      }
+      await connection.addIceCandidate(candidate);
+    }
   }
 
   /**
@@ -193,15 +246,19 @@ export class PeerMesh {
     return channel;
   }
 
-  private waitForOpenChannel(peer: Peer, timeoutMs = 5000) {
+  private waitForOpenChannel(peer: Peer, timeoutMs = 15_000) {
     if (peer.channel?.readyState === "open") return Promise.resolve();
     return new Promise<void>((resolve) => {
-      const startedAt = Date.now();
-      const timer = window.setInterval(() => {
-        if (peer.channel?.readyState === "open" || Date.now() - startedAt >= timeoutMs) {
-          window.clearInterval(timer);
-          resolve();
-        }
+      const finish = () => {
+        window.clearTimeout(timer);
+        window.clearInterval(channelTimer);
+        resolve();
+      };
+      const timer = window.setTimeout(finish, timeoutMs);
+      const channelTimer = window.setInterval(() => {
+        const channel = peer.channel;
+        if (!channel || channel.readyState !== "open") return;
+        finish();
       }, 50);
     });
   }

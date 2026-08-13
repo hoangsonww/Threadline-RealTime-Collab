@@ -58,5 +58,5 @@ graph LR
 
 - Bandwidth and CPU cost per participant scale with the number of _other_ participants (O(n) connections each, O(n²) total across the room) — a real, known ceiling, not a hidden one.
 - No media ever touches a server; the Worker only ever sees SDP and ICE candidates (see [`../architecture.md`](../architecture.md#system-topology)).
-- Direct peer-to-peer connectivity depends on ICE/STUN succeeding; symmetric NATs and locked-down networks need a TURN relay, which isn't wired up yet — tracked in [`../roadmap.md`](../roadmap.md).
+- Direct peer-to-peer connectivity depends on ICE/STUN succeeding; symmetric NATs and locked-down networks need the configured TURN relay. The API issues short-lived relay credentials when its server-only TURN settings are present.
 - Every participant pair needs an unambiguous, deterministic rule for who initiates the connection (see the userId tie-break in [`../realtime.md`](../realtime.md#webrtc-mesh-why-both-sides-have-to-offer)) — getting the "who observes a new peer and calls connect()" logic wrong is exactly the class of bug this mesh shape is prone to, and exactly what was found and fixed in this codebase's history.

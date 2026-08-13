@@ -57,6 +57,49 @@ function isLoopbackHttpOrigin(origin: string) {
   return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 }
 
+type IceServer = { urls: string | string[]; username?: string; credential?: string };
+
+function createIceServerProvider() {
+  const keyId = process.env.TURN_KEY_ID;
+  const apiToken = process.env.TURN_KEY_API_TOKEN;
+  if (!keyId && !apiToken) return undefined;
+  if (!keyId || !apiToken) throw new Error("TURN_KEY_ID and TURN_KEY_API_TOKEN must be configured together.");
+
+  return async (): Promise<IceServer[]> => {
+    const response = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ ttl: 86_400 }),
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!response.ok) throw new Error(`TURN credential generation failed with status ${response.status}.`);
+    const payload = (await response.json()) as { iceServers?: unknown };
+    if (!Array.isArray(payload.iceServers)) throw new Error("TURN credential response did not include ICE servers.");
+
+    const servers = payload.iceServers.flatMap((entry): IceServer[] => {
+      if (!entry || typeof entry !== "object" || !("urls" in entry)) return [];
+      const candidate = entry as { urls: unknown; username?: unknown; credential?: unknown };
+      const rawUrls = typeof candidate.urls === "string" ? [candidate.urls] : candidate.urls;
+      if (!Array.isArray(rawUrls) || !rawUrls.every((url) => typeof url === "string")) return [];
+      // Browsers block alternate port 53 and otherwise wait for it to time out.
+      const urls = rawUrls.filter((url) => !url.includes(":53"));
+      if (!urls.length) return [];
+      return [
+        {
+          urls,
+          ...(typeof candidate.username === "string" ? { username: candidate.username } : {}),
+          ...(typeof candidate.credential === "string" ? { credential: candidate.credential } : {}),
+        },
+      ];
+    });
+    if (!servers.length) throw new Error("TURN credential response contained no browser-compatible ICE servers.");
+    return servers;
+  };
+}
+
 async function createConfiguredApp() {
   const port = Number(process.env.PORT ?? 4000);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("PORT must be a valid TCP port.");
@@ -93,6 +136,7 @@ async function createConfiguredApp() {
       ticketSecret: secret("ROOM_TICKET_SECRET", "development-ticket-secret-change-me"),
       ingestSecret: secret("INTERNAL_INGEST_SECRET", "development-ingest-secret-change-me"),
       signer,
+      getIceServers: createIceServerProvider(),
       actionUrl: (type, token) =>
         `${actionBaseUrl}/${type === "password_reset" ? "reset-password" : "verify-email"}?token=${encodeURIComponent(token)}`,
       deliverAccountAction: deliveryWebhook

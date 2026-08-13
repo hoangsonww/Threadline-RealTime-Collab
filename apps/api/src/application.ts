@@ -81,6 +81,9 @@ type AppOptions = {
   ticketSecret: string;
   ingestSecret: string;
   signer: OidcSigner;
+  getIceServers?: (
+    userId: string,
+  ) => Promise<Array<{ urls: string | string[]; username?: string; credential?: string }>>;
   actionUrl: (type: "password_reset" | "email_verification", token: string) => string;
   deliverAccountAction?: (input: {
     type: "password_reset" | "email_verification";
@@ -802,7 +805,15 @@ export function createApp(options: AppOptions, app = express()) {
         roomId: access.room.id,
         role: effectiveRoomRole(access.membership, access.room, access.roomMembership) ?? "viewer",
       });
-      response.json({ ticket, roomId: access.room.id, expiresIn: 120 });
+      let iceServers: Awaited<ReturnType<NonNullable<AppOptions["getIceServers"]>>> | undefined;
+      try {
+        iceServers = await options.getIceServers?.(context.user.id);
+      } catch (error) {
+        // TURN is a reliability fallback. A provider outage must not prevent a user
+        // from joining when a direct STUN-assisted connection would still work.
+        console.error("Unable to issue TURN credentials; continuing with STUN only.", error);
+      }
+      response.json({ ticket, roomId: access.room.id, expiresIn: 120, iceServers });
     } catch (error) {
       next(error);
     }

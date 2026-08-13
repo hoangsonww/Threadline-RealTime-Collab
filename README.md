@@ -370,7 +370,7 @@ The three services need different configuration, summarized here — the full ta
 | Service         | Needs                                                                                                                                                                                                 |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
-| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`              |
+| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN` |
 | `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                                                                     |
 
 - `ROOM_TICKET_SECRET` must be identical on `apps/api` and `apps/realtime`. `PERSISTENCE_SECRET` (Worker) must be identical to `INTERNAL_INGEST_SECRET` (API) — different names, same value. Nothing in the code enforces either match; getting one wrong is exactly what caused two of the [real incidents](#real-incidents-found-operating-this) above.

@@ -5,7 +5,7 @@ Threadline uses three production runtimes by design.
 | Component       | Target                     | Required configuration                                                                                                                                          | Optional                                                                  |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (source maps) |
-| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` | `SENTRY_DSN`                                                              |
+| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET` | `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`                         |
 | `apps/realtime` | Cloudflare Workers         | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK=<api>/v1/internal/room-events`, `PERSISTENCE_SECRET`                                                                 | —                                                                         |
 
 Every "Optional" variable above is additive only — omitting all of them leaves Sentry inert (both SDKs no-op without a DSN) and never fails a build or a boot. See [`security.md`](security.md#error-monitoring-sentry) for exactly what each does and doesn't capture.
@@ -39,7 +39,7 @@ flowchart TD
     A["1. Provision MongoDB Atlas<br/>set MONGODB_URI"] --> B["2. Generate OIDC signing JWK once<br/>set OIDC_ISSUER, COOKIE_SECURE=true"]
     B --> C["3. Deploy apps/realtime<br/>wrangler secret put ×2"]
     C --> D["4. Deploy apps/web<br/>set both public origins"]
-    D --> E["5. Wire TURN into PeerMesh<br/>(optional, but see known limitations)"]
+    D --> E["5. Configure a TURN key<br/>for restrictive networks"]
     B --> F["6. Configure AUTH_DELIVERY_WEBHOOK<br/>+ AUTH_DELIVERY_SECRET"]
     C -.->|"ROOM_TICKET_SECRET must match<br/>apps/api's value exactly"| B
     C -.->|"PERSISTENCE_SECRET must match<br/>apps/api's INTERNAL_INGEST_SECRET"| B
@@ -55,7 +55,7 @@ The two dotted arrows are the ones worth slowing down for — they're cross-plat
 2. Generate an RSA signing JWK exactly once with `npm run generate:oidc-key --workspace=@threadline/api`, store its JSON as `OIDC_PRIVATE_JWK`, then deploy the Express container behind HTTPS. Set `OIDC_ISSUER` to its public canonical URL and `COOKIE_SECURE=true`.
 3. Deploy the Durable Object service with `npm run deploy --workspace=@threadline/realtime`; set secrets with `wrangler secret put`.
 4. Deploy `apps/web` to Vercel and configure both public origins using HTTPS URLs.
-5. Configure a TURN service for real-world WebRTC connectivity. `PeerMesh` (`apps/web/lib/peer-mesh.ts`) accepts an `iceServers` override, but `apps/web` doesn't currently read any environment variable to populate it — today every session uses the hardcoded default public STUN server. Wiring a real ICE server list through to `new PeerMesh({...})` in `apps/web/components/room-workspace.tsx` is required before TURN will actually be used. See [`docs/realtime.md`](realtime.md#known-limitations).
+5. Create a Cloudflare Realtime TURN key and set its ID and API token on `apps/api` as `TURN_KEY_ID` and `TURN_KEY_API_TOKEN`. The authenticated room-ticket response generates 24-hour credentials for each room join and passes only those short-lived credentials to `PeerMesh`; the permanent API token never reaches the browser. Port 53 candidates are removed because browsers block them. If TURN is temporarily unavailable, joining falls back to direct STUN-assisted connectivity instead of failing the room ticket.
 6. Configure `AUTH_DELIVERY_WEBHOOK` and `AUTH_DELIVERY_SECRET` to a transactional-email worker. It receives the recipient and one-time action URL for password reset and email verification. The API fails fast in production when this delivery path is missing.
 7. The initial `threadline-web` OIDC redirect is seeded as `<WEB_ORIGIN>/oidc/callback`; add additional first-party clients directly to `oauth_clients`. Exact matching is enforced.
 8. Run the same checks as CI: `npm run format:check && npm run lint && npm run typecheck && npm test && npm run build`.

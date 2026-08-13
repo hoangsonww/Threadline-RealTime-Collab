@@ -132,6 +132,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const knownPeersRef = useRef<Set<string>>(new Set());
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const fileUrlsRef = useRef<string[]>([]);
 
   const addEvent = useCallback((event: RoomEvent) => {
@@ -217,120 +218,179 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
 
   const connectRoom = useCallback(async () => {
     const realtime = process.env.NEXT_PUBLIC_REALTIME_ORIGIN;
-    if (socketRef.current?.readyState === WebSocket.OPEN) return true;
+    if (socketRef.current?.readyState === WebSocket.OPEN && localIdRef.current) return true;
+    if (connectPromiseRef.current) return connectPromiseRef.current;
     if (!apiOrigin || !realtime) {
       setRoomError("Realtime is not configured. Set both NEXT_PUBLIC_API_ORIGIN and NEXT_PUBLIC_REALTIME_ORIGIN.");
       return false;
     }
-    try {
-      const { ticket } = await apiFetch<{ ticket: string }>(`/v1/rooms/${roomId}/ticket`, { method: "POST" });
-      const socket = new WebSocket(
-        `${realtime.replace(/^http/, "ws")}/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`,
-      );
-      meshRef.current ??= new PeerMesh({
-        sendSignal: (peerId, payload) => socket.send(JSON.stringify({ type: "signal", to: peerId, payload })),
-        onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
-        getLocalId: () => localIdRef.current,
-        onFile: (_peerId, file) => {
-          const downloadUrl = URL.createObjectURL(file);
-          fileUrlsRef.current.push(downloadUrl);
-          setFiles((items) => [
-            {
-              id: crypto.randomUUID(),
-              name: file.name,
-              size: formatSize(file.size),
-              status: "Ready to download",
-              downloadUrl,
+    const attempt = (async () => {
+      try {
+        const { ticket, iceServers } = await apiFetch<{ ticket: string; iceServers?: RTCIceServer[] }>(
+          `/v1/rooms/${roomId}/ticket`,
+          { method: "POST" },
+        );
+        return await new Promise<boolean>((resolve) => {
+          let settled = false;
+          const settle = (result: boolean) => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(readyTimer);
+              resolve(result);
+            }
+          };
+          const socket = new WebSocket(
+            `${realtime.replace(/^http/, "ws")}/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`,
+          );
+
+          // A mesh is tied to the signaling socket that created it. Reusing it
+          // after reconnect made every new SDP/ICE message use a closed socket.
+          meshRef.current?.close();
+          knownPeersRef.current.clear();
+          localIdRef.current = "";
+          setRemoteStreams({});
+          const mesh = new PeerMesh({
+            sendSignal: (peerId, payload) => {
+              if (socket.readyState === WebSocket.OPEN)
+                socket.send(JSON.stringify({ type: "signal", to: peerId, payload }));
             },
-            ...items,
-          ]);
-        },
-      });
-      socket.onopen = () => {
-        reconnectAttemptRef.current = 0;
-        setConnected(true);
-        setReconnecting(false);
-        setRoomError("");
-      };
-      socket.onclose = () => {
+            onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
+            getLocalId: () => localIdRef.current,
+            iceServers,
+            onFile: (_peerId, file) => {
+              const downloadUrl = URL.createObjectURL(file);
+              fileUrlsRef.current.push(downloadUrl);
+              setFiles((items) => [
+                {
+                  id: crypto.randomUUID(),
+                  name: file.name,
+                  size: formatSize(file.size),
+                  status: "Ready to download",
+                  downloadUrl,
+                },
+                ...items,
+              ]);
+            },
+          });
+          const screenTrack = screenStreamRef.current?.getVideoTracks()[0];
+          const microphoneTrack = streamRef.current?.getAudioTracks()[0];
+          const outgoingStream = screenTrack
+            ? new MediaStream(microphoneTrack ? [screenTrack, microphoneTrack] : [screenTrack])
+            : streamRef.current;
+          mesh.setLocalStream(outgoingStream);
+          meshRef.current = mesh;
+          socketRef.current = socket;
+          const readyTimer = setTimeout(() => {
+            if (socketRef.current !== socket || settled) return;
+            setRoomError("The live room did not finish connecting. Retrying…");
+            socket.close();
+          }, 15_000);
+
+          const syncPeers = (people: Participant[]) => {
+            const localId = localIdRef.current;
+            if (!localId) return;
+            const presentPeerIds = new Set(
+              people.map((person) => person.userId).filter((userId) => userId !== localId),
+            );
+            for (const peerId of knownPeersRef.current) {
+              if (presentPeerIds.has(peerId)) continue;
+              mesh.disconnect(peerId);
+              knownPeersRef.current.delete(peerId);
+              setRemoteStreams((streams) => {
+                const next = { ...streams };
+                delete next[peerId];
+                return next;
+              });
+            }
+            for (const person of people) {
+              if (person.userId === localId || knownPeersRef.current.has(person.userId)) continue;
+              knownPeersRef.current.add(person.userId);
+              void mesh.connect(person.userId, localId < person.userId);
+            }
+          };
+
+          socket.onopen = () => setRoomError("");
+          socket.onclose = () => {
+            settle(false);
+            // leave() nulls this ref first; a newer attempt replaces it.
+            if (socketRef.current !== socket) return;
+            setConnected(false);
+            mesh.close();
+            if (meshRef.current === mesh) meshRef.current = null;
+            knownPeersRef.current.clear();
+            localIdRef.current = "";
+            setRemoteStreams({});
+            const reconnectAttempt = reconnectAttemptRef.current + 1;
+            reconnectAttemptRef.current = reconnectAttempt;
+            const delay = Math.min(1000 * 2 ** (reconnectAttempt - 1), 15_000);
+            setReconnecting(true);
+            reconnectTimerRef.current = setTimeout(() => {
+              if (socketRef.current === socket) void connectRoom();
+            }, delay);
+          };
+          socket.onerror = () => {
+            if (socketRef.current === socket)
+              setRoomError("The room coordinator could not be reached. Check the realtime deployment and try again.");
+          };
+          socket.onmessage = (wire) => {
+            if (socketRef.current !== socket) return;
+            const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
+            if (event.type === "presence") {
+              const people = (event.payload as Participant[]) ?? [];
+              setParticipants(people);
+              syncPeers(people);
+              return;
+            }
+            if (event.type === "room.ready") {
+              const payload = event.payload as {
+                participants?: Participant[];
+                recentEvents?: RoomEvent[];
+                participant?: Participant;
+              };
+              if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
+              setParticipants(payload.participants ?? []);
+              payload.recentEvents?.forEach(addEvent);
+              hydrateEditorState(payload.recentEvents ?? []);
+              syncPeers(payload.participants ?? []);
+              reconnectAttemptRef.current = 0;
+              setConnected(true);
+              setReconnecting(false);
+              setRoomError("");
+              settle(true);
+              return;
+            }
+            if (event.type === "signal" && event.from) {
+              void mesh.receiveSignal(event.from, event.payload as SignalPayload);
+              return;
+            }
+            if (event.type === "editor") {
+              const payload = event.payload as { document?: string; content?: string };
+              if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
+              if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
+            }
+            if (event.type === "whiteboard") {
+              const payload = event.payload as {
+                from?: { x: number; y: number };
+                to?: { x: number; y: number };
+                clear?: boolean;
+              };
+              if (payload.clear)
+                boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
+              else if (payload.from && payload.to) drawLine(payload.from, payload.to);
+            }
+            if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
+          };
+        });
+      } catch (error) {
         setConnected(false);
-        // Only auto-reconnect if this socket is still the active one — a call to
-        // leave() nulls socketRef.current first, and a newer connectRoom() call
-        // has already replaced it with a different socket, so either way this
-        // close is not the "still trying to be in this room" case.
-        if (socketRef.current !== socket) return;
-        const attempt = reconnectAttemptRef.current + 1;
-        reconnectAttemptRef.current = attempt;
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 15_000);
-        setReconnecting(true);
-        reconnectTimerRef.current = setTimeout(() => {
-          if (socketRef.current === socket) void connectRoom();
-        }, delay);
-      };
-      socket.onerror = () =>
-        setRoomError("The room coordinator could not be reached. Check the realtime deployment and try again.");
-      const connectToNewPeers = (people: Participant[]) => {
-        const localId = localIdRef.current;
-        if (!localId) return;
-        for (const person of people) {
-          if (person.userId === localId || knownPeersRef.current.has(person.userId)) continue;
-          knownPeersRef.current.add(person.userId);
-          void meshRef.current?.connect(person.userId, localId < person.userId);
-        }
-      };
-      socket.onmessage = (wire) => {
-        const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
-        if (event.type === "presence") {
-          const people = (event.payload as Participant[]) ?? [];
-          setParticipants(people);
-          // Presence broadcasts (someone else joining) only reach sockets that
-          // were already connected, so this side must also offer to connect —
-          // room.ready alone only tells the newcomer about existing peers, not
-          // the other way around.
-          connectToNewPeers(people);
-          return;
-        }
-        if (event.type === "room.ready") {
-          const payload = event.payload as {
-            participants?: Participant[];
-            recentEvents?: RoomEvent[];
-            participant?: Participant;
-          };
-          setParticipants(payload.participants ?? []);
-          payload.recentEvents?.forEach(addEvent);
-          hydrateEditorState(payload.recentEvents ?? []);
-          if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
-          connectToNewPeers(payload.participants ?? []);
-          return;
-        }
-        if (event.type === "signal" && event.from) {
-          void meshRef.current?.receiveSignal(event.from, event.payload as SignalPayload);
-          return;
-        }
-        if (event.type === "editor") {
-          const payload = event.payload as { document?: string; content?: string };
-          if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
-          if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
-        }
-        if (event.type === "whiteboard") {
-          const payload = event.payload as {
-            from?: { x: number; y: number };
-            to?: { x: number; y: number };
-            clear?: boolean;
-          };
-          if (payload.clear)
-            boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
-          else if (payload.from && payload.to) drawLine(payload.from, payload.to);
-        }
-        if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
-      };
-      socketRef.current = socket;
-      return true;
-    } catch (error) {
-      setConnected(false);
-      setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
-      return false;
-    }
+        setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
+        return false;
+      }
+    })();
+    connectPromiseRef.current = attempt;
+    const result = await attempt;
+    if (connectPromiseRef.current === attempt) connectPromiseRef.current = null;
+    return result;
   }, [addEvent, drawLine, hydrateEditorState, roomId]);
 
   const startCamera = async () => {
