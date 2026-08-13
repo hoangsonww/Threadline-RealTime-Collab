@@ -4954,6 +4954,7 @@ button.member-picker-option:hover,
   z-index: 100;
   top: auto;
   left: auto;
+  min-width: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
