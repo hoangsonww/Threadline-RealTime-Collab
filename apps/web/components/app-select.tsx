@@ -1,7 +1,8 @@
 "use client";
 
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 export type AppSelectOption = {
   value: string;
@@ -45,11 +46,33 @@ export function AppSelect({
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = useId();
   const selectedIndex = options.findIndex((option) => option.value === value);
   const selected = options[selectedIndex];
+  const [menuPosition, setMenuPosition] = useState<React.CSSProperties>();
+
+  const positionMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const width = Math.min(Math.max(rect.width, variant === "sidebar" ? 238 : 220), window.innerWidth - 16);
+    const estimatedHeight = Math.min(options.length * 58 + 12, 320);
+    const roomBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const openAbove = roomBelow < Math.min(estimatedHeight, 220) && rect.top > roomBelow;
+    const maxHeight = Math.max(140, Math.min(320, openAbove ? rect.top - 15 : roomBelow - 7));
+    const left = Math.min(Math.max(viewportPadding, rect.left), window.innerWidth - width - viewportPadding);
+    setMenuPosition({
+      left,
+      top: openAbove ? Math.max(viewportPadding, rect.top - Math.min(estimatedHeight, maxHeight) - 7) : rect.bottom + 7,
+      width,
+      maxWidth: width,
+      maxHeight,
+    });
+  }, [options.length, variant]);
 
   const focusOption = (index: number) => {
     setActiveIndex(index);
@@ -72,11 +95,23 @@ export function AppSelect({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) close();
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) close();
     };
+    const update = () => positionMenu();
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, positionMenu]);
+
+  useEffect(() => {
+    if (open) positionMenu();
+  }, [open, positionMenu]);
 
   const choose = (index: number) => {
     const option = options[index];
@@ -163,35 +198,45 @@ export function AppSelect({
         </span>
         <CaretDownIcon aria-hidden="true" className="app-select-caret" size={16} weight="bold" />
       </button>
-      {open && (
-        <div aria-labelledby={id} className="app-select-menu" id={listboxId} role="listbox">
-          {options.map((option, index) => {
-            const isSelected = option.value === value;
-            return (
-              <button
-                aria-selected={isSelected}
-                className={`app-select-option ${isSelected ? "is-selected" : ""}`}
-                disabled={option.disabled}
-                key={option.value}
-                onClick={() => choose(index)}
-                onKeyDown={(event) => onOptionKeyDown(event, index)}
-                ref={(element) => {
-                  optionRefs.current[index] = element;
-                }}
-                role="option"
-                tabIndex={activeIndex === index ? 0 : -1}
-                type="button"
-              >
-                <span>
-                  <strong>{option.label}</strong>
-                  {option.description && <small>{option.description}</small>}
-                </span>
-                {isSelected && <CheckIcon aria-hidden="true" size={16} weight="bold" />}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            aria-labelledby={id}
+            className="app-select-menu app-select-menu-portaled"
+            id={listboxId}
+            ref={menuRef}
+            role="listbox"
+            style={menuPosition}
+          >
+            {options.map((option, index) => {
+              const isSelected = option.value === value;
+              return (
+                <button
+                  aria-selected={isSelected}
+                  className={`app-select-option ${isSelected ? "is-selected" : ""}`}
+                  disabled={option.disabled}
+                  key={option.value}
+                  onClick={() => choose(index)}
+                  onKeyDown={(event) => onOptionKeyDown(event, index)}
+                  ref={(element) => {
+                    optionRefs.current[index] = element;
+                  }}
+                  role="option"
+                  tabIndex={activeIndex === index ? 0 : -1}
+                  type="button"
+                >
+                  <span>
+                    <strong>{option.label}</strong>
+                    {option.description && <small>{option.description}</small>}
+                  </span>
+                  {isSelected && <CheckIcon aria-hidden="true" size={16} weight="bold" />}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

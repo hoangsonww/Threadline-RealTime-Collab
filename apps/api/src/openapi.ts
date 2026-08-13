@@ -975,6 +975,13 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             description: { type: "string", maxLength: 300 },
             visibility: { type: "string", enum: ["organization", "restricted"], default: "organization" },
             classification: { type: "string", enum: ["internal", "confidential"], default: "internal" },
+            memberIds: {
+              type: "array",
+              maxItems: 100,
+              uniqueItems: true,
+              description: "Existing organization members to grant room member access during creation.",
+              items: { type: "string", format: "uuid" },
+            },
           },
         },
         AddOrganizationMemberInput: {

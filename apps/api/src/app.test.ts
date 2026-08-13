@@ -373,6 +373,17 @@ describe("Threadline identity API", () => {
     expect((await member.post(`/v1/orgs/${ownerOrg}/rooms`).send({ name: "not-permitted" })).status).toBe(403);
     expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(403);
 
+    // Restricted rooms can grant their initial access list as part of creation,
+    // so there is no inaccessible gap between creating the room and managing it.
+    const restrictedWithMembers = await owner.post(`/v1/orgs/${ownerOrg}/rooms`).send({
+      name: "private-planning",
+      visibility: "restricted",
+      memberIds: [memberRegistration.body.user.id, memberRegistration.body.user.id],
+    });
+    expect(restrictedWithMembers.status).toBe(201);
+    expect((await member.post(`/v1/rooms/${restrictedWithMembers.body.room.id}/ticket`)).status).toBe(200);
+    expect((await owner.get(`/v1/rooms/${restrictedWithMembers.body.room.id}/members`)).body.members).toHaveLength(2);
+
     // An explicit room membership grants read/join only. Presence lifecycle
     // events are valid for viewers, but mutations still require write access.
     const addToRoom = await owner.post(`/v1/rooms/${restricted.body.room.id}/members`).send({
