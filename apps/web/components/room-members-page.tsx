@@ -1,7 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeftIcon, PlusIcon, ShieldCheckIcon, UserMinusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowLeftIcon,
+  CheckIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  ShieldCheckIcon,
+  UserMinusIcon,
+  UsersThreeIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { apiFetch, type IdentityResponse, type Room } from "../lib/api";
@@ -37,6 +46,8 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
   const [userId, setUserId] = useState("");
   const [role, setRole] = useState("member");
   const [removingId, setRemovingId] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [addSearch, setAddSearch] = useState("");
 
   const load = useCallback(async () => {
     const [{ room: roomData, role: effectiveRole }, identity, roomMembers] = await Promise.all([
@@ -65,10 +76,19 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
   }, [load]);
 
   const addable = orgMembers.filter((candidate) => !members.some((member) => member.id === candidate.id));
+  const normalizedMemberSearch = memberSearch.trim().toLowerCase();
+  const visibleMembers = members.filter((member) =>
+    `${member.displayName} ${member.email} ${member.role}`.toLowerCase().includes(normalizedMemberSearch),
+  );
+  const normalizedAddSearch = addSearch.trim().toLowerCase();
+  const visibleAddable = addable.filter((member) =>
+    `${member.displayName} ${member.email}`.toLowerCase().includes(normalizedAddSearch),
+  );
 
   const openAddModal = () => {
     setUserId(addable[0]?.id ?? "");
     setRole("member");
+    setAddSearch("");
     setError("");
     setModal(true);
   };
@@ -134,11 +154,25 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
           )}
         </div>
         {error && <p className="form-error">{error}</p>}
+        <label className="member-search">
+          <MagnifyingGlassIcon size={17} aria-hidden="true" />
+          <input
+            aria-label="Search room members"
+            value={memberSearch}
+            onChange={(event) => setMemberSearch(event.target.value)}
+            placeholder="Search room members by name, email, or role"
+          />
+          {memberSearch && (
+            <button type="button" onClick={() => setMemberSearch("")} aria-label="Clear member search">
+              <XIcon size={14} />
+            </button>
+          )}
+        </label>
         <div className="members-table">
           {loading ? (
             <MemberRowSkeleton count={3} />
           ) : (
-            members.map((member) => (
+            visibleMembers.map((member) => (
               <div className="member-row" key={member.id}>
                 <span className="avatar">{initialsFor(member.displayName)}</span>
                 <div>
@@ -162,6 +196,9 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
             ))
           )}
         </div>
+        {!loading && members.length > 0 && !visibleMembers.length && (
+          <p className="member-search-empty">No room members match “{memberSearch}”.</p>
+        )}
         {!loading && !error && !members.length && (
           <div className="empty-state large">
             <UsersThreeIcon size={26} weight="duotone" />
@@ -194,17 +231,42 @@ export function RoomMembersPage({ roomId }: { roomId: string }) {
               <div className="modal-form">
                 <div className="field">
                   <label htmlFor="room-member">Organization member</label>
-                  <AppSelect
-                    id="room-member"
-                    onValueChange={setUserId}
-                    options={addable.map((candidate) => ({
-                      value: candidate.id,
-                      label: candidate.displayName,
-                      description: candidate.email,
-                    }))}
-                    placeholder={addable.length ? "Choose a person" : "Every organization member already has access"}
-                    value={userId}
-                  />
+                  <label className="member-search compact" htmlFor="room-member">
+                    <MagnifyingGlassIcon size={15} aria-hidden="true" />
+                    <input
+                      id="room-member"
+                      value={addSearch}
+                      onChange={(event) => setAddSearch(event.target.value)}
+                      placeholder="Search by name or email"
+                    />
+                  </label>
+                  <div className="member-picker-list" role="listbox" aria-label="Organization members">
+                    {visibleAddable.map((candidate) => {
+                      const selected = candidate.id === userId;
+                      return (
+                        <button
+                          aria-selected={selected}
+                          className={`member-picker-option ${selected ? "is-selected" : ""}`}
+                          key={candidate.id}
+                          onClick={() => setUserId(candidate.id)}
+                          role="option"
+                          type="button"
+                        >
+                          <span className="avatar">{initialsFor(candidate.displayName)}</span>
+                          <span>
+                            <strong>{candidate.displayName}</strong>
+                            <small>{candidate.email}</small>
+                          </span>
+                          {selected && <CheckIcon size={15} weight="bold" aria-hidden="true" />}
+                        </button>
+                      );
+                    })}
+                    {!visibleAddable.length && (
+                      <p className="field-help">
+                        {addable.length ? "No organization members match that search." : "Everyone already has access."}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="field">
                   <label htmlFor="room-role">Room role</label>

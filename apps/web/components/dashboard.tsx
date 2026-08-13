@@ -1,7 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRightIcon, CalendarDotsIcon, PlusIcon, VideoConferenceIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowUpRightIcon,
+  CalendarDotsIcon,
+  CheckIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  VideoConferenceIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -32,6 +40,12 @@ type State = {
   activity: ActivityEvent[];
   error?: string;
 };
+type OrganizationMember = {
+  id: string;
+  email: string;
+  displayName: string;
+  role: "owner" | "admin" | "member";
+};
 
 const relativeTime = (value: string) => {
   const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
@@ -40,6 +54,14 @@ const relativeTime = (value: string) => {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value));
 };
+
+const initialsFor = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "TL";
 
 const describeEvent = (event: ActivityEvent, rooms: Room[]) => {
   const room = rooms.find((candidate) => candidate.id === event.roomId);
@@ -62,6 +84,10 @@ export function Dashboard() {
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState("");
   const [visibility, setVisibility] = useState("organization");
+  const [organizationMembers, setOrganizationMembers] = useState<OrganizationMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,6 +117,19 @@ export function Dashboard() {
     void load();
   }, [load]);
 
+  const loadOrganizationMembers = useCallback(async () => {
+    if (!state.organization || organizationMembers.length || membersLoading) return;
+    setMembersLoading(true);
+    try {
+      const data = await apiFetch<{ members: OrganizationMember[] }>(`/v1/orgs/${state.organization.id}/members`);
+      setOrganizationMembers(data.members);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Could not load organization members.");
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [membersLoading, organizationMembers.length, state.organization]);
+
   const createRoom = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!state.organization) return;
@@ -104,6 +143,7 @@ export function Dashboard() {
           name: String(form.get("name") ?? "").trim(),
           description: String(form.get("description") ?? "").trim() || undefined,
           visibility: String(form.get("visibility") ?? "organization"),
+          memberIds: visibility === "restricted" ? selectedMemberIds : [],
         }),
       });
       router.push(`/app/rooms/${data.room.id}`);
@@ -120,9 +160,21 @@ export function Dashboard() {
     state.organization?.attributes?.canCreateRooms === true;
   const openRoomModal = () => {
     setVisibility("organization");
+    setMemberSearch("");
+    setSelectedMemberIds([]);
     setFormError("");
     setModal(true);
   };
+  const toggleInitialMember = (userId: string) => {
+    setSelectedMemberIds((current) =>
+      current.includes(userId) ? current.filter((candidate) => candidate !== userId) : [...current, userId],
+    );
+  };
+  const normalizedMemberSearch = memberSearch.trim().toLowerCase();
+  const selectableMembers = organizationMembers.filter((member) => member.id !== state.identity?.user.id);
+  const filteredMembers = selectableMembers.filter((member) =>
+    `${member.displayName} ${member.email} ${member.role}`.toLowerCase().includes(normalizedMemberSearch),
+  );
   return (
     <>
       <div className="content">
@@ -238,7 +290,7 @@ export function Dashboard() {
             transition={{ duration: 0.18 }}
           >
             <motion.form
-              className="modal"
+              className="modal room-create-modal"
               onSubmit={createRoom}
               aria-modal="true"
               role="dialog"
@@ -276,7 +328,10 @@ export function Dashboard() {
                   <AppSelect
                     id="room-visibility"
                     name="visibility"
-                    onValueChange={setVisibility}
+                    onValueChange={(value) => {
+                      setVisibility(value);
+                      if (value === "restricted") void loadOrganizationMembers();
+                    }}
                     options={[
                       {
                         value: "organization",
@@ -292,6 +347,66 @@ export function Dashboard() {
                     value={visibility}
                   />
                 </div>
+                {visibility === "restricted" && (
+                  <section className="room-access-builder" aria-labelledby="initial-room-access-title">
+                    <div className="room-access-builder-head">
+                      <div>
+                        <strong id="initial-room-access-title">Who can access this room?</strong>
+                        <span>The creator is always the owner. Add anyone else who should have access now.</span>
+                      </div>
+                      <span className="selection-count">{selectedMemberIds.length + 1} with access</span>
+                    </div>
+                    <label className="member-search compact">
+                      <MagnifyingGlassIcon size={15} aria-hidden="true" />
+                      <input
+                        aria-label="Search organization members"
+                        value={memberSearch}
+                        onChange={(event) => setMemberSearch(event.target.value)}
+                        placeholder="Search by name or email"
+                      />
+                    </label>
+                    <div className="access-picker-list">
+                      {state.identity?.user && (
+                        <div className="access-picker-option is-fixed">
+                          <span className="avatar">{initialsFor(state.identity.user.displayName)}</span>
+                          <span>
+                            <strong>{state.identity.user.displayName}</strong>
+                            <small>{state.identity.user.email} · Room owner</small>
+                          </span>
+                          <CheckIcon size={16} weight="bold" aria-label="Included" />
+                        </div>
+                      )}
+                      {membersLoading ? (
+                        <p className="field-help">Loading organization members…</p>
+                      ) : (
+                        filteredMembers.map((member) => {
+                          const selected = selectedMemberIds.includes(member.id);
+                          return (
+                            <button
+                              aria-pressed={selected}
+                              className={`access-picker-option ${selected ? "is-selected" : ""}`}
+                              key={member.id}
+                              onClick={() => toggleInitialMember(member.id)}
+                              type="button"
+                            >
+                              <span className="avatar">{initialsFor(member.displayName)}</span>
+                              <span>
+                                <strong>{member.displayName}</strong>
+                                <small>{member.email}</small>
+                              </span>
+                              <span className="access-picker-check">
+                                {selected && <CheckIcon size={14} weight="bold" />}
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                      {!membersLoading && !filteredMembers.length && (
+                        <p className="field-help">No organization members match that search.</p>
+                      )}
+                    </div>
+                  </section>
+                )}
                 {formError && <p className="form-error">{formError}</p>}
                 <div className="modal-actions">
                   <button type="button" className="button button-ghost" onClick={() => setModal(false)}>

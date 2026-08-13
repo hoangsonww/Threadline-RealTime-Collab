@@ -5,6 +5,7 @@ import {
   CheckCircleIcon,
   CopyIcon,
   KeyIcon,
+  MagnifyingGlassIcon,
   PlusIcon,
   ShieldCheckIcon,
   UsersThreeIcon,
@@ -43,6 +44,7 @@ export function MembersPage({ orgId }: { orgId: string }) {
   const [regenerating, setRegenerating] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [roleUpdating, setRoleUpdating] = useState<string | null>(null);
+  const [memberSearch, setMemberSearch] = useState("");
   const load = useCallback(async () => {
     const identity = await apiFetch<IdentityResponse>("/v1/auth/me");
     const org = identity.organizations.find((candidate) => candidate.id === orgId);
@@ -154,6 +156,20 @@ export function MembersPage({ orgId }: { orgId: string }) {
     setError("");
     setModal(true);
   };
+  const normalizedMemberSearch = memberSearch.trim().toLowerCase();
+  const visibleMembers = members.filter((member) =>
+    `${member.displayName} ${member.email} ${member.username} ${member.role} ${
+      [
+        member.attributes?.canCreateRooms && "rooms",
+        member.attributes?.canSchedule && "calendar",
+        member.attributes?.canManageMembers && "members",
+      ]
+        .filter(Boolean)
+        .join(" ") || "standard access"
+    }`
+      .toLowerCase()
+      .includes(normalizedMemberSearch),
+  );
   return (
     <div className="content">
       <div className="page-header">
@@ -227,10 +243,24 @@ export function MembersPage({ orgId }: { orgId: string }) {
         </div>
       )}
       {error && <p className="form-error">{error}</p>}
+      <label className="member-search">
+        <MagnifyingGlassIcon size={17} aria-hidden="true" />
+        <input
+          aria-label="Search organization members"
+          value={memberSearch}
+          onChange={(event) => setMemberSearch(event.target.value)}
+          placeholder="Search members by name, email, role, or access"
+        />
+        {memberSearch && (
+          <button type="button" onClick={() => setMemberSearch("")} aria-label="Clear member search">
+            <XIcon size={14} />
+          </button>
+        )}
+      </label>
       <div className="members-table">
         {loading && <MemberRowSkeleton count={4} withActions />}
         {!loading &&
-          members.map((member) => {
+          visibleMembers.map((member) => {
             const roleOptions = [
               { value: "member", label: "Member" },
               ...(callerRole === "owner" || member.role === "admin" ? [{ value: "admin", label: "Admin" }] : []),
@@ -277,6 +307,9 @@ export function MembersPage({ orgId }: { orgId: string }) {
             );
           })}
       </div>
+      {!loading && members.length > 0 && !visibleMembers.length && (
+        <p className="member-search-empty">No organization members match “{memberSearch}”.</p>
+      )}
       {!loading && !error && !members.length && (
         <div className="empty-state large">
           <UsersThreeIcon size={26} weight="duotone" />

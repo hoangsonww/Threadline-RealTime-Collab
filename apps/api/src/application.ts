@@ -716,8 +716,20 @@ export function createApp(options: AppOptions, app = express()) {
           description: z.string().trim().max(300).optional(),
           visibility: z.enum(["organization", "restricted"]).default("organization"),
           classification: z.enum(["internal", "confidential"]).default("internal"),
+          memberIds: z.array(z.string().uuid()).max(100).default([]),
         })
         .parse(request.body);
+      const initialMemberIds = [...new Set(input.memberIds)].filter((userId) => userId !== context.user.id);
+      const initialMembers = await Promise.all(
+        initialMemberIds.map((userId) => options.repository.getMembership(request.params.orgId, userId)),
+      );
+      if (initialMembers.some((candidate) => !candidate))
+        return clientError(
+          response,
+          400,
+          "invalid_room_members",
+          "Every initial room member must already belong to this organization.",
+        );
       const room = {
         id: id(),
         orgId: request.params.orgId,
@@ -736,13 +748,29 @@ export function createApp(options: AppOptions, app = express()) {
         role: "owner",
         joinedAt: now(),
       });
+      await Promise.all(
+        initialMemberIds.map((userId) =>
+          options.repository.createRoomMembership({
+            id: id(),
+            roomId: room.id,
+            userId,
+            role: "member",
+            joinedAt: now(),
+          }),
+        ),
+      );
       await options.repository.writeAudit({
         id: id(),
         actorId: context.user.id,
         action: "room.create",
         targetType: "room",
         targetId: room.id,
-        metadata: { orgId: room.orgId, visibility: room.visibility, classification: room.classification },
+        metadata: {
+          orgId: room.orgId,
+          visibility: room.visibility,
+          classification: room.classification,
+          initialMemberCount: initialMemberIds.length,
+        },
         createdAt: now(),
       });
       await options.repository.writeRoomEvent({

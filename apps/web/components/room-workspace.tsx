@@ -8,12 +8,15 @@ import {
   CaretLeftIcon,
   CodeIcon,
   DesktopIcon,
+  DownloadSimpleIcon,
   EraserIcon,
   FileArrowUpIcon,
   FileIcon,
+  LockSimpleIcon,
   MicrophoneIcon,
   MicrophoneSlashIcon,
   MonitorArrowUpIcon,
+  NotePencilIcon,
   PaperPlaneTiltIcon,
   PhoneDisconnectIcon,
   SidebarSimpleIcon,
@@ -38,7 +41,7 @@ type RoomEvent = {
   at?: string;
 };
 type Message = { id: string; person: string; initials: string; text: string; time: string };
-type FileEntry = { name: string; size: string; status: string };
+type FileEntry = { id: string; name: string; size: string; status: string; downloadUrl?: string };
 
 const initialsFor = (name: string) =>
   name
@@ -129,6 +132,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const knownPeersRef = useRef<Set<string>>(new Set());
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fileUrlsRef = useRef<string[]>([]);
 
   const addEvent = useCallback((event: RoomEvent) => {
     setTimeline((items) =>
@@ -136,6 +140,19 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     );
     const message = eventToMessage(event);
     if (message) setMessages((items) => (items.some((item) => item.id === message.id) ? items : [...items, message]));
+  }, []);
+
+  const hydrateEditorState = useCallback((events: RoomEvent[]) => {
+    let latestNotes: string | undefined;
+    let latestCode: string | undefined;
+    for (const event of events) {
+      if (event.type !== "editor") continue;
+      const payload = event.payload as { document?: string; content?: string };
+      if (payload.document === "notes" && typeof payload.content === "string") latestNotes = payload.content;
+      if (payload.document === "code" && typeof payload.content === "string") latestCode = payload.content;
+    }
+    if (latestNotes !== undefined) setNotes(latestNotes);
+    if (latestCode !== undefined) setCode(latestCode);
   }, []);
 
   useEffect(() => {
@@ -151,12 +168,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         setIdentity(identityData.user);
         setRoom(roomData.room);
         eventData.events.forEach(addEvent);
-        eventData.events.forEach((event) => {
-          if (event.type !== "editor") return;
-          const payload = event.payload as { document?: string; content?: string };
-          if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
-          if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
-        });
+        hydrateEditorState(eventData.events);
       } catch (error) {
         if (!cancelled) setRoomError(error instanceof Error ? error.message : "Unable to load this room.");
       }
@@ -164,7 +176,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [addEvent, roomId]);
+  }, [addEvent, hydrateEditorState, roomId]);
 
   useEffect(() => {
     if (room?.name) document.title = `# ${room.name} | Threadline`;
@@ -178,6 +190,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       socketRef.current?.close();
       socketRef.current = null;
       meshRef.current?.close();
+      fileUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      fileUrlsRef.current = [];
     },
     [],
   );
@@ -217,11 +231,20 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         sendSignal: (peerId, payload) => socket.send(JSON.stringify({ type: "signal", to: peerId, payload })),
         onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
         getLocalId: () => localIdRef.current,
-        onFile: (_peerId, file) =>
+        onFile: (_peerId, file) => {
+          const downloadUrl = URL.createObjectURL(file);
+          fileUrlsRef.current.push(downloadUrl);
           setFiles((items) => [
-            { name: file.name, size: formatSize(file.size), status: "Received by direct transfer" },
+            {
+              id: crypto.randomUUID(),
+              name: file.name,
+              size: formatSize(file.size),
+              status: "Ready to download",
+              downloadUrl,
+            },
             ...items,
-          ]),
+          ]);
+        },
       });
       socket.onopen = () => {
         reconnectAttemptRef.current = 0;
@@ -275,6 +298,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           };
           setParticipants(payload.participants ?? []);
           payload.recentEvents?.forEach(addEvent);
+          hydrateEditorState(payload.recentEvents ?? []);
           if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
           connectToNewPeers(payload.participants ?? []);
           return;
@@ -307,7 +331,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
       return false;
     }
-  }, [addEvent, drawLine, roomId]);
+  }, [addEvent, drawLine, hydrateEditorState, roomId]);
 
   const startCamera = async () => {
     try {
@@ -426,14 +450,40 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     publish("whiteboard", { clear: true });
   };
   const uploadFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!connected || !meshRef.current) {
+      event.target.value = "";
+      setRoomError("Join the live room before sharing a file.");
+      return;
+    }
     const selected = Array.from(event.target.files ?? []);
-    const items = selected.map((file) => ({
+    const transfers = selected.map((file) => ({
+      file,
+      id: crypto.randomUUID(),
+    }));
+    const items = transfers.map(({ file, id }) => ({
+      id,
       name: file.name,
       size: formatSize(file.size),
-      status: meshRef.current ? "Sending by direct transfer" : "Connect to send",
+      status: "Waiting for connected peers…",
     }));
     setFiles((existing) => [...items, ...existing]);
-    void Promise.all(selected.map((file) => meshRef.current?.sendFile(file)));
+    void Promise.all(
+      transfers.map(async ({ file, id }) => {
+        const recipients = await meshRef.current?.sendFile(file);
+        setFiles((existing) =>
+          existing.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  status: recipients
+                    ? `Sent to ${recipients} connected ${recipients === 1 ? "peer" : "peers"}`
+                    : "No peer was ready — try again",
+                }
+              : item,
+          ),
+        );
+      }),
+    );
     event.target.value = "";
   };
   const visibleParticipants = participants.length
@@ -558,6 +608,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               </div>
               <textarea
                 className="board"
+                disabled={!connected}
                 value={code}
                 onChange={(event) => {
                   setCode(event.target.value);
@@ -636,12 +687,25 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 onClick={() => setPanel(item)}
                 role="tab"
                 aria-selected={panel === item}
+                data-locked={!connected || undefined}
               >
                 {item}
               </button>
             ))}
           </div>
-          <div className="panel-content">
+          <div className={`panel-content ${connected ? "" : "is-connection-blocked"}`}>
+            {!connected && (
+              <div className="panel-connection-gate" role="status">
+                <span className="panel-connection-gate-icon">
+                  <LockSimpleIcon size={18} weight="duotone" />
+                </span>
+                <strong>Join to use {panel}</strong>
+                <p>This tool becomes live once you connect to the room.</p>
+                <button className="button button-primary" onClick={() => void connectRoom()}>
+                  <BroadcastIcon size={15} /> Join room
+                </button>
+              </div>
+            )}
             {panel === "chat" && (
               <div className="chat">
                 <div className="chat-list">
@@ -691,20 +755,39 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               </div>
             )}
             {panel === "notes" && (
-              <div className="notes">
-                <div className="notes-head">
-                  <strong>Shared notes</strong>
-                  <span>{connected ? "Live sync" : "Connect to save"}</span>
+              <div className="notes notes-workspace">
+                <div className="notes-intro">
+                  <span className="notes-intro-icon">
+                    <NotePencilIcon size={18} weight="duotone" />
+                  </span>
+                  <div>
+                    <strong>Shared notes</strong>
+                    <p>Capture decisions and follow-ups for everyone in the call.</p>
+                  </div>
+                  <span className={`notes-sync-state ${connected ? "is-live" : ""}`}>
+                    <span /> {connected ? "Live sync" : "Offline"}
+                  </span>
                 </div>
-                <textarea
-                  value={notes}
-                  onChange={(event) => {
-                    setNotes(event.target.value);
-                    publish("editor", { document: "notes", content: event.target.value });
-                  }}
-                  aria-label="Shared notes"
-                  placeholder="Capture decisions, context, and follow-up work…"
-                />
+                <div className="notes-editor-shell">
+                  <textarea
+                    value={notes}
+                    disabled={!connected}
+                    onChange={(event) => {
+                      setNotes(event.target.value);
+                      publish("editor", { document: "notes", content: event.target.value });
+                    }}
+                    aria-label="Shared notes"
+                    placeholder={
+                      connected
+                        ? "Start with a decision, question, or follow-up…"
+                        : "Join the room to write shared notes."
+                    }
+                  />
+                  <div className="notes-editor-footer">
+                    <span>Visible to everyone in this room</span>
+                    <span>{notes.trim() ? `${notes.trim().split(/\s+/).length} words` : "No notes yet"}</span>
+                  </div>
+                </div>
               </div>
             )}
             {
@@ -750,16 +833,20 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   <strong>Files</strong>
                   <span>{files.length} transfers</span>
                 </div>
-                <label className="file-drop" htmlFor="room-file">
+                <label
+                  aria-disabled={!connected}
+                  className={`file-drop ${connected ? "" : "is-disabled"}`}
+                  htmlFor={connected ? "room-file" : undefined}
+                >
                   <FileArrowUpIcon size={20} />
-                  <strong>Send directly to connected peers</strong>Files move over encrypted WebRTC data channels and
-                  are not silently stored by the UI.
-                  <input id="room-file" type="file" multiple onChange={uploadFiles} hidden />
+                  <strong>{connected ? "Send directly to connected peers" : "Join before sharing files"}</strong>
+                  Files move over encrypted WebRTC data channels and are not silently stored by the UI.
+                  <input id="room-file" type="file" multiple onChange={uploadFiles} disabled={!connected} hidden />
                 </label>
                 <div className="file-list">
                   {files.length ? (
-                    files.map((file, index) => (
-                      <div className="file-row" key={`${file.name}-${index}`}>
+                    files.map((file) => (
+                      <div className="file-row" key={file.id}>
                         <FileIcon size={18} weight="duotone" />
                         <div>
                           <strong>{file.name}</strong>
@@ -767,6 +854,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                             {file.size} · {file.status}
                           </span>
                         </div>
+                        {file.downloadUrl && (
+                          <a
+                            className="button button-secondary button-icon file-download"
+                            download={file.name}
+                            href={file.downloadUrl}
+                            aria-label={`Download ${file.name}`}
+                            title={`Download ${file.name}`}
+                          >
+                            <DownloadSimpleIcon size={15} weight="bold" />
+                          </a>
+                        )}
                       </div>
                     ))
                   ) : (

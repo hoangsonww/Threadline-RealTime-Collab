@@ -86,20 +86,19 @@ export class PeerMesh {
   }
 
   async sendFile(file: File) {
+    const candidates = [...this.peers.values()];
+    await Promise.all(candidates.map((peer) => this.waitForOpenChannel(peer)));
+    const recipients = candidates.filter((peer) => peer.channel?.readyState === "open");
+    if (!recipients.length) return 0;
     const chunkSize = 16 * 1024;
     const header = JSON.stringify({ kind: "file-header", name: file.name, type: file.type, size: file.size });
-    for (const peer of this.peers.values()) {
-      if (peer.channel?.readyState === "open") peer.channel.send(header);
-    }
+    for (const peer of recipients) peer.channel?.send(header);
     for (let offset = 0; offset < file.size; offset += chunkSize) {
       const chunk = await file.slice(offset, Math.min(offset + chunkSize, file.size)).arrayBuffer();
-      for (const peer of this.peers.values()) {
-        if (peer.channel?.readyState === "open") peer.channel.send(chunk);
-      }
+      for (const peer of recipients) peer.channel?.send(chunk);
     }
-    for (const peer of this.peers.values()) {
-      if (peer.channel?.readyState === "open") peer.channel.send(JSON.stringify({ kind: "file-end" }));
-    }
+    for (const peer of recipients) peer.channel?.send(JSON.stringify({ kind: "file-end" }));
+    return recipients.length;
   }
 
   close() {
@@ -192,5 +191,18 @@ export class PeerMesh {
       }
     };
     return channel;
+  }
+
+  private waitForOpenChannel(peer: Peer, timeoutMs = 5000) {
+    if (peer.channel?.readyState === "open") return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const startedAt = Date.now();
+      const timer = window.setInterval(() => {
+        if (peer.channel?.readyState === "open" || Date.now() - startedAt >= timeoutMs) {
+          window.clearInterval(timer);
+          resolve();
+        }
+      }, 50);
+    });
   }
 }
