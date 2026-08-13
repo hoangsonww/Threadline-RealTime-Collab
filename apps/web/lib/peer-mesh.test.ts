@@ -210,6 +210,44 @@ describe("PeerMesh signaling", () => {
     expect(FakePeerConnection.instances[0].events).toEqual([]);
   });
 
+  it("restores the placeholder as a peer stops camera and screen tracks", async () => {
+    const onRemoteMedia = vi.fn();
+    const mesh = new PeerMesh({
+      sendSignal: vi.fn(),
+      onRemoteMedia,
+      onFile: vi.fn(),
+      getLocalId: () => "z-local-user",
+    });
+    await mesh.connect("a-peer", false);
+    const connection = FakePeerConnection.instances[0];
+    const remoteTrack = (id: string) =>
+      ({
+        id,
+        kind: "video",
+        readyState: "live",
+        addEventListener: vi.fn(),
+      }) as unknown as MediaStreamTrack;
+    const camera = remoteTrack("remote-camera");
+    const screen = remoteTrack("remote-screen");
+
+    for (const track of [camera, screen]) {
+      connection.ontrack?.call(connection as unknown as RTCPeerConnection, { track } as RTCTrackEvent);
+    }
+    await mesh.receiveSignal("a-peer", { mediaSources: { camera: camera.id, screen: screen.id } });
+    expect(onRemoteMedia).toHaveBeenLastCalledWith(
+      "a-peer",
+      expect.objectContaining({ camera: expect.anything(), screen: expect.anything() }),
+    );
+
+    await mesh.receiveSignal("a-peer", { mediaSources: { screen: screen.id } });
+    expect(onRemoteMedia).toHaveBeenLastCalledWith("a-peer", {
+      screen: expect.anything(),
+    });
+
+    await mesh.receiveSignal("a-peer", { mediaSources: {} });
+    expect(onRemoteMedia).toHaveBeenLastCalledWith("a-peer", {});
+  });
+
   it("requests a fresh ICE negotiation after the connection fails", async () => {
     const mesh = createMesh();
     await mesh.connect("a-peer", false);

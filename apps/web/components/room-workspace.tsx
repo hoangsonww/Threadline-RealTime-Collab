@@ -52,6 +52,16 @@ type FileEntry = { id: string; name: string; size: string; status: string; downl
 
 const maxAutomaticReconnectAttempts = 6;
 const stableConnectionResetMs = 60_000;
+const defaultPanelWidth = 360;
+const minimumPanelWidth = 300;
+const maximumPanelWidth = 720;
+const minimumMainWidth = 380;
+
+const clampPanelWidth = (width: number) => {
+  if (typeof window === "undefined") return Math.min(maximumPanelWidth, Math.max(minimumPanelWidth, width));
+  const availableWidth = Math.max(minimumPanelWidth, window.innerWidth - minimumMainWidth);
+  return Math.min(maximumPanelWidth, availableWidth, Math.max(minimumPanelWidth, width));
+};
 
 const initialsFor = (name: string) =>
   name
@@ -137,11 +147,115 @@ function MediaView({ camera, screen, microphone, local = false }: RemoteMedia & 
   );
 }
 
+const liveStream = (stream: MediaStream | undefined, kind: "audio" | "video") =>
+  stream?.getTracks().some((track) => track.kind === kind && track.readyState === "live") ? stream : undefined;
+
+function useSpeaking(stream?: MediaStream) {
+  const [speaking, setSpeaking] = useState(false);
+
+  useEffect(() => {
+    const audioStream = liveStream(stream, "audio");
+    if (!audioStream) {
+      setSpeaking(false);
+      return;
+    }
+
+    const AudioContextClass = window.AudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const analyser = context.createAnalyser();
+    const source = context.createMediaStreamSource(audioStream);
+    const samples = new Uint8Array(analyser.fftSize);
+    let animationFrame = 0;
+    let lastVoiceAt = 0;
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.72;
+    source.connect(analyser);
+    void context.resume().catch(() => undefined);
+
+    const measure = (now: number) => {
+      analyser.getByteTimeDomainData(samples);
+      let energy = 0;
+      for (const sample of samples) {
+        const amplitude = (sample - 128) / 128;
+        energy += amplitude * amplitude;
+      }
+      const voiceDetected = Math.sqrt(energy / samples.length) > 0.035;
+      if (voiceDetected) lastVoiceAt = now;
+      setSpeaking(voiceDetected || now - lastVoiceAt < 220);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    animationFrame = requestAnimationFrame(measure);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      source.disconnect();
+      analyser.disconnect();
+      void context.close();
+    };
+  }, [stream]);
+
+  return speaking;
+}
+
+function ParticipantTile({
+  person,
+  media,
+  self,
+  otherDevice,
+  localMicEnabled,
+}: {
+  person: Participant;
+  media: RemoteMedia;
+  self: boolean;
+  otherDevice: boolean;
+  localMicEnabled: boolean;
+}) {
+  const camera = liveStream(media.camera, "video");
+  const screen = liveStream(media.screen, "video");
+  const microphone = liveStream(media.microphone, "audio");
+  const micEnabled = self ? localMicEnabled : !!microphone;
+  const speaking = useSpeaking(microphone);
+  const hasVideo = !!camera || !!screen;
+  const mediaKey = `${camera?.id ?? "no-camera"}:${screen?.id ?? "no-screen"}`;
+  const displayName = self
+    ? `${person.username} (you)`
+    : otherDevice
+      ? `${person.username} (your other device)`
+      : person.username;
+
+  return (
+    <article
+      className={`video-tile ${self ? "self" : ""} ${speaking ? "is-speaking" : ""}`}
+      aria-label={`${displayName}${speaking ? ", speaking" : micEnabled ? ", microphone on" : ", microphone off"}`}
+    >
+      <MediaView key={mediaKey} camera={camera} screen={screen} microphone={microphone} local={self} />
+      {!hasVideo && (
+        <div className="video-placeholder">
+          <span className="avatar">{initialsFor(person.username)}</span>
+        </div>
+      )}
+      <div className="tile-label">
+        <span>{displayName}</span>
+        <span
+          className={`mic ${micEnabled ? "is-on" : "is-off"}`}
+          title={micEnabled ? `${person.username}'s microphone is on` : `${person.username}'s microphone is off`}
+          aria-hidden="true"
+        >
+          {micEnabled ? <MicrophoneIcon size={12} weight="fill" /> : <MicrophoneSlashIcon size={12} />}
+        </span>
+      </div>
+      {screen && <span className="tile-status">Sharing</span>}
+    </article>
+  );
+}
+
 export function RoomWorkspace({ roomId }: { roomId: string }) {
   const router = useRouter();
   const [panel, setPanel] = useState<Panel>("chat");
   const [mode, setMode] = useState<"call" | "editor">("call");
   const [showPanel, setShowPanel] = useState(true);
+  const [panelWidth, setPanelWidth] = useState(defaultPanelWidth);
   const [room, setRoom] = useState<Room>();
   const [identity, setIdentity] = useState<WorkspaceUser>();
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -160,6 +274,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [sharing, setSharing] = useState(false);
   const [remoteMedia, setRemoteMedia] = useState<Record<string, RemoteMedia>>({});
   const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
+  const [localMicrophoneStream, setLocalMicrophoneStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const microphoneStreamRef = useRef<MediaStream | null>(null);
@@ -177,6 +292,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const hasOtherDeviceRef = useRef(false);
   const fileUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const fitPanelToViewport = () => setPanelWidth((width) => clampPanelWidth(width));
+    window.addEventListener("resize", fitPanelToViewport);
+    return () => window.removeEventListener("resize", fitPanelToViewport);
+  }, []);
 
   const addEvent = useCallback((event: RoomEvent) => {
     setTimeline((items) =>
@@ -499,6 +620,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     if (mic) {
       microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
       microphoneStreamRef.current = null;
+      setLocalMicrophoneStream(null);
       setMic(false);
       publishLocalTracks();
       return;
@@ -508,6 +630,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
       microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
       microphoneStreamRef.current = stream;
+      setLocalMicrophoneStream(stream);
       setMic(true);
       publishLocalTracks();
     } catch {
@@ -559,6 +682,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     cameraStreamRef.current = null;
     microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
     microphoneStreamRef.current = null;
+    setLocalMicrophoneStream(null);
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
     socketRef.current?.close();
@@ -624,12 +748,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       file,
       id: crypto.randomUUID(),
     }));
-    const items = transfers.map(({ file, id }) => ({
-      id,
-      name: file.name,
-      size: formatSize(file.size),
-      status: "Waiting for connected peers…",
-    }));
+    const items = transfers.map(({ file, id }) => {
+      const downloadUrl = URL.createObjectURL(file);
+      fileUrlsRef.current.push(downloadUrl);
+      return {
+        id,
+        name: file.name,
+        size: formatSize(file.size),
+        status: "Waiting for connected peers…",
+        downloadUrl,
+      };
+    });
     setFiles((existing) => [...items, ...existing]);
     void Promise.all(
       transfers.map(async ({ file, id }) => {
@@ -715,7 +844,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       </header>
       {roomError && <p className="room-error">{roomError}</p>}
       {!roomError && connectionNotice && <p className="room-notice">{connectionNotice}</p>}
-      <div className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}>
+      <div
+        className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}
+        style={{ "--room-panel-width": `${panelWidth}px` } as React.CSSProperties}
+      >
         <section className="room-main">
           {mode === "call" ? (
             <div className="room-mode">
@@ -724,37 +856,22 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   {visibleParticipants.map((person) => {
                     const self = person.connectionId === localIdRef.current;
                     const otherDevice = !self && person.userId === identity?.id;
-                    const media = self
+                    const media: RemoteMedia = self
                       ? {
                           camera: localCameraStream ?? undefined,
+                          microphone: localMicrophoneStream ?? undefined,
                           screen: localScreenStream ?? undefined,
                         }
                       : (remoteMedia[person.connectionId] ?? {});
-                    const hasVideo = !!media.camera || !!media.screen;
                     return (
-                      <article className={`video-tile ${self ? "self" : ""}`} key={person.connectionId}>
-                        <MediaView {...media} local={self} />
-                        {!hasVideo && (
-                          <div className="video-placeholder">
-                            <span className="avatar">{initialsFor(person.username)}</span>
-                          </div>
-                        )}
-                        <div className="tile-label">
-                          <span>
-                            {self
-                              ? `${person.username} (you)`
-                              : otherDevice
-                                ? `${person.username} (your other device)`
-                                : person.username}
-                          </span>
-                          {self && (
-                            <span className="mic">
-                              {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
-                            </span>
-                          )}
-                        </div>
-                        {person.screenSharing && <span className="tile-status">Sharing</span>}
-                      </article>
+                      <ParticipantTile
+                        key={person.connectionId}
+                        person={person}
+                        media={media}
+                        self={self}
+                        otherDevice={otherDevice}
+                        localMicEnabled={mic}
+                      />
                     );
                   })}
                 </div>
@@ -864,6 +981,34 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           inert={!showPanel || undefined}
           aria-hidden={!showPanel}
         >
+          <div
+            className="room-panel-resizer"
+            role="separator"
+            aria-label="Resize room tools sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={minimumPanelWidth}
+            aria-valuemax={maximumPanelWidth}
+            aria-valuenow={Math.round(panelWidth)}
+            tabIndex={showPanel ? 0 : -1}
+            onDoubleClick={() => setPanelWidth(clampPanelWidth(defaultPanelWidth))}
+            onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              setPanelWidth(clampPanelWidth(window.innerWidth - event.clientX));
+            }}
+            onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+            onKeyDown={(event) => {
+              const step = event.shiftKey ? 40 : 16;
+              if (event.key === "ArrowLeft") setPanelWidth((width) => clampPanelWidth(width + step));
+              else if (event.key === "ArrowRight") setPanelWidth((width) => clampPanelWidth(width - step));
+              else if (event.key === "Home") setPanelWidth(clampPanelWidth(minimumPanelWidth));
+              else if (event.key === "End") setPanelWidth(clampPanelWidth(maximumPanelWidth));
+              else return;
+              event.preventDefault();
+            }}
+          >
+            <span aria-hidden="true" />
+          </div>
           <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
             {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
               <button

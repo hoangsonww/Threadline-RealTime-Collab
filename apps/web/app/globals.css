@@ -3587,14 +3587,18 @@ textarea:focus-visible {
 }
 
 .room-panel {
-  flex-basis: 360px;
-  width: 360px;
+  position: relative;
+  width: var(--room-panel-width, 360px);
+  min-width: 0;
+  flex: 0 0 var(--room-panel-width, 360px);
 }
 
 .room-main {
   background:
     radial-gradient(circle at 60% 10%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 26rem),
     var(--canvas-deep);
+  container-name: call-stage;
+  container-type: inline-size;
 }
 
 .room-mode {
@@ -3620,6 +3624,8 @@ textarea:focus-visible {
 }
 
 .video-tile {
+  outline: 3px solid transparent;
+  outline-offset: 2px;
   border-color: var(--line-soft);
   border-radius: 16px;
   background: var(--surface);
@@ -3631,7 +3637,15 @@ textarea:focus-visible {
 }
 
 .video-tile.self {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  border-color: var(--line-soft);
+}
+
+.video-tile.is-speaking {
+  outline-color: color-mix(in srgb, var(--accent) 92%, white);
+  border-color: color-mix(in srgb, var(--accent) 75%, var(--line));
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--accent) 13%, transparent),
+    0 16px 42px color-mix(in srgb, var(--accent) 22%, rgba(0, 0, 0, 0.18));
 }
 
 .video-placeholder {
@@ -3659,6 +3673,16 @@ textarea:focus-visible {
 .tile-label .mic {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 7px;
+}
+
+.tile-label .mic.is-on {
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, rgba(0, 0, 0, 0.58));
+  color: #d9ffed;
+}
+
+.tile-label .mic.is-off {
+  color: #c3cad5;
 }
 
 .tile-status {
@@ -3720,10 +3744,71 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--surface) 88%, transparent);
 }
 
+.room-panel-resizer {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.room-panel-resizer::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition:
+    width 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.room-panel-resizer > span {
+  position: absolute;
+  top: 50%;
+  left: 1px;
+  width: 8px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease;
+}
+
+.room-panel-resizer:hover::before,
+.room-panel-resizer:focus-visible::before {
+  width: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 52%, transparent);
+}
+
+.room-panel-resizer:hover > span,
+.room-panel-resizer:focus-visible > span {
+  opacity: 1;
+}
+
+.room-panel-resizer:focus-visible {
+  outline: none;
+}
+
 .room-panel-tabs {
   gap: 4px;
   padding: 10px;
   border-color: var(--line-soft);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.room-panel-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .room-panel-tabs button {
@@ -3748,6 +3833,7 @@ textarea:focus-visible {
 .files,
 .timeline,
 .whiteboard {
+  min-width: 0;
   padding: 18px;
 }
 
@@ -3825,6 +3911,10 @@ textarea:focus-visible {
   border-color: var(--line-soft);
   border-radius: 11px;
   background: color-mix(in srgb, var(--surface-raised) 65%, transparent);
+}
+
+.file-row strong {
+  max-width: 100%;
 }
 
 .timeline-event {
@@ -5178,6 +5268,21 @@ button.member-picker-option:hover,
   opacity: 0.52;
 }
 
+@container call-stage (max-width: 620px) {
+  .stage,
+  .stage:has(.video-tile:first-child:nth-last-child(2)) {
+    height: auto;
+    min-height: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .video-media-grid.is-dual {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 2fr) minmax(120px, 1fr);
+  }
+}
+
 @media (max-width: 900px) {
   .mobile-nav-toggle {
     position: fixed;
@@ -5215,6 +5320,10 @@ button.member-picker-option:hover,
     flex: 0 0 clamp(300px, 42dvh, 420px);
     border-top: 1px solid var(--line);
     border-left: 0;
+  }
+
+  .room-panel-resizer {
+    display: none;
   }
 
   .room-panel.room-panel-collapsed {

@@ -27,6 +27,7 @@ type Peer = {
   senders: Partial<Record<MediaSlot, RTCRtpSender>>;
   remoteTracks: Map<string, MediaStreamTrack>;
   remoteSources: Partial<Record<MediaSlot, string>>;
+  hasRemoteSourceMetadata: boolean;
   makingOffer: boolean;
   ignoreOffer: boolean;
   isSettingRemoteAnswerPending: boolean;
@@ -136,6 +137,7 @@ export class PeerMesh {
       senders: {},
       remoteTracks: new Map(),
       remoteSources: {},
+      hasRemoteSourceMetadata: false,
       makingOffer: false,
       ignoreOffer: false,
       isSettingRemoteAnswerPending: false,
@@ -189,8 +191,9 @@ export class PeerMesh {
 
   private async applySignal(peerId: string, peer: Peer, signal: SignalPayload) {
     const { connection } = peer;
-    if (signal.mediaSources) {
-      peer.remoteSources = signal.mediaSources;
+    if (Object.prototype.hasOwnProperty.call(signal, "mediaSources")) {
+      peer.remoteSources = signal.mediaSources ?? {};
+      peer.hasRemoteSourceMetadata = true;
       this.notifyRemoteMedia(peerId, peer);
     }
     if (signal.description) {
@@ -286,7 +289,7 @@ export class PeerMesh {
     // During a rolling web deployment, an already-open older client does not send
     // mediaSources metadata. It can only publish one video, so this fallback keeps
     // that camera/audio visible until the tab refreshes onto the new protocol.
-    if (!Object.keys(peer.remoteSources).length) {
+    if (!peer.hasRemoteSourceMetadata) {
       const tracks = [...peer.remoteTracks.values()].filter((track) => track.readyState !== "ended");
       const audio = tracks.find((track) => track.kind === "audio");
       const videos = tracks.filter((track) => track.kind === "video");
