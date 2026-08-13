@@ -202,6 +202,14 @@ describe("PeerMesh signaling", () => {
     expect(sendSignal).toHaveBeenLastCalledWith("a-peer", { mediaSources: { screen: "screen-track" } });
   });
 
+  it("accepts an empty media map when joining without camera or microphone", async () => {
+    const mesh = createMesh();
+    mesh.setLocalTracks({ camera: undefined, microphone: undefined, screen: undefined });
+
+    await expect(mesh.connect("a-peer", false)).resolves.toBeUndefined();
+    expect(FakePeerConnection.instances[0].events).toEqual([]);
+  });
+
   it("requests a fresh ICE negotiation after the connection fails", async () => {
     const mesh = createMesh();
     await mesh.connect("a-peer", false);

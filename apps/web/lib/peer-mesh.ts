@@ -55,7 +55,9 @@ export class PeerMesh {
   setLocalTracks(tracks: LocalMediaTracks) {
     this.localTracks = tracks;
     this.localStream ??= new MediaStream();
-    const activeTracks = new Set(Object.values(tracks));
+    const activeTracks = new Set(
+      Object.values(tracks).filter((track): track is MediaStreamTrack => track !== undefined),
+    );
     for (const track of this.localStream.getTracks()) {
       if (!activeTracks.has(track)) this.localStream.removeTrack(track);
     }
