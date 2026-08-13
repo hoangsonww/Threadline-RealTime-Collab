@@ -22,7 +22,11 @@ test("room panel resizer receives pointer events in its main-panel overlap", asy
     .poll(() =>
       page.locator(".room-panel-resizer").evaluate((resizer) => {
         const { left, top, height } = resizer.getBoundingClientRect();
-        return document.elementFromPoint(left + 1, top + height / 2)?.closest(".room-panel-resizer") === resizer;
+        const x = left + 1;
+        const y = top + height / 2;
+        const main = document.querySelector(".room-main")?.getBoundingClientRect();
+        if (!main || x < main.left || x >= main.right || y < main.top || y >= main.bottom) return false;
+        return document.elementFromPoint(x, y)?.closest(".room-panel-resizer") === resizer;
       }),
     )
     .toBe(true);
