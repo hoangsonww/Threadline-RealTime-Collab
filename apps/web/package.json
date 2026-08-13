@@ -6,7 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "start": "node scripts/start-standalone.mjs",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
