@@ -3,10 +3,12 @@
 .husky
 .idea
 .next
+.vercel
 .wrangler
 node_modules
 **/node_modules
 **/.next
+**/.vercel
 **/.wrangler
 coverage
 output
@@ -17,4 +19,3 @@ output
 **/.dev.vars
 *.log
 *.tsbuildinfo
-

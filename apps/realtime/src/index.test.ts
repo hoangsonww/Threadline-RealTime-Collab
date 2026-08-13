@@ -1,18 +1,18 @@
-import { env, fetchMock, runInDurableObject, SELF } from "cloudflare:test";
+import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { SignJWT } from "jose";
-import { beforeAll, describe, expect, it } from "vitest";
-import { deliveryRetryDelay, isRetryableDeliveryStatus, type Env, type RoomDurableObject } from "./index";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { deliveryRetryDelay, isRetryableDeliveryStatus, type RoomDurableObject } from "./index";
 
 const ticketSecret = new TextEncoder().encode("test-ticket-secret");
 
 beforeAll(() => {
-  fetchMock.activate();
-  fetchMock.disableNetConnect();
-  fetchMock
-    .get("https://threadline-app-api.vercel.app")
-    .intercept({ path: "/v1/internal/room-events", method: "POST" })
-    .reply(202)
-    .persist();
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.method === "POST" && request.url === "https://threadline-app-api.vercel.app/v1/internal/room-events") {
+      return new Response(null, { status: 202 });
+    }
+    throw new Error(`Unexpected outbound request: ${request.method} ${request.url}`);
+  });
 });
 
 async function ticketFor(roomId: string, userId: string, username: string) {
@@ -79,7 +79,7 @@ describe("RoomDurableObject", () => {
     socket.send(JSON.stringify({ type: "editor", payload: { document: "notes", content: "first" } }));
     socket.send(JSON.stringify({ type: "editor", payload: { document: "notes", content: "latest" } }));
 
-    const namespace = (env as Env).ROOM;
+    const namespace = env.ROOM;
     const stub = namespace.get(namespace.idFromName(roomId));
     let pending: Array<{ event: { payload: unknown } }> = [];
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -142,7 +142,9 @@ describe("RoomDurableObject", () => {
     await nextMessage(alice); // room.ready for Alice
 
     const aliceMessages: Array<{ type: string; payload?: unknown }> = [];
-    alice.addEventListener("message", (event) => aliceMessages.push(JSON.parse(event.data as string)));
+    alice.addEventListener("message", (event) => {
+      aliceMessages.push(JSON.parse(event.data as string));
+    });
 
     const bob = await connect(roomId, "user-b", "Bob");
     await nextMessage(bob); // room.ready for Bob
@@ -182,8 +184,12 @@ describe("RoomDurableObject", () => {
 
     const firstMessages: TestMessage[] = [];
     const secondMessages: TestMessage[] = [];
-    firstDevice.addEventListener("message", (event) => firstMessages.push(JSON.parse(event.data as string)));
-    secondDevice.addEventListener("message", (event) => secondMessages.push(JSON.parse(event.data as string)));
+    firstDevice.addEventListener("message", (event) => {
+      firstMessages.push(JSON.parse(event.data as string));
+    });
+    secondDevice.addEventListener("message", (event) => {
+      secondMessages.push(JSON.parse(event.data as string));
+    });
 
     const bob = await connect(roomId, "user-b", "Bob");
     const bobReady = await nextMessage(bob);

@@ -35,6 +35,9 @@
     ],
     "*.{json,md,yml,yaml,css}": "prettier --write"
   },
+  "overrides": {
+    "nanoid": "3.3.17"
+  },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
     "@playwright/test": "^1.52.0",
@@ -42,7 +45,7 @@
     "concurrently": "^10.0.4",
     "cross-env": "^10.1.0",
     "eslint": "^9.27.0",
-    "eslint-config-next": "^16.2.12",
+    "eslint-config-next": "^16.3.0",
     "eslint-config-prettier": "^10.1.5",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-react-hooks": "^5.2.0",
@@ -53,7 +56,7 @@
     "prettier-plugin-packagejson": "^2.5.10",
     "supertest": "^7.1.1",
     "typescript-eslint": "^8.32.0",
-    "vitest": "^3.1.4"
+    "vitest": "^4.1.10"
   },
   "packageManager": "npm@10.8.2",
   "engines": {
