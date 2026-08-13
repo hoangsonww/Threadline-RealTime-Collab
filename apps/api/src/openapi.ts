@@ -1166,6 +1166,21 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             ticket: { type: "string", description: "Signed JWT-like room ticket." },
             roomId: { type: "string", format: "uuid" },
             expiresIn: { type: "integer", const: 120 },
+            iceServers: {
+              type: "array",
+              description: "Short-lived STUN/TURN configuration when a relay provider is configured.",
+              items: {
+                type: "object",
+                required: ["urls"],
+                properties: {
+                  urls: {
+                    oneOf: [{ type: "string" }, { type: "array", items: { type: "string" }, minItems: 1 }],
+                  },
+                  username: { type: "string" },
+                  credential: { type: "string" },
+                },
+              },
+            },
           },
         },
         RoomEventsResponse: {

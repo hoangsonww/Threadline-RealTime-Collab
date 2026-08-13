@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./application.js";
 import { MemoryRepository } from "./repository.js";
 import { OidcSigner } from "./security.js";
@@ -21,7 +21,13 @@ async function registerWithOrg(
   return { agent, registration, org };
 }
 
-async function createTestApp(additionalWebOrigins?: string[], secureCookies = false) {
+async function createTestApp(
+  additionalWebOrigins?: string[],
+  secureCookies = false,
+  getIceServers?: (
+    userId: string,
+  ) => Promise<Array<{ urls: string | string[]; username?: string; credential?: string }>>,
+) {
   const signer = await OidcSigner.create();
   const delivered: Array<{ type: string; actionUrl: string }> = [];
   const app = createApp({
@@ -33,6 +39,7 @@ async function createTestApp(additionalWebOrigins?: string[], secureCookies = fa
     ticketSecret: "test-ticket-secret",
     ingestSecret: "test-ingest-secret",
     signer,
+    getIceServers,
     actionUrl: (type, token) => `https://app.threadline.test/${type}?token=${token}`,
     deliverAccountAction: async ({ type, actionUrl }) => {
       delivered.push({ type, actionUrl });
@@ -109,7 +116,15 @@ describe("Threadline identity API", () => {
   });
 
   it("creates a session, PAT, room, and short-lived room ticket", async () => {
-    const { app } = await createTestApp();
+    const getIceServers = vi.fn(async () => [
+      { urls: ["stun:stun.cloudflare.com:3478"] },
+      {
+        urls: ["turns:turn.cloudflare.com:443?transport=tcp"],
+        username: "temporary-user",
+        credential: "temporary-credential",
+      },
+    ]);
+    const { app } = await createTestApp(undefined, false, getIceServers);
     const agent = request.agent(app);
     const registration = await agent.post("/v1/auth/register").send({
       email: "avery@example.com",
@@ -147,6 +162,8 @@ describe("Threadline identity API", () => {
     const ticket = await agent.post(`/v1/rooms/${room.body.room.id}/ticket`);
     expect(ticket.status).toBe(200);
     expect(ticket.body.ticket.split(".")).toHaveLength(3);
+    expect(ticket.body.iceServers).toEqual(await getIceServers.mock.results[0].value);
+    expect(getIceServers).toHaveBeenCalledWith(registration.body.user.id);
 
     const delivery = {
       deliveryId: crypto.randomUUID(),
@@ -174,6 +191,32 @@ describe("Threadline identity API", () => {
     // Worker delivered the same deliveryId twice.
     expect(events.body.events).toHaveLength(2);
     expect(events.body.events.at(-1).type).toBe("chat");
+  });
+
+  it("still issues a room ticket when the TURN provider is unavailable", async () => {
+    const getIceServers = vi.fn(async () => {
+      throw new Error("TURN provider unavailable");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { app } = await createTestApp(undefined, false, getIceServers);
+    const { agent, org } = await registerWithOrg(
+      app,
+      { email: "fallback@example.com", username: "fallback", displayName: "Fallback User" },
+      "Fallback Organization",
+    );
+    const room = await agent.post(`/v1/orgs/${org.body.organization.id}/rooms`).send({ name: "fallback-room" });
+
+    const ticket = await agent.post(`/v1/rooms/${room.body.room.id}/ticket`);
+
+    expect(ticket.status).toBe(200);
+    expect(ticket.body.ticket.split(".")).toHaveLength(3);
+    expect(ticket.body.iceServers).toBeUndefined();
+    expect(getIceServers).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to issue TURN credentials; continuing with STUN only.",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
   });
 
   it("rejects room-event ingress with an unknown event type", async () => {

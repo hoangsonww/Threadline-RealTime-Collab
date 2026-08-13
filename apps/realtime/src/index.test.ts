@@ -35,8 +35,11 @@ async function connect(roomId: string, userId: string, username: string) {
   return socket;
 }
 
+type TestParticipant = { connectionId: string; userId: string; username: string };
+type TestMessage = { type: string; payload?: unknown; from?: string };
+
 function nextMessage(socket: WebSocket) {
-  return new Promise<{ type: string; payload?: unknown }>((resolve) => {
+  return new Promise<TestMessage>((resolve) => {
     socket.addEventListener("message", (event) => resolve(JSON.parse(event.data as string)), { once: true });
   });
 }
@@ -160,5 +163,70 @@ describe("RoomDurableObject", () => {
     expect(solo?.map((participant) => participant.userId)).toEqual(["user-a"]);
 
     alice.close();
+  }, 10_000);
+
+  it("keeps two devices for one account as distinct signaling endpoints", async () => {
+    const roomId = crypto.randomUUID();
+    const firstDevice = await connect(roomId, "user-a", "Alice");
+    const firstReady = await nextMessage(firstDevice);
+    const firstParticipant = (firstReady.payload as { participant: TestParticipant }).participant;
+
+    const secondDevice = await connect(roomId, "user-a", "Alice");
+    const secondReady = await nextMessage(secondDevice);
+    const secondPayload = secondReady.payload as {
+      participant: TestParticipant;
+      participants: TestParticipant[];
+    };
+    expect(secondPayload.participant.connectionId).not.toBe(firstParticipant.connectionId);
+    expect(secondPayload.participants.filter((participant) => participant.userId === "user-a")).toHaveLength(2);
+
+    const firstMessages: TestMessage[] = [];
+    const secondMessages: TestMessage[] = [];
+    firstDevice.addEventListener("message", (event) => firstMessages.push(JSON.parse(event.data as string)));
+    secondDevice.addEventListener("message", (event) => secondMessages.push(JSON.parse(event.data as string)));
+
+    const bob = await connect(roomId, "user-b", "Bob");
+    const bobReady = await nextMessage(bob);
+    const bobParticipant = (bobReady.payload as { participant: TestParticipant }).participant;
+    bob.send(
+      JSON.stringify({
+        type: "signal",
+        to: firstParticipant.connectionId,
+        payload: { candidate: { candidate: "candidate:device-one" } },
+      }),
+    );
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (firstMessages.some((message) => message.type === "signal")) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(firstMessages.find((message) => message.type === "signal")?.from).toBe(bobParticipant.connectionId);
+    expect(secondMessages.some((message) => message.type === "signal")).toBe(false);
+
+    firstDevice.close();
+    secondDevice.close();
+    bob.close();
+  }, 10_000);
+
+  it("records account presence only on its first connection and final disconnection", async () => {
+    const roomId = crypto.randomUUID();
+    const firstDevice = await connect(roomId, "user-a", "Alice");
+    await nextMessage(firstDevice);
+    const secondDevice = await connect(roomId, "user-a", "Alice");
+    await nextMessage(secondDevice);
+
+    firstDevice.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    let types = await recentEventTypes(roomId, "user-a", "Alice");
+    expect(types.filter((type) => type === "participant.joined")).toHaveLength(1);
+    expect(types).not.toContain("participant.left");
+
+    secondDevice.close();
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      types = await recentEventTypes(roomId, "user-a", "Alice");
+      if (types.includes("participant.left")) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(types.filter((type) => type === "participant.left")).toHaveLength(1);
   }, 10_000);
 });

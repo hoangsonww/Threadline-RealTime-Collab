@@ -26,11 +26,18 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
-import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
+import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
 import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
-type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
+type Participant = {
+  connectionId: string;
+  userId: string;
+  username: string;
+  role: string;
+  joinedAt: string;
+  screenSharing: boolean;
+};
 type RoomEvent = {
   id?: string;
   type: string;
@@ -42,6 +49,19 @@ type RoomEvent = {
 };
 type Message = { id: string; person: string; initials: string; text: string; time: string };
 type FileEntry = { id: string; name: string; size: string; status: string; downloadUrl?: string };
+
+const maxAutomaticReconnectAttempts = 6;
+const stableConnectionResetMs = 60_000;
+const defaultPanelWidth = 360;
+const minimumPanelWidth = 300;
+const maximumPanelWidth = 720;
+const minimumMainWidth = 380;
+
+const clampPanelWidth = (width: number) => {
+  if (typeof window === "undefined") return Math.min(maximumPanelWidth, Math.max(minimumPanelWidth, width));
+  const availableWidth = Math.max(minimumPanelWidth, window.innerWidth - minimumMainWidth);
+  return Math.min(maximumPanelWidth, availableWidth, Math.max(minimumPanelWidth, width));
+};
 
 const initialsFor = (name: string) =>
   name
@@ -77,7 +97,7 @@ const describeEvent = (event: RoomEvent) => {
   return event.type.replace(/[-.]/g, " ");
 };
 
-function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }) {
+function StreamVideo({ stream, muted, source }: { stream: MediaStream; muted?: boolean; source: "camera" | "screen" }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = ref.current;
@@ -96,7 +116,138 @@ function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }
     tryPlay();
     return () => document.removeEventListener("pointerdown", tryPlay);
   }, [stream]);
-  return <video ref={ref} autoPlay muted={muted} playsInline />;
+  return <video ref={ref} autoPlay muted={muted} playsInline data-source={source} />;
+}
+
+function StreamAudio({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    const audio = ref.current;
+    if (!audio) return;
+    audio.srcObject = stream;
+    const tryPlay = () =>
+      void audio.play().catch(() => document.addEventListener("pointerdown", tryPlay, { once: true }));
+    tryPlay();
+    return () => document.removeEventListener("pointerdown", tryPlay);
+  }, [stream]);
+  return <audio ref={ref} autoPlay />;
+}
+
+function MediaView({ camera, screen, microphone, local = false }: RemoteMedia & { local?: boolean }) {
+  return (
+    <>
+      {!local && microphone && <StreamAudio stream={microphone} />}
+      {(screen || camera) && (
+        <div className={`video-media-grid ${screen && camera ? "is-dual" : ""}`}>
+          {screen && <StreamVideo stream={screen} muted source="screen" />}
+          {camera && <StreamVideo stream={camera} muted source="camera" />}
+        </div>
+      )}
+    </>
+  );
+}
+
+const liveStream = (stream: MediaStream | undefined, kind: "audio" | "video") =>
+  stream?.getTracks().some((track) => track.kind === kind && track.readyState === "live") ? stream : undefined;
+
+function useSpeaking(stream?: MediaStream) {
+  const [speaking, setSpeaking] = useState(false);
+
+  useEffect(() => {
+    const audioStream = liveStream(stream, "audio");
+    if (!audioStream) {
+      setSpeaking(false);
+      return;
+    }
+
+    const AudioContextClass = window.AudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const analyser = context.createAnalyser();
+    const source = context.createMediaStreamSource(audioStream);
+    const samples = new Uint8Array(analyser.fftSize);
+    let animationFrame = 0;
+    let lastVoiceAt = 0;
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.72;
+    source.connect(analyser);
+    void context.resume().catch(() => undefined);
+
+    const measure = (now: number) => {
+      analyser.getByteTimeDomainData(samples);
+      let energy = 0;
+      for (const sample of samples) {
+        const amplitude = (sample - 128) / 128;
+        energy += amplitude * amplitude;
+      }
+      const voiceDetected = Math.sqrt(energy / samples.length) > 0.035;
+      if (voiceDetected) lastVoiceAt = now;
+      setSpeaking(voiceDetected || now - lastVoiceAt < 220);
+      animationFrame = requestAnimationFrame(measure);
+    };
+    animationFrame = requestAnimationFrame(measure);
+
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      source.disconnect();
+      analyser.disconnect();
+      void context.close();
+    };
+  }, [stream]);
+
+  return speaking;
+}
+
+function ParticipantTile({
+  person,
+  media,
+  self,
+  otherDevice,
+  localMicEnabled,
+}: {
+  person: Participant;
+  media: RemoteMedia;
+  self: boolean;
+  otherDevice: boolean;
+  localMicEnabled: boolean;
+}) {
+  const camera = liveStream(media.camera, "video");
+  const screen = liveStream(media.screen, "video");
+  const microphone = liveStream(media.microphone, "audio");
+  const micEnabled = self ? localMicEnabled : !!microphone;
+  const speaking = useSpeaking(microphone);
+  const hasVideo = !!camera || !!screen;
+  const mediaKey = `${camera?.id ?? "no-camera"}:${screen?.id ?? "no-screen"}`;
+  const displayName = self
+    ? `${person.username} (you)`
+    : otherDevice
+      ? `${person.username} (your other device)`
+      : person.username;
+
+  return (
+    <article
+      className={`video-tile ${self ? "self" : ""} ${speaking ? "is-speaking" : ""}`}
+      aria-label={`${displayName}${speaking ? ", speaking" : micEnabled ? ", microphone on" : ", microphone off"}`}
+    >
+      <MediaView key={mediaKey} camera={camera} screen={screen} microphone={microphone} local={self} />
+      {!hasVideo && (
+        <div className="video-placeholder">
+          <span className="avatar">{initialsFor(person.username)}</span>
+        </div>
+      )}
+      <div className="tile-label">
+        <span>{displayName}</span>
+        <span
+          className={`mic ${micEnabled ? "is-on" : "is-off"}`}
+          title={micEnabled ? `${person.username}'s microphone is on` : `${person.username}'s microphone is off`}
+          aria-hidden="true"
+        >
+          {micEnabled ? <MicrophoneIcon size={12} weight="fill" /> : <MicrophoneSlashIcon size={12} />}
+        </span>
+      </div>
+      {screen && <span className="tile-status">Sharing</span>}
+    </article>
+  );
 }
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
@@ -104,6 +255,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [panel, setPanel] = useState<Panel>("chat");
   const [mode, setMode] = useState<"call" | "editor">("call");
   const [showPanel, setShowPanel] = useState(true);
+  const [panelWidth, setPanelWidth] = useState(defaultPanelWidth);
   const [room, setRoom] = useState<Room>();
   const [identity, setIdentity] = useState<WorkspaceUser>();
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -116,12 +268,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [roomError, setRoomError] = useState("");
-  const [mic, setMic] = useState(true);
+  const [connectionNotice, setConnectionNotice] = useState("");
+  const [mic, setMic] = useState(false);
   const [camera, setCamera] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const [remoteMedia, setRemoteMedia] = useState<Record<string, RemoteMedia>>({});
+  const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
+  const [localMicrophoneStream, setLocalMicrophoneStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
   const boardRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
@@ -132,7 +288,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const knownPeersRef = useRef<Set<string>>(new Set());
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+  const hasOtherDeviceRef = useRef(false);
   const fileUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    const fitPanelToViewport = () => setPanelWidth((width) => clampPanelWidth(width));
+    window.addEventListener("resize", fitPanelToViewport);
+    return () => window.removeEventListener("resize", fitPanelToViewport);
+  }, []);
 
   const addEvent = useCallback((event: RoomEvent) => {
     setTimeline((items) =>
@@ -185,7 +350,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   useEffect(
     () => () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
       socketRef.current?.close();
       socketRef.current = null;
@@ -215,164 +382,279 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     context.stroke();
   }, []);
 
+  const publishLocalTracks = useCallback(() => {
+    meshRef.current?.setLocalTracks({
+      camera: cameraStreamRef.current?.getVideoTracks()[0],
+      microphone: microphoneStreamRef.current?.getAudioTracks()[0],
+      screen: screenStreamRef.current?.getVideoTracks()[0],
+    });
+  }, []);
+
   const connectRoom = useCallback(async () => {
     const realtime = process.env.NEXT_PUBLIC_REALTIME_ORIGIN;
-    if (socketRef.current?.readyState === WebSocket.OPEN) return true;
+    if (socketRef.current?.readyState === WebSocket.OPEN && localIdRef.current) return true;
+    if (connectPromiseRef.current) return connectPromiseRef.current;
     if (!apiOrigin || !realtime) {
       setRoomError("Realtime is not configured. Set both NEXT_PUBLIC_API_ORIGIN and NEXT_PUBLIC_REALTIME_ORIGIN.");
       return false;
     }
-    try {
-      const { ticket } = await apiFetch<{ ticket: string }>(`/v1/rooms/${roomId}/ticket`, { method: "POST" });
-      const socket = new WebSocket(
-        `${realtime.replace(/^http/, "ws")}/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`,
-      );
-      meshRef.current ??= new PeerMesh({
-        sendSignal: (peerId, payload) => socket.send(JSON.stringify({ type: "signal", to: peerId, payload })),
-        onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
-        getLocalId: () => localIdRef.current,
-        onFile: (_peerId, file) => {
-          const downloadUrl = URL.createObjectURL(file);
-          fileUrlsRef.current.push(downloadUrl);
-          setFiles((items) => [
-            {
-              id: crypto.randomUUID(),
-              name: file.name,
-              size: formatSize(file.size),
-              status: "Ready to download",
-              downloadUrl,
+    const attempt = (async () => {
+      try {
+        const { ticket, iceServers } = await apiFetch<{ ticket: string; iceServers?: RTCIceServer[] }>(
+          `/v1/rooms/${roomId}/ticket`,
+          { method: "POST" },
+        );
+        return await new Promise<boolean>((resolve) => {
+          let settled = false;
+          const settle = (result: boolean) => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(readyTimer);
+              resolve(result);
+            }
+          };
+          const socket = new WebSocket(
+            `${realtime.replace(/^http/, "ws")}/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`,
+          );
+
+          // A mesh is tied to the signaling socket that created it. Reusing it
+          // after reconnect made every new SDP/ICE message use a closed socket.
+          meshRef.current?.close();
+          knownPeersRef.current.clear();
+          localIdRef.current = "";
+          setRemoteMedia({});
+          const mesh = new PeerMesh({
+            sendSignal: (peerId, payload) => {
+              if (socket.readyState === WebSocket.OPEN)
+                socket.send(JSON.stringify({ type: "signal", to: peerId, payload }));
             },
-            ...items,
-          ]);
-        },
-      });
-      socket.onopen = () => {
-        reconnectAttemptRef.current = 0;
-        setConnected(true);
-        setReconnecting(false);
-        setRoomError("");
-      };
-      socket.onclose = () => {
+            onRemoteMedia: (peerId, media) => setRemoteMedia((items) => ({ ...items, [peerId]: media })),
+            getLocalId: () => localIdRef.current,
+            iceServers,
+            onFile: (_peerId, file) => {
+              const downloadUrl = URL.createObjectURL(file);
+              fileUrlsRef.current.push(downloadUrl);
+              setFiles((items) => [
+                {
+                  id: crypto.randomUUID(),
+                  name: file.name,
+                  size: formatSize(file.size),
+                  status: "Ready to download",
+                  downloadUrl,
+                },
+                ...items,
+              ]);
+            },
+          });
+          mesh.setLocalTracks({
+            camera: cameraStreamRef.current?.getVideoTracks()[0],
+            microphone: microphoneStreamRef.current?.getAudioTracks()[0],
+            screen: screenStreamRef.current?.getVideoTracks()[0],
+          });
+          meshRef.current = mesh;
+          socketRef.current = socket;
+          const readyTimer = setTimeout(() => {
+            if (socketRef.current !== socket || settled) return;
+            setRoomError("The live room did not finish connecting. Retrying…");
+            socket.close();
+          }, 15_000);
+
+          const syncPeers = (people: Participant[]) => {
+            const localId = localIdRef.current;
+            if (!localId) return;
+            const presentPeerIds = new Set(
+              people.map((person) => person.connectionId).filter((connectionId) => connectionId !== localId),
+            );
+            for (const peerId of knownPeersRef.current) {
+              if (presentPeerIds.has(peerId)) continue;
+              mesh.disconnect(peerId);
+              knownPeersRef.current.delete(peerId);
+              setRemoteMedia((items) => {
+                const next = { ...items };
+                delete next[peerId];
+                return next;
+              });
+            }
+            for (const person of people) {
+              if (person.connectionId === localId || knownPeersRef.current.has(person.connectionId)) continue;
+              knownPeersRef.current.add(person.connectionId);
+              void mesh.connect(person.connectionId, localId < person.connectionId);
+            }
+          };
+
+          const syncOtherDevices = (people: Participant[]) => {
+            const localId = localIdRef.current;
+            const localUserId = people.find((person) => person.connectionId === localId)?.userId;
+            if (!localId || !localUserId) return;
+            const hasOtherDevice = people.some(
+              (person) => person.userId === localUserId && person.connectionId !== localId,
+            );
+            hasOtherDeviceRef.current = hasOtherDevice;
+            setConnectionNotice(
+              hasOtherDevice
+                ? "This account is connected on another device. Keep only one microphone active to prevent audio feedback."
+                : "",
+            );
+          };
+
+          socket.onopen = () => setRoomError("");
+          socket.onclose = () => {
+            settle(false);
+            // leave() nulls this ref first; a newer attempt replaces it.
+            if (socketRef.current !== socket) return;
+            setConnected(false);
+            mesh.close();
+            if (meshRef.current === mesh) meshRef.current = null;
+            knownPeersRef.current.clear();
+            localIdRef.current = "";
+            setRemoteMedia({});
+            if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
+            const reconnectAttempt = reconnectAttemptRef.current + 1;
+            reconnectAttemptRef.current = reconnectAttempt;
+            if (reconnectAttempt > maxAutomaticReconnectAttempts) {
+              setReconnecting(false);
+              setRoomError("The live room could not reconnect automatically. Select Join room to try again.");
+              return;
+            }
+            const delay = Math.min(1000 * 2 ** (reconnectAttempt - 1), 15_000);
+            setReconnecting(true);
+            reconnectTimerRef.current = setTimeout(() => {
+              reconnectTimerRef.current = null;
+              if (socketRef.current === socket) void connectRoom();
+            }, delay);
+          };
+          socket.onerror = () => {
+            if (socketRef.current === socket)
+              setRoomError("The room coordinator could not be reached. Check the realtime deployment and try again.");
+          };
+          socket.onmessage = (wire) => {
+            if (socketRef.current !== socket) return;
+            const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
+            if (event.type === "presence") {
+              const people = (event.payload as Participant[]) ?? [];
+              setParticipants(people);
+              syncPeers(people);
+              syncOtherDevices(people);
+              return;
+            }
+            if (event.type === "room.ready") {
+              const payload = event.payload as {
+                participants?: Participant[];
+                recentEvents?: RoomEvent[];
+                participant?: Participant;
+              };
+              if (payload.participant?.connectionId) localIdRef.current = payload.participant.connectionId;
+              setParticipants(payload.participants ?? []);
+              payload.recentEvents?.forEach(addEvent);
+              hydrateEditorState(payload.recentEvents ?? []);
+              syncPeers(payload.participants ?? []);
+              syncOtherDevices(payload.participants ?? []);
+              if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
+              reconnectResetTimerRef.current = setTimeout(() => {
+                reconnectAttemptRef.current = 0;
+                reconnectResetTimerRef.current = null;
+              }, stableConnectionResetMs);
+              setConnected(true);
+              setReconnecting(false);
+              setRoomError("");
+              settle(true);
+              return;
+            }
+            if (event.type === "signal" && event.from) {
+              void mesh.receiveSignal(event.from, event.payload as SignalPayload);
+              return;
+            }
+            if (event.type === "editor") {
+              const payload = event.payload as { document?: string; content?: string };
+              if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
+              if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
+            }
+            if (event.type === "whiteboard") {
+              const payload = event.payload as {
+                from?: { x: number; y: number };
+                to?: { x: number; y: number };
+                clear?: boolean;
+              };
+              if (payload.clear)
+                boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
+              else if (payload.from && payload.to) drawLine(payload.from, payload.to);
+            }
+            if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
+          };
+        });
+      } catch (error) {
         setConnected(false);
-        // Only auto-reconnect if this socket is still the active one — a call to
-        // leave() nulls socketRef.current first, and a newer connectRoom() call
-        // has already replaced it with a different socket, so either way this
-        // close is not the "still trying to be in this room" case.
-        if (socketRef.current !== socket) return;
-        const attempt = reconnectAttemptRef.current + 1;
-        reconnectAttemptRef.current = attempt;
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 15_000);
-        setReconnecting(true);
-        reconnectTimerRef.current = setTimeout(() => {
-          if (socketRef.current === socket) void connectRoom();
-        }, delay);
-      };
-      socket.onerror = () =>
-        setRoomError("The room coordinator could not be reached. Check the realtime deployment and try again.");
-      const connectToNewPeers = (people: Participant[]) => {
-        const localId = localIdRef.current;
-        if (!localId) return;
-        for (const person of people) {
-          if (person.userId === localId || knownPeersRef.current.has(person.userId)) continue;
-          knownPeersRef.current.add(person.userId);
-          void meshRef.current?.connect(person.userId, localId < person.userId);
-        }
-      };
-      socket.onmessage = (wire) => {
-        const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
-        if (event.type === "presence") {
-          const people = (event.payload as Participant[]) ?? [];
-          setParticipants(people);
-          // Presence broadcasts (someone else joining) only reach sockets that
-          // were already connected, so this side must also offer to connect —
-          // room.ready alone only tells the newcomer about existing peers, not
-          // the other way around.
-          connectToNewPeers(people);
-          return;
-        }
-        if (event.type === "room.ready") {
-          const payload = event.payload as {
-            participants?: Participant[];
-            recentEvents?: RoomEvent[];
-            participant?: Participant;
-          };
-          setParticipants(payload.participants ?? []);
-          payload.recentEvents?.forEach(addEvent);
-          hydrateEditorState(payload.recentEvents ?? []);
-          if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
-          connectToNewPeers(payload.participants ?? []);
-          return;
-        }
-        if (event.type === "signal" && event.from) {
-          void meshRef.current?.receiveSignal(event.from, event.payload as SignalPayload);
-          return;
-        }
-        if (event.type === "editor") {
-          const payload = event.payload as { document?: string; content?: string };
-          if (payload.document === "notes" && typeof payload.content === "string") setNotes(payload.content);
-          if (payload.document === "code" && typeof payload.content === "string") setCode(payload.content);
-        }
-        if (event.type === "whiteboard") {
-          const payload = event.payload as {
-            from?: { x: number; y: number };
-            to?: { x: number; y: number };
-            clear?: boolean;
-          };
-          if (payload.clear)
-            boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
-          else if (payload.from && payload.to) drawLine(payload.from, payload.to);
-        }
-        if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
-      };
-      socketRef.current = socket;
-      return true;
-    } catch (error) {
-      setConnected(false);
-      setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
-      return false;
-    }
+        setRoomError(error instanceof Error ? error.message : "Unable to join the room.");
+        return false;
+      }
+    })();
+    connectPromiseRef.current = attempt;
+    const result = await attempt;
+    if (connectPromiseRef.current === attempt) connectPromiseRef.current = null;
+    return result;
   }, [addEvent, drawLine, hydrateEditorState, roomId]);
+
+  const retryRoomConnection = useCallback(() => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    reconnectAttemptRef.current = 0;
+    setReconnecting(false);
+    setRoomError("");
+    return connectRoom();
+  }, [connectRoom]);
 
   const startCamera = async () => {
     try {
-      if (!(await connectRoom())) return;
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = stream;
-      meshRef.current?.setLocalStream(stream);
-      setLocalStream(stream);
+      if (!(await retryRoomConnection())) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = stream;
+      setLocalCameraStream(stream);
       setCamera(true);
-      setMic(true);
+      publishLocalTracks();
     } catch {
-      setRoomError("Camera and microphone access was not granted.");
+      setRoomError("Camera access was not granted.");
     }
   };
-  const toggleMic = () => {
-    const next = !mic;
-    streamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setMic(next);
+  const toggleMic = async () => {
+    if (mic) {
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = null;
+      setLocalMicrophoneStream(null);
+      setMic(false);
+      publishLocalTracks();
+      return;
+    }
+    try {
+      if (!(await retryRoomConnection())) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = stream;
+      setLocalMicrophoneStream(stream);
+      setMic(true);
+      publishLocalTracks();
+    } catch {
+      setRoomError("Microphone access was not granted.");
+    }
   };
   const toggleCamera = () => {
     if (!camera) void startCamera();
     else {
-      streamRef.current?.getVideoTracks().forEach((track) => {
-        track.enabled = false;
-      });
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      setLocalCameraStream(null);
       setCamera(false);
+      publishLocalTracks();
     }
   };
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
+    setLocalScreenStream(null);
     setSharing(false);
     publish("screen-share", { active: false });
-    // Restore whatever the camera stream was already sending (on, off-but-muted, or
-    // never started) rather than assuming it should come back on.
-    meshRef.current?.setLocalStream(streamRef.current);
-    setLocalStream(camera ? streamRef.current : null);
-  }, [camera, publish]);
+    publishLocalTracks();
+  }, [publish, publishLocalTracks]);
   const toggleScreenShare = async () => {
     if (sharing) return stopScreenShare();
     try {
@@ -381,12 +663,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       const videoTrack = screen.getVideoTracks()[0];
       videoTrack.addEventListener("ended", stopScreenShare);
       screenStreamRef.current = screen;
-      // Keep the mic flowing to peers while sharing: publish the screen's video
-      // alongside the existing microphone track rather than replacing it.
-      const audioTrack = streamRef.current?.getAudioTracks()[0];
-      meshRef.current?.setLocalStream(audioTrack ? new MediaStream([videoTrack, audioTrack]) : screen);
-      setLocalStream(screen);
+      setLocalScreenStream(screen);
       setSharing(true);
+      publishLocalTracks();
       publish("screen-share", { active: true });
     } catch {
       setRoomError("Screen share was not started.");
@@ -394,11 +673,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   };
   const leave = () => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
     reconnectTimerRef.current = null;
+    reconnectResetTimerRef.current = null;
     reconnectAttemptRef.current = 0;
     setReconnecting(false);
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
+    setLocalMicrophoneStream(null);
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
     socketRef.current?.close();
@@ -407,12 +691,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     meshRef.current = null;
     knownPeersRef.current.clear();
     localIdRef.current = "";
-    setRemoteStreams({});
-    setLocalStream(null);
+    setRemoteMedia({});
+    setLocalCameraStream(null);
+    setLocalScreenStream(null);
     setParticipants([]);
     setCamera(false);
+    setMic(false);
     setSharing(false);
     setConnected(false);
+    setConnectionNotice("");
+    hasOtherDeviceRef.current = false;
     router.push("/app/rooms");
   };
   const sendMessage = (event: React.FormEvent) => {
@@ -460,12 +748,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       file,
       id: crypto.randomUUID(),
     }));
-    const items = transfers.map(({ file, id }) => ({
-      id,
-      name: file.name,
-      size: formatSize(file.size),
-      status: "Waiting for connected peers…",
-    }));
+    const items = transfers.map(({ file, id }) => {
+      const downloadUrl = URL.createObjectURL(file);
+      fileUrlsRef.current.push(downloadUrl);
+      return {
+        id,
+        name: file.name,
+        size: formatSize(file.size),
+        status: "Waiting for connected peers…",
+        downloadUrl,
+      };
+    });
     setFiles((existing) => [...items, ...existing]);
     void Promise.all(
       transfers.map(async ({ file, id }) => {
@@ -489,7 +782,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const visibleParticipants = participants.length
     ? participants
     : identity
-      ? [{ userId: identity.id, username: identity.displayName, role: "member", joinedAt: "", screenSharing: false }]
+      ? [
+          {
+            connectionId: localIdRef.current || `local-${identity.id}`,
+            userId: identity.id,
+            username: identity.displayName,
+            role: "member",
+            joinedAt: "",
+            screenSharing: false,
+          },
+        ]
       : [];
 
   return (
@@ -541,35 +843,35 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         </div>
       </header>
       {roomError && <p className="room-error">{roomError}</p>}
-      <div className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}>
+      {!roomError && connectionNotice && <p className="room-notice">{connectionNotice}</p>}
+      <div
+        className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}
+        style={{ "--room-panel-width": `${panelWidth}px` } as React.CSSProperties}
+      >
         <section className="room-main">
           {mode === "call" ? (
             <div className="room-mode">
               {connected ? (
                 <div className="stage">
                   {visibleParticipants.map((person) => {
-                    const self = person.userId === identity?.id;
-                    const stream = self ? undefined : remoteStreams[person.userId];
-                    const hasLocalVideo = self && (camera || sharing) && !!localStream;
+                    const self = person.connectionId === localIdRef.current;
+                    const otherDevice = !self && person.userId === identity?.id;
+                    const media: RemoteMedia = self
+                      ? {
+                          camera: localCameraStream ?? undefined,
+                          microphone: localMicrophoneStream ?? undefined,
+                          screen: localScreenStream ?? undefined,
+                        }
+                      : (remoteMedia[person.connectionId] ?? {});
                     return (
-                      <article className={`video-tile ${self ? "self" : ""}`} key={person.userId}>
-                        {hasLocalVideo && <StreamVideo stream={localStream!} muted />}
-                        {!self && stream && <StreamVideo stream={stream} />}{" "}
-                        {((!stream && !self) || (self && !hasLocalVideo)) && (
-                          <div className="video-placeholder">
-                            <span className="avatar">{initialsFor(person.username)}</span>
-                          </div>
-                        )}
-                        <div className="tile-label">
-                          <span>{self ? `${person.username} (you)` : person.username}</span>
-                          {self && (
-                            <span className="mic">
-                              {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
-                            </span>
-                          )}
-                        </div>
-                        {person.screenSharing && <span className="tile-status">Sharing</span>}
-                      </article>
+                      <ParticipantTile
+                        key={person.connectionId}
+                        person={person}
+                        media={media}
+                        self={self}
+                        otherDevice={otherDevice}
+                        localMicEnabled={mic}
+                      />
                     );
                   })}
                 </div>
@@ -586,7 +888,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       <button className="button button-primary" onClick={() => void startCamera()}>
                         <VideoCameraIcon size={16} weight="fill" /> Join with camera
                       </button>
-                      <button className="button button-secondary" onClick={() => void connectRoom()}>
+                      <button className="button button-secondary" onClick={() => void retryRoomConnection()}>
                         <BroadcastIcon size={16} /> Join without camera
                       </button>
                     </div>
@@ -601,7 +903,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 {connected ? (
                   <span>Synced through the room</span>
                 ) : (
-                  <button className="button button-secondary" onClick={() => void connectRoom()}>
+                  <button className="button button-secondary" onClick={() => void retryRoomConnection()}>
                     <BroadcastIcon size={14} /> Join to sync
                   </button>
                 )}
@@ -679,6 +981,34 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           inert={!showPanel || undefined}
           aria-hidden={!showPanel}
         >
+          <div
+            className="room-panel-resizer"
+            role="separator"
+            aria-label="Resize room tools sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={minimumPanelWidth}
+            aria-valuemax={maximumPanelWidth}
+            aria-valuenow={Math.round(panelWidth)}
+            tabIndex={showPanel ? 0 : -1}
+            onDoubleClick={() => setPanelWidth(clampPanelWidth(defaultPanelWidth))}
+            onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              setPanelWidth(clampPanelWidth(window.innerWidth - event.clientX));
+            }}
+            onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+            onKeyDown={(event) => {
+              const step = event.shiftKey ? 40 : 16;
+              if (event.key === "ArrowLeft") setPanelWidth((width) => clampPanelWidth(width + step));
+              else if (event.key === "ArrowRight") setPanelWidth((width) => clampPanelWidth(width - step));
+              else if (event.key === "Home") setPanelWidth(clampPanelWidth(minimumPanelWidth));
+              else if (event.key === "End") setPanelWidth(clampPanelWidth(maximumPanelWidth));
+              else return;
+              event.preventDefault();
+            }}
+          >
+            <span aria-hidden="true" />
+          </div>
           <div className="room-panel-tabs" role="tablist" aria-label="Room tools">
             {(["chat", "notes", "board", "files", "timeline"] as Panel[]).map((item) => (
               <button
@@ -693,7 +1023,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               </button>
             ))}
           </div>
-          <div className={`panel-content ${connected ? "" : "is-connection-blocked"}`}>
+          <div className={`panel-content ${connected ? "" : "is-connection-blocked"}`} data-panel={panel}>
             {!connected && (
               <div className="panel-connection-gate" role="status">
                 <span className="panel-connection-gate-icon">
@@ -701,7 +1031,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 </span>
                 <strong>Join to use {panel}</strong>
                 <p>This tool becomes live once you connect to the room.</p>
-                <button className="button button-primary" onClick={() => void connectRoom()}>
+                <button className="button button-primary" onClick={() => void retryRoomConnection()}>
                   <BroadcastIcon size={15} /> Join room
                 </button>
               </div>

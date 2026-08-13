@@ -3,6 +3,7 @@ import express from "express";
 import { createApp } from "./application.js";
 import { MemoryRepository, MongoRepository, type Repository } from "./repository.js";
 import { OidcSigner } from "./security.js";
+import { createIceServerProvider } from "./turn.js";
 
 // Vercel executes Preview Functions with a production Node runtime. Treat
 // previews as pre-production so they can exercise Atlas and the API from a
@@ -93,6 +94,7 @@ async function createConfiguredApp() {
       ticketSecret: secret("ROOM_TICKET_SECRET", "development-ticket-secret-change-me"),
       ingestSecret: secret("INTERNAL_INGEST_SECRET", "development-ingest-secret-change-me"),
       signer,
+      getIceServers: createIceServerProvider(),
       actionUrl: (type, token) =>
         `${actionBaseUrl}/${type === "password_reset" ? "reset-password" : "verify-email"}?token=${encodeURIComponent(token)}`,
       deliverAccountAction: deliveryWebhook
