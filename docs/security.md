@@ -157,7 +157,7 @@ A room ticket is a purpose-built, short-lived credential — not a general beare
 
 ## Realtime → API ingest secret
 
-`apps/realtime` forwards durable events to `POST /v1/internal/room-events` with a shared secret in `X-Threadline-Ingest` (API env: `INTERNAL_INGEST_SECRET`; Worker env: `PERSISTENCE_SECRET` — same value, different names on each side). This secret proves the _request_ came from the trusted Worker. It does **not** by itself authorize the _content_ — the API independently re-runs `canRoom(..., "write")` for `event.from` (the acting user embedded in the event) before persisting anything. A forged event naming a user without write access to that room is rejected with `403` even with a valid ingest secret.
+`apps/realtime` forwards durable events to `POST /v1/internal/room-events` with a shared secret in `X-Threadline-Ingest` (API env: `INTERNAL_INGEST_SECRET`; Worker env: `PERSISTENCE_SECRET` — same value, different names on each side). This secret proves the _request_ came from the trusted Worker. It does **not** by itself authorize the _content_: the API validates an explicit event allowlist and payload schema, requires `join_live` for `participant.joined`/`participant.left`, and requires `write` for chat/editor/screen-share mutations. Presence payload identity must match `event.from`. A stable `deliveryId` is reused as the event ID, and a unique database index makes retries idempotent.
 
 ## First-party OIDC
 

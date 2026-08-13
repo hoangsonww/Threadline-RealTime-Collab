@@ -1,8 +1,19 @@
-import { SELF } from "cloudflare:test";
+import { env, fetchMock, runInDurableObject, SELF } from "cloudflare:test";
 import { SignJWT } from "jose";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { deliveryRetryDelay, isRetryableDeliveryStatus, type Env, type RoomDurableObject } from "./index";
 
 const ticketSecret = new TextEncoder().encode("test-ticket-secret");
+
+beforeAll(() => {
+  fetchMock.activate();
+  fetchMock.disableNetConnect();
+  fetchMock
+    .get("https://threadline-app-api.vercel.app")
+    .intercept({ path: "/v1/internal/room-events", method: "POST" })
+    .reply(202)
+    .persist();
+});
 
 async function ticketFor(roomId: string, userId: string, username: string) {
   return new SignJWT({ room_id: roomId, role: "member", username })
@@ -38,6 +49,61 @@ async function recentEventTypes(roomId: string, userId: string, username: string
 }
 
 describe("RoomDurableObject", () => {
+  it("does not retry permanent webhook rejections", () => {
+    expect(isRetryableDeliveryStatus(400)).toBe(false);
+    expect(isRetryableDeliveryStatus(401)).toBe(false);
+    expect(isRetryableDeliveryStatus(403)).toBe(false);
+    expect(isRetryableDeliveryStatus(404)).toBe(false);
+    expect(isRetryableDeliveryStatus(409)).toBe(false);
+  });
+
+  it("backs off temporary webhook failures with a bounded delay", () => {
+    expect(isRetryableDeliveryStatus(408)).toBe(true);
+    expect(isRetryableDeliveryStatus(425)).toBe(true);
+    expect(isRetryableDeliveryStatus(429)).toBe(true);
+    expect(isRetryableDeliveryStatus(500)).toBe(true);
+    expect(deliveryRetryDelay(1)).toBe(30_000);
+    expect(deliveryRetryDelay(2)).toBe(60_000);
+    expect(deliveryRetryDelay(20)).toBe(30 * 60_000);
+  });
+
+  it("coalesces editor persistence while still accepting every live update", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Editor");
+    await nextMessage(socket);
+
+    socket.send(JSON.stringify({ type: "editor", payload: { document: "notes", content: "first" } }));
+    socket.send(JSON.stringify({ type: "editor", payload: { document: "notes", content: "latest" } }));
+
+    const namespace = (env as Env).ROOM;
+    const stub = namespace.get(namespace.idFromName(roomId));
+    let pending: Array<{ event: { payload: unknown } }> = [];
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      pending = await runInDurableObject(stub, async (_instance: RoomDurableObject, state) => [
+        ...(await state.storage.list<{ event: { payload: unknown } }>({ prefix: "delivery:editor:" })).values(),
+      ]);
+      if ((pending[0]?.event.payload as { content?: string } | undefined)?.content === "latest") break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(pending).toHaveLength(1);
+    expect(pending[0].event.payload).toEqual({ document: "notes", content: "latest" });
+    socket.close();
+  });
+
+  it("rejects invalid mutation payloads before they enter the persistence queue", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Writer");
+    await nextMessage(socket);
+
+    socket.send(JSON.stringify({ type: "chat", payload: { text: "" } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(await recentEventTypes(roomId, userId, "Writer")).not.toContain("chat");
+  });
+
   it("rejects a WebSocket upgrade without a valid room ticket", async () => {
     const response = await SELF.fetch("https://example.com/rooms/no-ticket-room", {
       headers: { Upgrade: "websocket" },

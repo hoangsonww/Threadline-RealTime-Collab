@@ -728,7 +728,7 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "ingestRoomEvent",
           summary: "Persist a room event from the realtime service",
           description:
-            "Cloudflare Durable Objects only. Send the shared ingress credential in `X-Threadline-Ingest`. Do not expose this credential to browsers or third parties.",
+            "Cloudflare Durable Objects only. Send the shared ingress credential in `X-Threadline-Ingest`. Presence events require join permission; mutations require write permission. A stable deliveryId makes retries idempotent. Do not expose the credential to browsers or third parties.",
           security: [{ roomEventIngress: [] }],
           requestBody: { required: true, content: json(schema("IngestRoomEventInput")) },
           responses: {
@@ -1048,12 +1048,20 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           type: "object",
           required: ["roomId", "event"],
           properties: {
+            deliveryId: {
+              type: "string",
+              format: "uuid",
+              description: "Stable across retries so ingest is idempotent.",
+            },
             roomId: { type: "string", format: "uuid" },
             event: {
               type: "object",
-              required: ["type", "payload", "at"],
+              required: ["type", "payload", "from", "at"],
               properties: {
-                type: { type: "string", minLength: 1, maxLength: 100 },
+                type: {
+                  type: "string",
+                  enum: ["participant.joined", "participant.left", "chat", "editor", "screen-share"],
+                },
                 payload: {},
                 from: { type: "string", format: "uuid" },
                 at: { type: "string", format: "date-time" },

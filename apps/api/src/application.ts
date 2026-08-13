@@ -33,6 +33,44 @@ const emailSchema = z
   .email()
   .transform((value) => value.toLowerCase());
 const scopeSchema = z.array(z.enum(scopes)).min(1).max(scopes.length);
+const ingestedRoomEventSchema = z
+  .discriminatedUnion("type", [
+    z.object({
+      type: z.enum(["participant.joined", "participant.left"]),
+      payload: z.object({ userId: z.string().uuid() }),
+      from: z.string().uuid(),
+      at: z.string().datetime(),
+    }),
+    z.object({
+      type: z.literal("chat"),
+      payload: z.object({ text: z.string().trim().min(1).max(4_000), username: z.string().trim().min(1).max(80) }),
+      from: z.string().uuid(),
+      at: z.string().datetime(),
+    }),
+    z.object({
+      type: z.literal("editor"),
+      payload: z.object({ document: z.enum(["code", "notes"]), content: z.string().max(64_000) }),
+      from: z.string().uuid(),
+      at: z.string().datetime(),
+    }),
+    z.object({
+      type: z.literal("screen-share"),
+      payload: z.object({ active: z.boolean() }),
+      from: z.string().uuid(),
+      at: z.string().datetime(),
+    }),
+  ])
+  .superRefine((event, context) => {
+    if (
+      (event.type === "participant.joined" || event.type === "participant.left") &&
+      event.payload.userId !== event.from
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payload", "userId"],
+        message: "Presence event userId must match its actor.",
+      });
+  });
 
 type AppOptions = {
   repository: Repository;
@@ -779,20 +817,26 @@ export function createApp(options: AppOptions, app = express()) {
         return clientError(response, 401, "unauthorized", "Invalid room event ingress credential.");
       const input = z
         .object({
+          deliveryId: z.string().uuid().optional(),
           roomId: z.string().uuid(),
-          event: z.object({
-            type: z.string().min(1).max(100),
-            payload: z.unknown(),
-            from: z.string().uuid().optional(),
-            at: z.string().datetime(),
-          }),
+          event: ingestedRoomEventSchema,
         })
         .parse(request.body);
-      const access = input.event.from ? await roomAccess(input.roomId, input.event.from) : undefined;
-      if (!access || !canRoom(access.membership, access.room, access.roomMembership, "write"))
-        return clientError(response, 403, "forbidden", "The event actor cannot write to this room.");
+      const access = await roomAccess(input.roomId, input.event.from);
+      const requiredAction = input.event.type.startsWith("participant.") ? "join_live" : "write";
+      if (!access || !canRoom(access.membership, access.room, access.roomMembership, requiredAction))
+        return clientError(
+          response,
+          403,
+          "forbidden",
+          requiredAction === "join_live"
+            ? "The event actor cannot join this room."
+            : "The event actor cannot write to this room.",
+        );
       await options.repository.writeRoomEvent({
-        id: id(),
+        // The Worker keeps deliveryId stable across retries. Reusing it as the
+        // event ID makes the repository write idempotent without a second key.
+        id: input.deliveryId ?? id(),
         roomId: input.roomId,
         type: input.event.type,
         payload: input.event.payload,

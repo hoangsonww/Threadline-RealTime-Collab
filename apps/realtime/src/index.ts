@@ -8,17 +8,61 @@ export interface Env {
 }
 
 type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
-type ClientMessage = {
-  type: "heartbeat" | "signal" | "cursor" | "chat" | "editor" | "whiteboard" | "screen-share" | "timeline";
-  payload?: unknown;
-  to?: string;
-};
+type ClientMessage =
+  | { type: "heartbeat"; payload?: unknown }
+  | { type: "signal"; payload?: unknown; to?: string }
+  | { type: "cursor"; payload?: unknown }
+  | { type: "whiteboard"; payload?: unknown }
+  | { type: "chat"; payload: { text: string } }
+  | { type: "editor"; payload: { document: "code" | "notes"; content: string } }
+  | { type: "screen-share"; payload: { active: boolean } };
 type ServerMessage = { type: string; payload?: unknown; from?: string; at?: string };
 type PersistedEvent = { type: string; payload: unknown; from: string; at: string };
-type Delivery = { roomId: string; event: PersistedEvent };
+type Delivery = {
+  deliveryId?: string;
+  roomId: string;
+  event: PersistedEvent;
+  attemptCount?: number;
+  nextAttemptAt?: number;
+  queuedAt?: number;
+};
+
+const deliveryRetryBaseMs = 30_000;
+const deliveryRetryMaxMs = 30 * 60_000;
+const deliveryMaxAttempts = 8;
+const editorPersistenceQuietMs = 2_000;
+const editorPersistenceMaxWaitMs = 10_000;
+
+export const isRetryableDeliveryStatus = (status: number) =>
+  status >= 500 || status === 408 || status === 425 || status === 429;
+
+export const deliveryRetryDelay = (attemptCount: number) =>
+  Math.min(deliveryRetryBaseMs * 2 ** Math.max(0, attemptCount - 1), deliveryRetryMaxMs);
 
 const encoder = new TextEncoder();
 const send = (socket: WebSocket, message: ServerMessage) => socket.send(JSON.stringify(message));
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+function isClientMessage(value: unknown): value is ClientMessage {
+  if (!isObject(value) || typeof value.type !== "string") return false;
+  if (["heartbeat", "cursor", "whiteboard"].includes(value.type)) return true;
+  if (value.type === "signal") return value.to === undefined || typeof value.to === "string";
+  if (!isObject(value.payload)) return false;
+  if (value.type === "chat")
+    return (
+      typeof value.payload.text === "string" &&
+      value.payload.text.trim().length > 0 &&
+      value.payload.text.length <= 4_000
+    );
+  if (value.type === "editor")
+    return (
+      (value.payload.document === "code" || value.payload.document === "notes") &&
+      typeof value.payload.content === "string" &&
+      value.payload.content.length <= 64_000
+    );
+  if (value.type === "screen-share") return typeof value.payload.active === "boolean";
+  return false;
+}
 
 export class RoomDurableObject implements DurableObject {
   private participants = new Map<string, Participant>();
@@ -67,35 +111,29 @@ export class RoomDurableObject implements DurableObject {
     const participant = socket.deserializeAttachment() as Participant | null;
     if (!participant || typeof message !== "string" || message.length > 64_000)
       return socket.close(1008, "Invalid message");
-    let event: ClientMessage;
+    let parsed: unknown;
     try {
-      event = JSON.parse(message) as ClientMessage;
+      parsed = JSON.parse(message);
     } catch {
       return socket.close(1007, "Malformed JSON");
     }
-    if (
-      !["heartbeat", "signal", "cursor", "chat", "editor", "whiteboard", "screen-share", "timeline"].includes(
-        event.type,
-      )
-    )
-      return;
+    if (!isClientMessage(parsed)) return socket.close(1008, "Invalid event");
+    const event = parsed;
     // Tickets are issued from the API after ABAC evaluation. A viewer may
     // receive media/signalling and presence but cannot mutate shared state.
-    if (
-      participant.role === "viewer" &&
-      ["chat", "editor", "whiteboard", "screen-share", "timeline"].includes(event.type)
-    )
+    if (participant.role === "viewer" && ["chat", "editor", "whiteboard", "screen-share"].includes(event.type))
       return socket.close(1008, "Room role does not permit writing");
     if (event.type === "heartbeat") return send(socket, { type: "heartbeat", at: new Date().toISOString() });
-    if (event.type === "screen-share")
-      participant.screenSharing = Boolean((event.payload as { active?: boolean })?.active);
+    if (event.type === "screen-share") participant.screenSharing = event.payload.active;
+    const payload =
+      event.type === "chat" ? { text: event.payload.text.trim(), username: participant.username } : event.payload;
     const envelope = {
       type: event.type,
-      payload: event.payload,
+      payload,
       from: participant.userId,
       at: new Date().toISOString(),
     };
-    this.broadcast(envelope, event.to);
+    this.broadcast(envelope, event.type === "signal" ? event.to : undefined);
     if (event.type !== "cursor" && event.type !== "signal" && event.type !== "whiteboard") await this.record(envelope);
     if (event.type === "screen-share") this.broadcast({ type: "presence", payload: [...this.participants.values()] });
   }
@@ -124,9 +162,11 @@ export class RoomDurableObject implements DurableObject {
 
   async alarm() {
     const queued = await this.state.storage.list<Delivery>({ prefix: "delivery:" });
-    for (const [key, delivery] of queued) await this.deliver(key, delivery);
-    const remaining = await this.state.storage.list({ prefix: "delivery:" });
-    if (remaining.size) await this.state.storage.setAlarm(Date.now() + 30_000);
+    const timestamp = Date.now();
+    for (const [key, delivery] of queued) {
+      if (!delivery.nextAttemptAt || delivery.nextAttemptAt <= timestamp) await this.deliver(key, delivery);
+    }
+    await this.scheduleNextDelivery();
   }
 
   private async acceptSocket(socket: WebSocket, participant: Participant) {
@@ -177,8 +217,26 @@ export class RoomDurableObject implements DurableObject {
     this.events = this.events.slice(-250);
     await this.state.storage.put("recent_events", this.events);
     if (this.env.PERSISTENCE_WEBHOOK && this.env.PERSISTENCE_SECRET) {
-      const key = `delivery:${crypto.randomUUID()}`;
-      const delivery = { roomId: this.roomId, event };
+      const delivery = { deliveryId: crypto.randomUUID(), roomId: this.roomId, event };
+      const document =
+        event.type === "editor" && typeof event.payload === "object" && event.payload !== null
+          ? (event.payload as { document?: unknown }).document
+          : undefined;
+      if (document === "code" || document === "notes") {
+        // Editor updates still broadcast immediately, but only the latest snapshot
+        // needs to cross into Mongo. Persist after a pause, or at least every ten
+        // seconds during continuous typing, instead of once per keystroke.
+        const key = `delivery:editor:${document}`;
+        const current = await this.state.storage.get<Delivery>(key);
+        const timestamp = Date.now();
+        const queuedAt = current?.queuedAt ?? timestamp;
+        const nextAttemptAt = Math.min(timestamp + editorPersistenceQuietMs, queuedAt + editorPersistenceMaxWaitMs);
+        await this.state.storage.put(key, { ...delivery, queuedAt, nextAttemptAt });
+        await this.scheduleAlarmAt(nextAttemptAt);
+        return;
+      }
+
+      const key = `delivery:${delivery.deliveryId}`;
       await this.state.storage.put(key, delivery);
       this.state.waitUntil(this.deliver(key, delivery));
     }
@@ -192,12 +250,81 @@ export class RoomDurableObject implements DurableObject {
         headers: { "content-type": "application/json", "x-threadline-ingest": this.env.PERSISTENCE_SECRET },
         body: JSON.stringify(delivery),
       });
+      if (!response.ok && !isRetryableDeliveryStatus(response.status)) {
+        // A malformed, unauthorized, or forbidden event will never become valid
+        // by sending it again. Keeping it queued creates an infinite request loop.
+        await this.deleteDeliveryIfCurrent(key, delivery);
+        console.warn(
+          JSON.stringify({
+            message: "Discarding permanently rejected room event delivery.",
+            roomId: delivery.roomId,
+            eventType: delivery.event.type,
+            status: response.status,
+          }),
+        );
+        return;
+      }
       if (!response.ok) throw new Error(`Persistence returned ${response.status}.`);
-      await this.state.storage.delete(key);
+      await this.deleteDeliveryIfCurrent(key, delivery);
     } catch (error) {
-      console.error(`Room event delivery failed for ${this.roomId}, retrying in 30s.`, error);
-      await this.state.storage.setAlarm(Date.now() + 30_000);
+      const attemptCount = (delivery.attemptCount ?? 0) + 1;
+      if (attemptCount >= deliveryMaxAttempts) {
+        await this.deleteDeliveryIfCurrent(key, delivery);
+        console.error(
+          JSON.stringify({
+            message: "Discarding room event delivery after retry limit.",
+            roomId: delivery.roomId,
+            eventType: delivery.event.type,
+            attemptCount,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return;
+      }
+
+      const delayMs = deliveryRetryDelay(attemptCount);
+      const nextAttemptAt = Date.now() + delayMs;
+      const current = await this.state.storage.get<Delivery>(key);
+      if (delivery.deliveryId && current?.deliveryId !== delivery.deliveryId) return;
+      await this.state.storage.put(key, { ...delivery, attemptCount, nextAttemptAt });
+      await this.scheduleAlarmAt(nextAttemptAt);
+      console.error(
+        JSON.stringify({
+          message: "Room event delivery failed; retry scheduled.",
+          roomId: delivery.roomId,
+          eventType: delivery.event.type,
+          attemptCount,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
+  }
+
+  private async deleteDeliveryIfCurrent(key: string, delivery: Delivery) {
+    if (!delivery.deliveryId) {
+      await this.state.storage.delete(key);
+      return;
+    }
+    const current = await this.state.storage.get<Delivery>(key);
+    if (current?.deliveryId === delivery.deliveryId) await this.state.storage.delete(key);
+  }
+
+  private async scheduleAlarmAt(timestamp: number) {
+    const current = await this.state.storage.getAlarm();
+    if (current === null || timestamp < current) await this.state.storage.setAlarm(timestamp);
+  }
+
+  private async scheduleNextDelivery() {
+    const queued = await this.state.storage.list<Delivery>({ prefix: "delivery:" });
+    if (!queued.size) {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const nextAttemptAt = Math.min(
+      ...[...queued.values()].map((delivery) => delivery.nextAttemptAt ?? Date.now() + deliveryRetryBaseMs),
+    );
+    await this.state.storage.setAlarm(nextAttemptAt);
   }
 
   private async verifyTicket(ticket: string, roomId: string): Promise<Participant | undefined> {

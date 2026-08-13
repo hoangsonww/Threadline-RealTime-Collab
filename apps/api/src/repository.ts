@@ -262,6 +262,7 @@ export class MemoryRepository implements Repository {
     return token?.type === type ? token : undefined;
   }
   async writeRoomEvent(event: RoomEvent) {
+    if (this.roomEvents.some((existing) => existing.id === event.id)) return;
     this.roomEvents.push(event);
   }
   async listRoomEvents(roomId: string) {
@@ -327,6 +328,7 @@ export class MongoRepository implements Repository {
         .collection<AccountActionToken>("account_action_tokens")
         .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       db.collection<RoomEvent>("room_events").createIndex({ roomId: 1, createdAt: -1 }),
+      db.collection<RoomEvent>("room_events").createIndex({ id: 1 }, { unique: true }),
       db.collection<CalendarEvent>("calendar_events").createIndex({ orgId: 1, startsAt: 1 }),
       db.collection<Membership>("memberships").createIndex({ orgId: 1, userId: 1 }, { unique: true }),
       db.collection<Organization>("orgs").createIndex({ joinCode: 1 }, { unique: true }),
@@ -496,7 +498,7 @@ export class MongoRepository implements Repository {
     return result ?? undefined;
   }
   async writeRoomEvent(event: RoomEvent) {
-    await this.roomEvents.insertOne(event);
+    await this.roomEvents.updateOne({ id: event.id }, { $setOnInsert: event }, { upsert: true });
   }
   async listRoomEvents(roomId: string) {
     return this.roomEvents.find({ roomId }).sort({ createdAt: 1 }).toArray();
