@@ -15,7 +15,26 @@ type ClientMessage = {
 };
 type ServerMessage = { type: string; payload?: unknown; from?: string; at?: string };
 type PersistedEvent = { type: string; payload: unknown; from: string; at: string };
-type Delivery = { roomId: string; event: PersistedEvent };
+type Delivery = {
+  deliveryId?: string;
+  roomId: string;
+  event: PersistedEvent;
+  attemptCount?: number;
+  nextAttemptAt?: number;
+  queuedAt?: number;
+};
+
+const deliveryRetryBaseMs = 30_000;
+const deliveryRetryMaxMs = 30 * 60_000;
+const deliveryMaxAttempts = 8;
+const editorPersistenceQuietMs = 2_000;
+const editorPersistenceMaxWaitMs = 10_000;
+
+export const isRetryableDeliveryStatus = (status: number) =>
+  status >= 500 || status === 408 || status === 425 || status === 429;
+
+export const deliveryRetryDelay = (attemptCount: number) =>
+  Math.min(deliveryRetryBaseMs * 2 ** Math.max(0, attemptCount - 1), deliveryRetryMaxMs);
 
 const encoder = new TextEncoder();
 const send = (socket: WebSocket, message: ServerMessage) => socket.send(JSON.stringify(message));
@@ -124,9 +143,11 @@ export class RoomDurableObject implements DurableObject {
 
   async alarm() {
     const queued = await this.state.storage.list<Delivery>({ prefix: "delivery:" });
-    for (const [key, delivery] of queued) await this.deliver(key, delivery);
-    const remaining = await this.state.storage.list({ prefix: "delivery:" });
-    if (remaining.size) await this.state.storage.setAlarm(Date.now() + 30_000);
+    const timestamp = Date.now();
+    for (const [key, delivery] of queued) {
+      if (!delivery.nextAttemptAt || delivery.nextAttemptAt <= timestamp) await this.deliver(key, delivery);
+    }
+    await this.scheduleNextDelivery();
   }
 
   private async acceptSocket(socket: WebSocket, participant: Participant) {
@@ -177,8 +198,26 @@ export class RoomDurableObject implements DurableObject {
     this.events = this.events.slice(-250);
     await this.state.storage.put("recent_events", this.events);
     if (this.env.PERSISTENCE_WEBHOOK && this.env.PERSISTENCE_SECRET) {
-      const key = `delivery:${crypto.randomUUID()}`;
-      const delivery = { roomId: this.roomId, event };
+      const delivery = { deliveryId: crypto.randomUUID(), roomId: this.roomId, event };
+      const document =
+        event.type === "editor" && typeof event.payload === "object" && event.payload !== null
+          ? (event.payload as { document?: unknown }).document
+          : undefined;
+      if (document === "code" || document === "notes") {
+        // Editor updates still broadcast immediately, but only the latest snapshot
+        // needs to cross into Mongo. Persist after a pause, or at least every ten
+        // seconds during continuous typing, instead of once per keystroke.
+        const key = `delivery:editor:${document}`;
+        const current = await this.state.storage.get<Delivery>(key);
+        const timestamp = Date.now();
+        const queuedAt = current?.queuedAt ?? timestamp;
+        const nextAttemptAt = Math.min(timestamp + editorPersistenceQuietMs, queuedAt + editorPersistenceMaxWaitMs);
+        await this.state.storage.put(key, { ...delivery, queuedAt, nextAttemptAt });
+        await this.scheduleAlarmAt(nextAttemptAt);
+        return;
+      }
+
+      const key = `delivery:${delivery.deliveryId}`;
       await this.state.storage.put(key, delivery);
       this.state.waitUntil(this.deliver(key, delivery));
     }
@@ -192,12 +231,81 @@ export class RoomDurableObject implements DurableObject {
         headers: { "content-type": "application/json", "x-threadline-ingest": this.env.PERSISTENCE_SECRET },
         body: JSON.stringify(delivery),
       });
+      if (!response.ok && !isRetryableDeliveryStatus(response.status)) {
+        // A malformed, unauthorized, or forbidden event will never become valid
+        // by sending it again. Keeping it queued creates an infinite request loop.
+        await this.deleteDeliveryIfCurrent(key, delivery);
+        console.warn(
+          JSON.stringify({
+            message: "Discarding permanently rejected room event delivery.",
+            roomId: delivery.roomId,
+            eventType: delivery.event.type,
+            status: response.status,
+          }),
+        );
+        return;
+      }
       if (!response.ok) throw new Error(`Persistence returned ${response.status}.`);
-      await this.state.storage.delete(key);
+      await this.deleteDeliveryIfCurrent(key, delivery);
     } catch (error) {
-      console.error(`Room event delivery failed for ${this.roomId}, retrying in 30s.`, error);
-      await this.state.storage.setAlarm(Date.now() + 30_000);
+      const attemptCount = (delivery.attemptCount ?? 0) + 1;
+      if (attemptCount >= deliveryMaxAttempts) {
+        await this.deleteDeliveryIfCurrent(key, delivery);
+        console.error(
+          JSON.stringify({
+            message: "Discarding room event delivery after retry limit.",
+            roomId: delivery.roomId,
+            eventType: delivery.event.type,
+            attemptCount,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return;
+      }
+
+      const delayMs = deliveryRetryDelay(attemptCount);
+      const nextAttemptAt = Date.now() + delayMs;
+      const current = await this.state.storage.get<Delivery>(key);
+      if (delivery.deliveryId && current?.deliveryId !== delivery.deliveryId) return;
+      await this.state.storage.put(key, { ...delivery, attemptCount, nextAttemptAt });
+      await this.scheduleAlarmAt(nextAttemptAt);
+      console.error(
+        JSON.stringify({
+          message: "Room event delivery failed; retry scheduled.",
+          roomId: delivery.roomId,
+          eventType: delivery.event.type,
+          attemptCount,
+          delayMs,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
+  }
+
+  private async deleteDeliveryIfCurrent(key: string, delivery: Delivery) {
+    if (!delivery.deliveryId) {
+      await this.state.storage.delete(key);
+      return;
+    }
+    const current = await this.state.storage.get<Delivery>(key);
+    if (current?.deliveryId === delivery.deliveryId) await this.state.storage.delete(key);
+  }
+
+  private async scheduleAlarmAt(timestamp: number) {
+    const current = await this.state.storage.getAlarm();
+    if (current === null || timestamp < current) await this.state.storage.setAlarm(timestamp);
+  }
+
+  private async scheduleNextDelivery() {
+    const queued = await this.state.storage.list<Delivery>({ prefix: "delivery:" });
+    if (!queued.size) {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
+    const nextAttemptAt = Math.min(
+      ...[...queued.values()].map((delivery) => delivery.nextAttemptAt ?? Date.now() + deliveryRetryBaseMs),
+    );
+    await this.state.storage.setAlarm(nextAttemptAt);
   }
 
   private async verifyTicket(ticket: string, roomId: string): Promise<Participant | undefined> {
