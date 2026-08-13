@@ -341,22 +341,23 @@ sequenceDiagram
 
     Note over DO: A meaningful event happens<br/>(chat, editor, screen-share, join/leave)
     DO->>DO: push to in-memory recentEvents (last 250)
-    DO->>S: put("delivery:UUID", { roomId, event })
+    DO->>S: put("delivery:UUID", { deliveryId, roomId, event })
     DO->>A: POST /v1/internal/room-events<br/>X-Threadline-Ingest: shared secret
     alt delivery succeeds
-        A->>A: verify ingest secret, re-check ABAC for event.from
-        A->>M: insert into room_events
+        A->>A: validate event schema + event-specific ABAC
+        A->>M: idempotent upsert by deliveryId
         A-->>DO: 202 Accepted
         DO->>S: delete("delivery:UUID")
-    else delivery fails (network, API down, wrong secret)
-        DO->>DO: console.error + setAlarm(+30s)
-        Note over DO: undelivered events stay in Storage<br/>until an alarm retry succeeds
+    else temporary failure (network, 408/425/429, 5xx)
+        DO->>DO: bounded exponential retry (max 8)
+    else permanent 4xx
+        DO->>DO: log and delete poison delivery
     end
 ```
 
 Two things worth calling out because they're easy to get wrong when reading the code casually:
 
-- **The ingest endpoint re-checks authorization**, using `event.from` (the acting user) against the room's ABAC policy. The shared secret alone only proves the request came from the trusted Worker — it does not imply the _acting user_ is allowed to write to that room. A forged or replayed event for a user without room `write` access is rejected with `403` even though the ingest secret is valid.
+- **The ingest endpoint re-checks authorization by event type**, using `event.from` against the room's current ABAC policy. Join/leave events require `join_live`; mutations require `write`. The endpoint also rejects unknown event types, validates each payload, requires presence payload identity to match the actor, and deduplicates retries by `deliveryId`.
 - **`broadcast()` inside the Durable Object must never let one bad socket kill delivery to everyone else.** Earlier versions called `send()` on every open socket unconditionally; a socket that had just closed (which is still present in `state.getWebSockets()` during its own `webSocketClose` handler — a documented hibernation-API quirk) would throw and abort the handler _before_ the code reached the line that records the durable event. The fix wraps each `send()` in try/catch so one dead socket can't silently swallow the write. See [`realtime.md`](realtime.md#one-crash-that-looked-like-a-persistence-bug) for the full story.
 
 ## Why it's split this way

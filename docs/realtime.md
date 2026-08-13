@@ -19,7 +19,7 @@ graph TB
         PART["participants: Map&lt;userId, Participant&gt;<br/>(rebuilt from live sockets on every join/leave)"]
         EVENTS["events: RoomEvent[]<br/>(in-memory ring buffer, last 250)"]
         STORAGE[("this.state.storage<br/>SQLite-backed<br/>recent_events, room_id,<br/>delivery:&lt;uuid&gt; queue")]
-        ALARM["alarm() — retries any<br/>undelivered webhook POSTs<br/>every 30s until they succeed"]
+        ALARM["alarm() — bounded retries with<br/>exponential backoff for temporary failures"]
     end
     SOCKETS["Hibernatable WebSockets<br/>(state.acceptWebSocket)"] -.->|"attachment: Participant<br/>survives hibernation"| DO
     DO -->|"waitUntil(deliver)"| WEBHOOK["POST to API<br/>/v1/internal/room-events"]
@@ -28,7 +28,8 @@ graph TB
 
 - **Hibernatable, not held-open.** `this.state.acceptWebSocket(socket)` (rather than a plain `addEventListener`) lets Cloudflare evict the Durable Object from memory between messages and restore it on the next one — the room doesn't cost compute while everyone's just idle-connected. Each socket's `Participant` (userId, username, role, joinedAt, screenSharing) is serialized onto the socket itself via `serializeAttachment`, so it survives that eviction without a storage round-trip.
 - **SQLite-backed storage** (`new_sqlite_classes` migration in `wrangler.toml`) holds the last 250 events for fast reconnect replay and a durability queue (`delivery:UUID` keys) for events not yet acknowledged by the API.
-- **The alarm is the only retry mechanism.** If the webhook POST fails (API down, network blip, wrong secret), the Durable Object doesn't block the room or drop the event — it logs, schedules an alarm 30 seconds out, and tries again. Events pile up in storage until delivery succeeds.
+- **The alarm is the only retry mechanism.** Temporary failures (network errors, `408`, `425`, `429`, or `5xx`) use exponential backoff from 30 seconds to 30 minutes and stop after eight attempts. Permanent `4xx` rejections are logged and deleted immediately so one poison event cannot create an infinite request loop.
+- **Editor snapshots are coalesced.** Live keystrokes still broadcast immediately, but Mongo persistence keeps only the latest code/notes snapshot and sends it after two seconds of quiet or every ten seconds during continuous typing.
 
 ```mermaid
 stateDiagram-v2
@@ -36,10 +37,12 @@ stateDiagram-v2
     Queued --> Delivering: waitUntil(deliver(key, delivery))<br/>fires immediately, doesn't block the caller
     Delivering --> Delivered: POST /v1/internal/room-events<br/>returns 2xx
     Delivered --> [*]: storage.delete("delivery:UUID")
-    Delivering --> Failed: network error, non-2xx,<br/>or PERSISTENCE_WEBHOOK / PERSISTENCE_SECRET<br/>not configured at all
-    Failed --> Scheduled: console.error + setAlarm(now + 30s)
-    Scheduled --> Delivering: alarm() fires,<br/>re-attempts every queued delivery:* key
-    Scheduled --> Scheduled: still failing — alarm<br/>reschedules itself, indefinitely
+    Delivering --> Rejected: permanent 4xx
+    Rejected --> [*]: log and delete poison delivery
+    Delivering --> Failed: network error, 408/425/429, or 5xx
+    Failed --> Scheduled: exponential backoff, max 8 attempts
+    Scheduled --> Delivering: alarm retries due deliveries
+    Failed --> [*]: retry limit reached; log and delete
 ```
 
 **This retry loop only ever runs at all if `PERSISTENCE_WEBHOOK` and `PERSISTENCE_SECRET` are both set** — `record()` checks `if (this.env.PERSISTENCE_WEBHOOK && this.env.PERSISTENCE_SECRET)` before it does anything. If either is missing, nothing above this line ever executes: no delivery attempt, no failure, no alarm, no log line — the event silently never leaves the Durable Object's own storage. That is a materially different failure mode from "delivery is retrying and will eventually succeed," and it happened for real in this project's own deployment — see [`operations.md`](operations.md#incident-durable-events-never-persisted) for the incident.

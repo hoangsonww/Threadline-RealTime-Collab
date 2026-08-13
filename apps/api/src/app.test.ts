@@ -148,23 +148,50 @@ describe("Threadline identity API", () => {
     expect(ticket.status).toBe(200);
     expect(ticket.body.ticket.split(".")).toHaveLength(3);
 
+    const delivery = {
+      deliveryId: crypto.randomUUID(),
+      roomId: room.body.room.id,
+      event: {
+        type: "chat",
+        payload: { text: "Rollback approved", username: "Avery" },
+        from: registration.body.user.id,
+        at: new Date().toISOString(),
+      },
+    };
     const ingestion = await request(app)
       .post("/v1/internal/room-events")
       .set("x-threadline-ingest", "test-ingest-secret")
+      .send(delivery);
+    expect(ingestion.status).toBe(202);
+    const duplicateIngestion = await request(app)
+      .post("/v1/internal/room-events")
+      .set("x-threadline-ingest", "test-ingest-secret")
+      .send(delivery);
+    expect(duplicateIngestion.status).toBe(202);
+    const events = await agent.get(`/v1/rooms/${room.body.room.id}/events`);
+    expect(events.status).toBe(200);
+    // room.created plus one idempotently persisted chat event, even though the
+    // Worker delivered the same deliveryId twice.
+    expect(events.body.events).toHaveLength(2);
+    expect(events.body.events.at(-1).type).toBe("chat");
+  });
+
+  it("rejects room-event ingress with an unknown event type", async () => {
+    const { app } = await createTestApp();
+    const response = await request(app)
+      .post("/v1/internal/room-events")
+      .set("x-threadline-ingest", "test-ingest-secret")
       .send({
-        roomId: room.body.room.id,
+        deliveryId: crypto.randomUUID(),
+        roomId: crypto.randomUUID(),
         event: {
-          type: "chat",
-          payload: { text: "Rollback approved" },
-          from: registration.body.user.id,
+          type: "made-up-event",
+          payload: {},
+          from: crypto.randomUUID(),
           at: new Date().toISOString(),
         },
       });
-    expect(ingestion.status).toBe(202);
-    const events = await agent.get(`/v1/rooms/${room.body.room.id}/events`);
-    expect(events.status).toBe(200);
-    expect(events.body.events).toHaveLength(2);
-    expect(events.body.events.at(-1).type).toBe("chat");
+    expect(response.status).toBe(422);
   });
 
   it("performs an authorization-code-with-PKCE exchange and serves userinfo", async () => {
@@ -346,8 +373,8 @@ describe("Threadline identity API", () => {
     expect((await member.post(`/v1/orgs/${ownerOrg}/rooms`).send({ name: "not-permitted" })).status).toBe(403);
     expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(403);
 
-    // An explicit room membership grants read/join only. Viewer writes are
-    // rejected by the API ingress even if a client tries to forge an event.
+    // An explicit room membership grants read/join only. Presence lifecycle
+    // events are valid for viewers, but mutations still require write access.
     const addToRoom = await owner.post(`/v1/rooms/${restricted.body.room.id}/members`).send({
       userId: memberRegistration.body.user.id,
       role: "viewer",
@@ -355,6 +382,36 @@ describe("Threadline identity API", () => {
     expect(addToRoom.status).toBe(201);
     expect((await member.get(`/v1/rooms/${restricted.body.room.id}/events`)).status).toBe(200);
     expect((await member.post(`/v1/rooms/${restricted.body.room.id}/ticket`)).status).toBe(200);
+    for (const type of ["participant.joined", "participant.left"]) {
+      const presence = await request(app)
+        .post("/v1/internal/room-events")
+        .set("x-threadline-ingest", "test-ingest-secret")
+        .send({
+          deliveryId: crypto.randomUUID(),
+          roomId: restricted.body.room.id,
+          event: {
+            type,
+            payload: { userId: memberRegistration.body.user.id },
+            from: memberRegistration.body.user.id,
+            at: new Date().toISOString(),
+          },
+        });
+      expect(presence.status).toBe(202);
+    }
+    const forgedPresence = await request(app)
+      .post("/v1/internal/room-events")
+      .set("x-threadline-ingest", "test-ingest-secret")
+      .send({
+        deliveryId: crypto.randomUUID(),
+        roomId: restricted.body.room.id,
+        event: {
+          type: "participant.joined",
+          payload: { userId: ownerRegistration.body.user.id },
+          from: memberRegistration.body.user.id,
+          at: new Date().toISOString(),
+        },
+      });
+    expect(forgedPresence.status).toBe(422);
     expect(
       (
         await request(app)
@@ -364,7 +421,7 @@ describe("Threadline identity API", () => {
             roomId: restricted.body.room.id,
             event: {
               type: "chat",
-              payload: { text: "forged" },
+              payload: { text: "forged", username: "Member User" },
               from: memberRegistration.body.user.id,
               at: new Date().toISOString(),
             },

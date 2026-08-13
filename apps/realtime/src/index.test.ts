@@ -92,6 +92,18 @@ describe("RoomDurableObject", () => {
     socket.close();
   });
 
+  it("rejects invalid mutation payloads before they enter the persistence queue", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Writer");
+    await nextMessage(socket);
+
+    socket.send(JSON.stringify({ type: "chat", payload: { text: "" } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(await recentEventTypes(roomId, userId, "Writer")).not.toContain("chat");
+  });
+
   it("rejects a WebSocket upgrade without a valid room ticket", async () => {
     const response = await SELF.fetch("https://example.com/rooms/no-ticket-room", {
       headers: { Upgrade: "websocket" },

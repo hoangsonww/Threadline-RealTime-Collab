@@ -8,11 +8,14 @@ export interface Env {
 }
 
 type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
-type ClientMessage = {
-  type: "heartbeat" | "signal" | "cursor" | "chat" | "editor" | "whiteboard" | "screen-share" | "timeline";
-  payload?: unknown;
-  to?: string;
-};
+type ClientMessage =
+  | { type: "heartbeat"; payload?: unknown }
+  | { type: "signal"; payload?: unknown; to?: string }
+  | { type: "cursor"; payload?: unknown }
+  | { type: "whiteboard"; payload?: unknown }
+  | { type: "chat"; payload: { text: string } }
+  | { type: "editor"; payload: { document: "code" | "notes"; content: string } }
+  | { type: "screen-share"; payload: { active: boolean } };
 type ServerMessage = { type: string; payload?: unknown; from?: string; at?: string };
 type PersistedEvent = { type: string; payload: unknown; from: string; at: string };
 type Delivery = {
@@ -38,6 +41,28 @@ export const deliveryRetryDelay = (attemptCount: number) =>
 
 const encoder = new TextEncoder();
 const send = (socket: WebSocket, message: ServerMessage) => socket.send(JSON.stringify(message));
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+function isClientMessage(value: unknown): value is ClientMessage {
+  if (!isObject(value) || typeof value.type !== "string") return false;
+  if (["heartbeat", "cursor", "whiteboard"].includes(value.type)) return true;
+  if (value.type === "signal") return value.to === undefined || typeof value.to === "string";
+  if (!isObject(value.payload)) return false;
+  if (value.type === "chat")
+    return (
+      typeof value.payload.text === "string" &&
+      value.payload.text.trim().length > 0 &&
+      value.payload.text.length <= 4_000
+    );
+  if (value.type === "editor")
+    return (
+      (value.payload.document === "code" || value.payload.document === "notes") &&
+      typeof value.payload.content === "string" &&
+      value.payload.content.length <= 64_000
+    );
+  if (value.type === "screen-share") return typeof value.payload.active === "boolean";
+  return false;
+}
 
 export class RoomDurableObject implements DurableObject {
   private participants = new Map<string, Participant>();
@@ -86,35 +111,29 @@ export class RoomDurableObject implements DurableObject {
     const participant = socket.deserializeAttachment() as Participant | null;
     if (!participant || typeof message !== "string" || message.length > 64_000)
       return socket.close(1008, "Invalid message");
-    let event: ClientMessage;
+    let parsed: unknown;
     try {
-      event = JSON.parse(message) as ClientMessage;
+      parsed = JSON.parse(message);
     } catch {
       return socket.close(1007, "Malformed JSON");
     }
-    if (
-      !["heartbeat", "signal", "cursor", "chat", "editor", "whiteboard", "screen-share", "timeline"].includes(
-        event.type,
-      )
-    )
-      return;
+    if (!isClientMessage(parsed)) return socket.close(1008, "Invalid event");
+    const event = parsed;
     // Tickets are issued from the API after ABAC evaluation. A viewer may
     // receive media/signalling and presence but cannot mutate shared state.
-    if (
-      participant.role === "viewer" &&
-      ["chat", "editor", "whiteboard", "screen-share", "timeline"].includes(event.type)
-    )
+    if (participant.role === "viewer" && ["chat", "editor", "whiteboard", "screen-share"].includes(event.type))
       return socket.close(1008, "Room role does not permit writing");
     if (event.type === "heartbeat") return send(socket, { type: "heartbeat", at: new Date().toISOString() });
-    if (event.type === "screen-share")
-      participant.screenSharing = Boolean((event.payload as { active?: boolean })?.active);
+    if (event.type === "screen-share") participant.screenSharing = event.payload.active;
+    const payload =
+      event.type === "chat" ? { text: event.payload.text.trim(), username: participant.username } : event.payload;
     const envelope = {
       type: event.type,
-      payload: event.payload,
+      payload,
       from: participant.userId,
       at: new Date().toISOString(),
     };
-    this.broadcast(envelope, event.to);
+    this.broadcast(envelope, event.type === "signal" ? event.to : undefined);
     if (event.type !== "cursor" && event.type !== "signal" && event.type !== "whiteboard") await this.record(envelope);
     if (event.type === "screen-share") this.broadcast({ type: "presence", payload: [...this.participants.values()] });
   }
