@@ -3224,6 +3224,21 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.room-notice {
+  position: absolute;
+  z-index: 3;
+  top: 59px;
+  right: 16px;
+  max-width: min(560px, calc(100vw - 32px));
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--accent) 68%, white);
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  font-size: 11px;
+}
+
 .room-panel-toggle.active {
   color: var(--accent);
   border-color: rgba(82, 224, 162, 0.45);

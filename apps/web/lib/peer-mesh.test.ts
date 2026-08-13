@@ -30,8 +30,11 @@ class FakePeerConnection {
   onnegotiationneeded: RTCPeerConnection["onnegotiationneeded"] = null;
   events: string[] = [];
   remoteDescriptionGate?: Deferred;
+  failCandidates = new Set<string>();
+  readonly configuration?: RTCConfiguration;
 
-  constructor() {
+  constructor(configuration?: RTCConfiguration) {
+    this.configuration = configuration;
     FakePeerConnection.instances.push(this);
   }
 
@@ -46,8 +49,10 @@ class FakePeerConnection {
     this.events.push("local");
   }
 
-  async addIceCandidate() {
-    this.events.push("candidate");
+  async addIceCandidate(candidate?: RTCIceCandidateInit | null) {
+    const value = candidate?.candidate ?? "end";
+    this.events.push(`candidate:${value}`);
+    if (this.failCandidates.has(value)) throw new Error(`Rejected ${value}`);
   }
 
   restartIce() {
@@ -97,7 +102,7 @@ describe("PeerMesh signaling", () => {
     expect(connection.events).toEqual(["remote:start"]);
     connection.remoteDescriptionGate.resolve();
     await Promise.all([description, candidate]);
-    expect(connection.events).toEqual(["remote:start", "remote:end", "local", "candidate"]);
+    expect(connection.events).toEqual(["remote:start", "remote:end", "local", "candidate:candidate:1"]);
   });
 
   it("holds an early ICE candidate until a description is installed", async () => {
@@ -107,7 +112,35 @@ describe("PeerMesh signaling", () => {
 
     expect(connection.events).toEqual([]);
     await mesh.receiveSignal("a-peer", { description: { type: "offer", sdp: "remote" } });
-    expect(connection.events).toEqual(["remote:start", "remote:end", "candidate", "local"]);
+    expect(connection.events).toEqual(["remote:start", "remote:end", "candidate:candidate:early", "local"]);
+  });
+
+  it("passes configured TURN servers into every peer connection", async () => {
+    const iceServers: RTCIceServer[] = [
+      { urls: ["stun:stun.example.test:3478"] },
+      { urls: ["turns:turn.example.test:5349"], username: "temporary-user", credential: "temporary-secret" },
+    ];
+    const mesh = new PeerMesh({
+      sendSignal: vi.fn(),
+      onRemoteStream: vi.fn(),
+      onFile: vi.fn(),
+      getLocalId: () => "z-local-user",
+      iceServers,
+    });
+
+    await mesh.connect("a-peer", false);
+    expect(FakePeerConnection.instances[0].configuration?.iceServers).toEqual(iceServers);
+  });
+
+  it("continues flushing queued candidates after one candidate is rejected", async () => {
+    const mesh = createMesh();
+    await mesh.receiveSignal("a-peer", { candidate: { candidate: "bad" } });
+    await mesh.receiveSignal("a-peer", { candidate: { candidate: "good" } });
+    const connection = FakePeerConnection.instances[0];
+    connection.failCandidates.add("bad");
+
+    await mesh.receiveSignal("a-peer", { description: { type: "offer", sdp: "remote" } });
+    expect(connection.events).toEqual(["remote:start", "remote:end", "candidate:bad", "candidate:good", "local"]);
   });
 
   it("requests a fresh ICE negotiation after the connection fails", async () => {

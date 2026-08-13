@@ -179,22 +179,43 @@ export class PeerMesh {
         peer.isSettingRemoteAnswerPending = false;
       }
 
-      for (const candidate of peer.pendingCandidates.splice(0)) await connection.addIceCandidate(candidate);
-
+      let pendingCandidateError: unknown;
+      for (const candidate of peer.pendingCandidates.splice(0)) {
+        try {
+          await connection.addIceCandidate(candidate);
+        } catch (error) {
+          // Keep processing: one obsolete candidate must not discard every later
+          // candidate that was queued behind the remote description.
+          if (!peer.ignoreOffer && pendingCandidateError === undefined) pendingCandidateError = error;
+        }
+      }
       if (signal.description.type === "offer") {
         await connection.setLocalDescription();
         this.options.sendSignal(peerId, { description: connection.localDescription?.toJSON() });
       }
+      if (pendingCandidateError !== undefined) throw pendingCandidateError;
     }
 
     if (Object.prototype.hasOwnProperty.call(signal, "candidate")) {
       const candidate = signal.candidate ?? null;
-      if (peer.ignoreOffer) return;
       if (!connection.remoteDescription) {
+        if (peer.ignoreOffer) {
+          try {
+            await connection.addIceCandidate(candidate);
+          } catch {
+            // This candidate belongs to the colliding offer the impolite side
+            // intentionally ignored. That specific add failure is expected.
+          }
+          return;
+        }
         peer.pendingCandidates.push(candidate);
         return;
       }
-      await connection.addIceCandidate(candidate);
+      try {
+        await connection.addIceCandidate(candidate);
+      } catch (error) {
+        if (!peer.ignoreOffer) throw error;
+      }
     }
   }
 

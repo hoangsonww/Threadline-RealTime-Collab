@@ -30,7 +30,14 @@ import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
 import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
-type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
+type Participant = {
+  connectionId: string;
+  userId: string;
+  username: string;
+  role: string;
+  joinedAt: string;
+  screenSharing: boolean;
+};
 type RoomEvent = {
   id?: string;
   type: string;
@@ -42,6 +49,9 @@ type RoomEvent = {
 };
 type Message = { id: string; person: string; initials: string; text: string; time: string };
 type FileEntry = { id: string; name: string; size: string; status: string; downloadUrl?: string };
+
+const maxAutomaticReconnectAttempts = 6;
+const stableConnectionResetMs = 60_000;
 
 const initialsFor = (name: string) =>
   name
@@ -116,6 +126,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [roomError, setRoomError] = useState("");
+  const [connectionNotice, setConnectionNotice] = useState("");
   const [mic, setMic] = useState(true);
   const [camera, setCamera] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -132,7 +143,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const knownPeersRef = useRef<Set<string>>(new Set());
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
+  const hasOtherDeviceRef = useRef(false);
   const fileUrlsRef = useRef<string[]>([]);
 
   const addEvent = useCallback((event: RoomEvent) => {
@@ -186,6 +199,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   useEffect(
     () => () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
       streamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
       socketRef.current?.close();
@@ -290,7 +304,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             const localId = localIdRef.current;
             if (!localId) return;
             const presentPeerIds = new Set(
-              people.map((person) => person.userId).filter((userId) => userId !== localId),
+              people.map((person) => person.connectionId).filter((connectionId) => connectionId !== localId),
             );
             for (const peerId of knownPeersRef.current) {
               if (presentPeerIds.has(peerId)) continue;
@@ -303,10 +317,25 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               });
             }
             for (const person of people) {
-              if (person.userId === localId || knownPeersRef.current.has(person.userId)) continue;
-              knownPeersRef.current.add(person.userId);
-              void mesh.connect(person.userId, localId < person.userId);
+              if (person.connectionId === localId || knownPeersRef.current.has(person.connectionId)) continue;
+              knownPeersRef.current.add(person.connectionId);
+              void mesh.connect(person.connectionId, localId < person.connectionId);
             }
+          };
+
+          const syncOtherDevices = (people: Participant[]) => {
+            const localId = localIdRef.current;
+            const localUserId = people.find((person) => person.connectionId === localId)?.userId;
+            if (!localId || !localUserId) return;
+            const hasOtherDevice = people.some(
+              (person) => person.userId === localUserId && person.connectionId !== localId,
+            );
+            hasOtherDeviceRef.current = hasOtherDevice;
+            setConnectionNotice(
+              hasOtherDevice
+                ? "This account is connected on another device. New camera sessions start muted to prevent audio feedback."
+                : "",
+            );
           };
 
           socket.onopen = () => setRoomError("");
@@ -320,11 +349,18 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             knownPeersRef.current.clear();
             localIdRef.current = "";
             setRemoteStreams({});
+            if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
             const reconnectAttempt = reconnectAttemptRef.current + 1;
             reconnectAttemptRef.current = reconnectAttempt;
+            if (reconnectAttempt > maxAutomaticReconnectAttempts) {
+              setReconnecting(false);
+              setRoomError("The live room could not reconnect automatically. Select Join room to try again.");
+              return;
+            }
             const delay = Math.min(1000 * 2 ** (reconnectAttempt - 1), 15_000);
             setReconnecting(true);
             reconnectTimerRef.current = setTimeout(() => {
+              reconnectTimerRef.current = null;
               if (socketRef.current === socket) void connectRoom();
             }, delay);
           };
@@ -339,6 +375,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               const people = (event.payload as Participant[]) ?? [];
               setParticipants(people);
               syncPeers(people);
+              syncOtherDevices(people);
               return;
             }
             if (event.type === "room.ready") {
@@ -347,12 +384,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 recentEvents?: RoomEvent[];
                 participant?: Participant;
               };
-              if (payload.participant?.userId) localIdRef.current = payload.participant.userId;
+              if (payload.participant?.connectionId) localIdRef.current = payload.participant.connectionId;
               setParticipants(payload.participants ?? []);
               payload.recentEvents?.forEach(addEvent);
               hydrateEditorState(payload.recentEvents ?? []);
               syncPeers(payload.participants ?? []);
-              reconnectAttemptRef.current = 0;
+              syncOtherDevices(payload.participants ?? []);
+              if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
+              reconnectResetTimerRef.current = setTimeout(() => {
+                reconnectAttemptRef.current = 0;
+                reconnectResetTimerRef.current = null;
+              }, stableConnectionResetMs);
               setConnected(true);
               setReconnecting(false);
               setRoomError("");
@@ -393,16 +435,29 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     return result;
   }, [addEvent, drawLine, hydrateEditorState, roomId]);
 
+  const retryRoomConnection = useCallback(() => {
+    if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    reconnectTimerRef.current = null;
+    reconnectAttemptRef.current = 0;
+    setReconnecting(false);
+    setRoomError("");
+    return connectRoom();
+  }, [connectRoom]);
+
   const startCamera = async () => {
     try {
-      if (!(await connectRoom())) return;
+      if (!(await retryRoomConnection())) return;
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const startMuted = hasOtherDeviceRef.current;
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !startMuted;
+      });
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = stream;
       meshRef.current?.setLocalStream(stream);
       setLocalStream(stream);
       setCamera(true);
-      setMic(true);
+      setMic(!startMuted);
     } catch {
       setRoomError("Camera and microphone access was not granted.");
     }
@@ -454,7 +509,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   };
   const leave = () => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
     reconnectTimerRef.current = null;
+    reconnectResetTimerRef.current = null;
     reconnectAttemptRef.current = 0;
     setReconnecting(false);
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -473,6 +530,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     setCamera(false);
     setSharing(false);
     setConnected(false);
+    setConnectionNotice("");
+    hasOtherDeviceRef.current = false;
     router.push("/app/rooms");
   };
   const sendMessage = (event: React.FormEvent) => {
@@ -549,7 +608,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const visibleParticipants = participants.length
     ? participants
     : identity
-      ? [{ userId: identity.id, username: identity.displayName, role: "member", joinedAt: "", screenSharing: false }]
+      ? [
+          {
+            connectionId: localIdRef.current || `local-${identity.id}`,
+            userId: identity.id,
+            username: identity.displayName,
+            role: "member",
+            joinedAt: "",
+            screenSharing: false,
+          },
+        ]
       : [];
 
   return (
@@ -601,6 +669,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         </div>
       </header>
       {roomError && <p className="room-error">{roomError}</p>}
+      {!roomError && connectionNotice && <p className="room-notice">{connectionNotice}</p>}
       <div className={`room-body ${showPanel ? "" : "room-panel-hidden"}`}>
         <section className="room-main">
           {mode === "call" ? (
@@ -608,11 +677,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               {connected ? (
                 <div className="stage">
                   {visibleParticipants.map((person) => {
-                    const self = person.userId === identity?.id;
-                    const stream = self ? undefined : remoteStreams[person.userId];
+                    const self = person.connectionId === localIdRef.current;
+                    const otherDevice = !self && person.userId === identity?.id;
+                    const stream = self ? undefined : remoteStreams[person.connectionId];
                     const hasLocalVideo = self && (camera || sharing) && !!localStream;
                     return (
-                      <article className={`video-tile ${self ? "self" : ""}`} key={person.userId}>
+                      <article className={`video-tile ${self ? "self" : ""}`} key={person.connectionId}>
                         {hasLocalVideo && <StreamVideo stream={localStream!} muted />}
                         {!self && stream && <StreamVideo stream={stream} />}{" "}
                         {((!stream && !self) || (self && !hasLocalVideo)) && (
@@ -621,7 +691,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                           </div>
                         )}
                         <div className="tile-label">
-                          <span>{self ? `${person.username} (you)` : person.username}</span>
+                          <span>
+                            {self
+                              ? `${person.username} (you)`
+                              : otherDevice
+                                ? `${person.username} (your other device)`
+                                : person.username}
+                          </span>
                           {self && (
                             <span className="mic">
                               {mic ? <MicrophoneIcon size={12} /> : <MicrophoneSlashIcon size={12} />}
@@ -646,7 +722,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       <button className="button button-primary" onClick={() => void startCamera()}>
                         <VideoCameraIcon size={16} weight="fill" /> Join with camera
                       </button>
-                      <button className="button button-secondary" onClick={() => void connectRoom()}>
+                      <button className="button button-secondary" onClick={() => void retryRoomConnection()}>
                         <BroadcastIcon size={16} /> Join without camera
                       </button>
                     </div>
@@ -661,7 +737,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 {connected ? (
                   <span>Synced through the room</span>
                 ) : (
-                  <button className="button button-secondary" onClick={() => void connectRoom()}>
+                  <button className="button button-secondary" onClick={() => void retryRoomConnection()}>
                     <BroadcastIcon size={14} /> Join to sync
                   </button>
                 )}
@@ -761,7 +837,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 </span>
                 <strong>Join to use {panel}</strong>
                 <p>This tool becomes live once you connect to the room.</p>
-                <button className="button button-primary" onClick={() => void connectRoom()}>
+                <button className="button button-primary" onClick={() => void retryRoomConnection()}>
                   <BroadcastIcon size={15} /> Join room
                 </button>
               </div>

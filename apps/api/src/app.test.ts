@@ -193,6 +193,32 @@ describe("Threadline identity API", () => {
     expect(events.body.events.at(-1).type).toBe("chat");
   });
 
+  it("still issues a room ticket when the TURN provider is unavailable", async () => {
+    const getIceServers = vi.fn(async () => {
+      throw new Error("TURN provider unavailable");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { app } = await createTestApp(undefined, false, getIceServers);
+    const { agent, org } = await registerWithOrg(
+      app,
+      { email: "fallback@example.com", username: "fallback", displayName: "Fallback User" },
+      "Fallback Organization",
+    );
+    const room = await agent.post(`/v1/orgs/${org.body.organization.id}/rooms`).send({ name: "fallback-room" });
+
+    const ticket = await agent.post(`/v1/rooms/${room.body.room.id}/ticket`);
+
+    expect(ticket.status).toBe(200);
+    expect(ticket.body.ticket.split(".")).toHaveLength(3);
+    expect(ticket.body.iceServers).toBeUndefined();
+    expect(getIceServers).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      "Unable to issue TURN credentials; continuing with STUN only.",
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
   it("rejects room-event ingress with an unknown event type", async () => {
     const { app } = await createTestApp();
     const response = await request(app)

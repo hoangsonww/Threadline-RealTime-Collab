@@ -7,7 +7,12 @@ export interface Env {
   PERSISTENCE_SECRET?: string;
 }
 
-type Participant = { userId: string; username: string; role: string; joinedAt: string; screenSharing: boolean };
+type TicketIdentity = { userId: string; username: string; role: string };
+type Participant = TicketIdentity & {
+  connectionId: string;
+  joinedAt: string;
+  screenSharing: boolean;
+};
 type ClientMessage =
   | { type: "heartbeat"; payload?: unknown }
   | { type: "signal"; payload?: unknown; to?: string }
@@ -46,7 +51,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 function isClientMessage(value: unknown): value is ClientMessage {
   if (!isObject(value) || typeof value.type !== "string") return false;
   if (["heartbeat", "cursor", "whiteboard"].includes(value.type)) return true;
-  if (value.type === "signal") return value.to === undefined || typeof value.to === "string";
+  if (value.type === "signal") return typeof value.to === "string" && value.to.length > 0 && value.to.length <= 128;
   if (!isObject(value.payload)) return false;
   if (value.type === "chat")
     return (
@@ -103,7 +108,7 @@ export class RoomDurableObject implements DurableObject {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.acceptSocket(server, identity);
+    await this.acceptSocket(server, identity);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -124,13 +129,23 @@ export class RoomDurableObject implements DurableObject {
     if (participant.role === "viewer" && ["chat", "editor", "whiteboard", "screen-share"].includes(event.type))
       return socket.close(1008, "Room role does not permit writing");
     if (event.type === "heartbeat") return send(socket, { type: "heartbeat", at: new Date().toISOString() });
-    if (event.type === "screen-share") participant.screenSharing = event.payload.active;
+    if (event.type === "screen-share") {
+      participant.screenSharing = event.payload.active;
+      // Attachments are the source of truth after hibernation, so every mutation
+      // must be serialized back onto the socket before this object can sleep.
+      socket.serializeAttachment(participant);
+      this.participants.set(participant.connectionId, participant);
+    }
     const payload =
       event.type === "chat" ? { text: event.payload.text.trim(), username: participant.username } : event.payload;
+    const usesConnectionTarget = event.type === "signal" && !!event.to && this.participants.has(event.to);
     const envelope = {
       type: event.type,
       payload,
-      from: participant.userId,
+      // SDP/ICE belongs to one browser connection. Persisted collaboration events
+      // continue to use the account ID for authorization and audit attribution. The
+      // user-ID fallback keeps already-open clients alive during the rolling deploy.
+      from: event.type === "signal" && usesConnectionTarget ? participant.connectionId : participant.userId,
       at: new Date().toISOString(),
     };
     this.broadcast(envelope, event.type === "signal" ? event.to : undefined);
@@ -148,12 +163,14 @@ export class RoomDurableObject implements DurableObject {
     // We know for certain this socket is gone, so exclude it explicitly.
     this.restoreParticipants(socket);
     this.broadcast({ type: "presence", payload: [...this.participants.values()] });
-    await this.record({
-      type: "participant.left",
-      payload: { userId: participant.userId },
-      from: participant.userId,
-      at: new Date().toISOString(),
-    });
+    const userStillPresent = [...this.participants.values()].some((item) => item.userId === participant.userId);
+    if (!userStillPresent)
+      await this.record({
+        type: "participant.left",
+        payload: { userId: participant.userId },
+        from: participant.userId,
+        at: new Date().toISOString(),
+      });
   }
 
   async webSocketError(socket: WebSocket) {
@@ -169,29 +186,44 @@ export class RoomDurableObject implements DurableObject {
     await this.scheduleNextDelivery();
   }
 
-  private async acceptSocket(socket: WebSocket, participant: Participant) {
+  private async acceptSocket(socket: WebSocket, identity: TicketIdentity) {
+    const alreadyPresent = [...this.participants.values()].some((item) => item.userId === identity.userId);
+    const participant: Participant = {
+      ...identity,
+      connectionId: crypto.randomUUID(),
+      joinedAt: new Date().toISOString(),
+      screenSharing: false,
+    };
     // Hibernatable sockets preserve their attachment and lifecycle handlers
     // without keeping the Durable Object resident between messages.
     this.state.acceptWebSocket(socket);
     socket.serializeAttachment(participant);
-    this.participants.set(participant.userId, participant);
+    this.participants.set(participant.connectionId, participant);
     send(socket, {
       type: "room.ready",
       payload: { participant, participants: [...this.participants.values()], recentEvents: this.events.slice(-100) },
     });
     this.broadcast({ type: "presence", payload: [...this.participants.values()] });
-    await this.record({
-      type: "participant.joined",
-      payload: { userId: participant.userId },
-      from: participant.userId,
-      at: new Date().toISOString(),
-    });
+    if (!alreadyPresent)
+      await this.record({
+        type: "participant.joined",
+        payload: { userId: participant.userId },
+        from: participant.userId,
+        at: new Date().toISOString(),
+      });
   }
 
-  private broadcast(message: ServerMessage, recipient?: string) {
+  private broadcast(message: ServerMessage, recipientConnectionId?: string) {
+    const usesConnectionTarget = !!recipientConnectionId && this.participants.has(recipientConnectionId);
     for (const socket of this.state.getWebSockets()) {
       const participant = socket.deserializeAttachment() as Participant | null;
-      if (recipient && participant?.userId !== recipient) continue;
+      if (
+        recipientConnectionId &&
+        (usesConnectionTarget
+          ? participant?.connectionId !== recipientConnectionId
+          : participant?.userId !== recipientConnectionId)
+      )
+        continue;
       try {
         send(socket, message);
       } catch {
@@ -208,7 +240,7 @@ export class RoomDurableObject implements DurableObject {
     for (const socket of this.state.getWebSockets()) {
       if (socket === excludeSocket) continue;
       const participant = socket.deserializeAttachment() as Participant | null;
-      if (participant) this.participants.set(participant.userId, participant);
+      if (participant) this.participants.set(participant.connectionId, participant);
     }
   }
 
@@ -327,7 +359,7 @@ export class RoomDurableObject implements DurableObject {
     await this.state.storage.setAlarm(nextAttemptAt);
   }
 
-  private async verifyTicket(ticket: string, roomId: string): Promise<Participant | undefined> {
+  private async verifyTicket(ticket: string, roomId: string): Promise<TicketIdentity | undefined> {
     try {
       const { payload } = await jwtVerify(ticket, encoder.encode(this.env.ROOM_TICKET_SECRET), {
         algorithms: ["HS256"],
@@ -343,8 +375,6 @@ export class RoomDurableObject implements DurableObject {
         userId: payload.sub,
         username: typeof payload.display_name === "string" ? payload.display_name.slice(0, 80) : payload.username,
         role: payload.role,
-        joinedAt: new Date().toISOString(),
-        screenSharing: false,
       };
     } catch {
       return undefined;
