@@ -905,8 +905,25 @@ a {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
   background: #151923;
+}
+.video-tile.self video[data-source="camera"] {
+  transform: scaleX(-1);
+}
+.video-media-grid {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 2px;
+  background: var(--canvas-deep);
+}
+.video-media-grid.is-dual {
+  grid-template-columns: minmax(0, 2fr) minmax(120px, 1fr);
+}
+.video-media-grid.is-dual video[data-source="screen"] {
+  object-fit: contain;
 }
 .video-placeholder {
   width: 100%;
@@ -5213,6 +5230,11 @@ button.member-picker-option:hover,
 }
 
 @media (max-width: 560px) {
+  .video-media-grid.is-dual {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 2fr) minmax(100px, 1fr);
+  }
+
   .room-layout {
     grid-template-rows: auto minmax(0, 1fr);
   }

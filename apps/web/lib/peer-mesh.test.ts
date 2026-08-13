@@ -32,6 +32,7 @@ class FakePeerConnection {
   remoteDescriptionGate?: Deferred;
   failCandidates = new Set<string>();
   readonly configuration?: RTCConfiguration;
+  senders: Array<{ track: MediaStreamTrack | null; replaceTrack: ReturnType<typeof vi.fn> }> = [];
 
   constructor(configuration?: RTCConfiguration) {
     this.configuration = configuration;
@@ -63,8 +64,21 @@ class FakePeerConnection {
     this.events.push("close");
   }
 
-  addTrack() {
-    throw new Error("No media is installed in this unit test.");
+  addTrack(track: MediaStreamTrack) {
+    const sender: { track: MediaStreamTrack | null; replaceTrack: ReturnType<typeof vi.fn> } = {
+      track,
+      replaceTrack: vi.fn(async (replacement: MediaStreamTrack | null) => {
+        sender.track = replacement;
+      }),
+    };
+    this.senders.push(sender);
+    this.events.push(`add:${track.id}`);
+    return sender as unknown as RTCRtpSender;
+  }
+
+  removeTrack(sender: RTCRtpSender) {
+    this.events.push(`remove:${sender.track?.id}`);
+    this.senders = this.senders.filter((item) => item !== (sender as unknown));
   }
 
   createDataChannel() {
@@ -76,6 +90,25 @@ describe("PeerMesh signaling", () => {
   beforeEach(() => {
     FakePeerConnection.instances = [];
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
+    vi.stubGlobal(
+      "MediaStream",
+      class {
+        readonly id = crypto.randomUUID();
+        private tracks: MediaStreamTrack[];
+        constructor(tracks: MediaStreamTrack[] = []) {
+          this.tracks = [...tracks];
+        }
+        getTracks() {
+          return [...this.tracks];
+        }
+        addTrack(track: MediaStreamTrack) {
+          this.tracks.push(track);
+        }
+        removeTrack(track: MediaStreamTrack) {
+          this.tracks = this.tracks.filter((item) => item !== track);
+        }
+      },
+    );
   });
 
   afterEach(() => vi.unstubAllGlobals());
@@ -83,7 +116,7 @@ describe("PeerMesh signaling", () => {
   const createMesh = () =>
     new PeerMesh({
       sendSignal: vi.fn(),
-      onRemoteStream: vi.fn(),
+      onRemoteMedia: vi.fn(),
       onFile: vi.fn(),
       getLocalId: () => "z-local-user",
     });
@@ -122,7 +155,7 @@ describe("PeerMesh signaling", () => {
     ];
     const mesh = new PeerMesh({
       sendSignal: vi.fn(),
-      onRemoteStream: vi.fn(),
+      onRemoteMedia: vi.fn(),
       onFile: vi.fn(),
       getLocalId: () => "z-local-user",
       iceServers,
@@ -141,6 +174,32 @@ describe("PeerMesh signaling", () => {
 
     await mesh.receiveSignal("a-peer", { description: { type: "offer", sdp: "remote" } });
     expect(connection.events).toEqual(["remote:start", "remote:end", "candidate:bad", "candidate:good", "local"]);
+  });
+
+  it("publishes camera and screen simultaneously and removes camera immediately", async () => {
+    const sendSignal = vi.fn();
+    const mesh = new PeerMesh({
+      sendSignal,
+      onRemoteMedia: vi.fn(),
+      onFile: vi.fn(),
+      getLocalId: () => "z-local-user",
+    });
+    const camera = { id: "camera-track", kind: "video" } as MediaStreamTrack;
+    const screen = { id: "screen-track", kind: "video" } as MediaStreamTrack;
+
+    mesh.setLocalTracks({ camera, screen });
+    await mesh.connect("a-peer", false);
+    const connection = FakePeerConnection.instances[0];
+
+    expect(connection.events).toEqual(["add:camera-track", "add:screen-track"]);
+    expect(sendSignal).toHaveBeenLastCalledWith("a-peer", {
+      mediaSources: { camera: "camera-track", screen: "screen-track" },
+    });
+
+    mesh.setLocalTracks({ screen });
+    expect(connection.events).toContain("remove:camera-track");
+    expect(connection.senders.map((sender) => sender.track?.id)).toEqual(["screen-track"]);
+    expect(sendSignal).toHaveBeenLastCalledWith("a-peer", { mediaSources: { screen: "screen-track" } });
   });
 
   it("requests a fresh ICE negotiation after the connection fails", async () => {

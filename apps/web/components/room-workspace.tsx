@@ -26,7 +26,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
-import { PeerMesh, type SignalPayload } from "../lib/peer-mesh";
+import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
 import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
@@ -87,7 +87,7 @@ const describeEvent = (event: RoomEvent) => {
   return event.type.replace(/[-.]/g, " ");
 };
 
-function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }) {
+function StreamVideo({ stream, muted, source }: { stream: MediaStream; muted?: boolean; source: "camera" | "screen" }) {
   const ref = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     const video = ref.current;
@@ -106,7 +106,35 @@ function StreamVideo({ stream, muted }: { stream: MediaStream; muted?: boolean }
     tryPlay();
     return () => document.removeEventListener("pointerdown", tryPlay);
   }, [stream]);
-  return <video ref={ref} autoPlay muted={muted} playsInline />;
+  return <video ref={ref} autoPlay muted={muted} playsInline data-source={source} />;
+}
+
+function StreamAudio({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    const audio = ref.current;
+    if (!audio) return;
+    audio.srcObject = stream;
+    const tryPlay = () =>
+      void audio.play().catch(() => document.addEventListener("pointerdown", tryPlay, { once: true }));
+    tryPlay();
+    return () => document.removeEventListener("pointerdown", tryPlay);
+  }, [stream]);
+  return <audio ref={ref} autoPlay />;
+}
+
+function MediaView({ camera, screen, microphone, local = false }: RemoteMedia & { local?: boolean }) {
+  return (
+    <>
+      {!local && microphone && <StreamAudio stream={microphone} />}
+      {(screen || camera) && (
+        <div className={`video-media-grid ${screen && camera ? "is-dual" : ""}`}>
+          {screen && <StreamVideo stream={screen} muted source="screen" />}
+          {camera && <StreamVideo stream={camera} muted source="camera" />}
+        </div>
+      )}
+    </>
+  );
 }
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
@@ -127,12 +155,14 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [reconnecting, setReconnecting] = useState(false);
   const [roomError, setRoomError] = useState("");
   const [connectionNotice, setConnectionNotice] = useState("");
-  const [mic, setMic] = useState(true);
+  const [mic, setMic] = useState(false);
   const [camera, setCamera] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const [remoteMedia, setRemoteMedia] = useState<Record<string, RemoteMedia>>({});
+  const [localCameraStream, setLocalCameraStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const microphoneStreamRef = useRef<MediaStream | null>(null);
   const boardRef = useRef<HTMLCanvasElement>(null);
   const drawingRef = useRef(false);
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
@@ -200,7 +230,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     () => () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
-      streamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
       socketRef.current?.close();
       socketRef.current = null;
@@ -228,6 +259,14 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     context.moveTo(from.x, from.y);
     context.lineTo(to.x, to.y);
     context.stroke();
+  }, []);
+
+  const publishLocalTracks = useCallback(() => {
+    meshRef.current?.setLocalTracks({
+      camera: cameraStreamRef.current?.getVideoTracks()[0],
+      microphone: microphoneStreamRef.current?.getAudioTracks()[0],
+      screen: screenStreamRef.current?.getVideoTracks()[0],
+    });
   }, []);
 
   const connectRoom = useCallback(async () => {
@@ -262,13 +301,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           meshRef.current?.close();
           knownPeersRef.current.clear();
           localIdRef.current = "";
-          setRemoteStreams({});
+          setRemoteMedia({});
           const mesh = new PeerMesh({
             sendSignal: (peerId, payload) => {
               if (socket.readyState === WebSocket.OPEN)
                 socket.send(JSON.stringify({ type: "signal", to: peerId, payload }));
             },
-            onRemoteStream: (peerId, stream) => setRemoteStreams((streams) => ({ ...streams, [peerId]: stream })),
+            onRemoteMedia: (peerId, media) => setRemoteMedia((items) => ({ ...items, [peerId]: media })),
             getLocalId: () => localIdRef.current,
             iceServers,
             onFile: (_peerId, file) => {
@@ -286,12 +325,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               ]);
             },
           });
-          const screenTrack = screenStreamRef.current?.getVideoTracks()[0];
-          const microphoneTrack = streamRef.current?.getAudioTracks()[0];
-          const outgoingStream = screenTrack
-            ? new MediaStream(microphoneTrack ? [screenTrack, microphoneTrack] : [screenTrack])
-            : streamRef.current;
-          mesh.setLocalStream(outgoingStream);
+          mesh.setLocalTracks({
+            camera: cameraStreamRef.current?.getVideoTracks()[0],
+            microphone: microphoneStreamRef.current?.getAudioTracks()[0],
+            screen: screenStreamRef.current?.getVideoTracks()[0],
+          });
           meshRef.current = mesh;
           socketRef.current = socket;
           const readyTimer = setTimeout(() => {
@@ -310,8 +348,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               if (presentPeerIds.has(peerId)) continue;
               mesh.disconnect(peerId);
               knownPeersRef.current.delete(peerId);
-              setRemoteStreams((streams) => {
-                const next = { ...streams };
+              setRemoteMedia((items) => {
+                const next = { ...items };
                 delete next[peerId];
                 return next;
               });
@@ -333,7 +371,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             hasOtherDeviceRef.current = hasOtherDevice;
             setConnectionNotice(
               hasOtherDevice
-                ? "This account is connected on another device. New camera sessions start muted to prevent audio feedback."
+                ? "This account is connected on another device. Keep only one microphone active to prevent audio feedback."
                 : "",
             );
           };
@@ -348,7 +386,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             if (meshRef.current === mesh) meshRef.current = null;
             knownPeersRef.current.clear();
             localIdRef.current = "";
-            setRemoteStreams({});
+            setRemoteMedia({});
             if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
             const reconnectAttempt = reconnectAttemptRef.current + 1;
             reconnectAttemptRef.current = reconnectAttempt;
@@ -447,47 +485,53 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const startCamera = async () => {
     try {
       if (!(await retryRoomConnection())) return;
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      const startMuted = hasOtherDeviceRef.current;
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !startMuted;
-      });
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = stream;
-      meshRef.current?.setLocalStream(stream);
-      setLocalStream(stream);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = stream;
+      setLocalCameraStream(stream);
       setCamera(true);
-      setMic(!startMuted);
+      publishLocalTracks();
     } catch {
-      setRoomError("Camera and microphone access was not granted.");
+      setRoomError("Camera access was not granted.");
     }
   };
-  const toggleMic = () => {
-    const next = !mic;
-    streamRef.current?.getAudioTracks().forEach((track) => {
-      track.enabled = next;
-    });
-    setMic(next);
+  const toggleMic = async () => {
+    if (mic) {
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = null;
+      setMic(false);
+      publishLocalTracks();
+      return;
+    }
+    try {
+      if (!(await retryRoomConnection())) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+      microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+      microphoneStreamRef.current = stream;
+      setMic(true);
+      publishLocalTracks();
+    } catch {
+      setRoomError("Microphone access was not granted.");
+    }
   };
   const toggleCamera = () => {
     if (!camera) void startCamera();
     else {
-      streamRef.current?.getVideoTracks().forEach((track) => {
-        track.enabled = false;
-      });
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+      setLocalCameraStream(null);
       setCamera(false);
+      publishLocalTracks();
     }
   };
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
+    setLocalScreenStream(null);
     setSharing(false);
     publish("screen-share", { active: false });
-    // Restore whatever the camera stream was already sending (on, off-but-muted, or
-    // never started) rather than assuming it should come back on.
-    meshRef.current?.setLocalStream(streamRef.current);
-    setLocalStream(camera ? streamRef.current : null);
-  }, [camera, publish]);
+    publishLocalTracks();
+  }, [publish, publishLocalTracks]);
   const toggleScreenShare = async () => {
     if (sharing) return stopScreenShare();
     try {
@@ -496,12 +540,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       const videoTrack = screen.getVideoTracks()[0];
       videoTrack.addEventListener("ended", stopScreenShare);
       screenStreamRef.current = screen;
-      // Keep the mic flowing to peers while sharing: publish the screen's video
-      // alongside the existing microphone track rather than replacing it.
-      const audioTrack = streamRef.current?.getAudioTracks()[0];
-      meshRef.current?.setLocalStream(audioTrack ? new MediaStream([videoTrack, audioTrack]) : screen);
-      setLocalStream(screen);
+      setLocalScreenStream(screen);
       setSharing(true);
+      publishLocalTracks();
       publish("screen-share", { active: true });
     } catch {
       setRoomError("Screen share was not started.");
@@ -514,8 +555,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     reconnectResetTimerRef.current = null;
     reconnectAttemptRef.current = 0;
     setReconnecting(false);
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    microphoneStreamRef.current?.getTracks().forEach((track) => track.stop());
+    microphoneStreamRef.current = null;
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     screenStreamRef.current = null;
     socketRef.current?.close();
@@ -524,10 +567,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     meshRef.current = null;
     knownPeersRef.current.clear();
     localIdRef.current = "";
-    setRemoteStreams({});
-    setLocalStream(null);
+    setRemoteMedia({});
+    setLocalCameraStream(null);
+    setLocalScreenStream(null);
     setParticipants([]);
     setCamera(false);
+    setMic(false);
     setSharing(false);
     setConnected(false);
     setConnectionNotice("");
@@ -679,13 +724,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   {visibleParticipants.map((person) => {
                     const self = person.connectionId === localIdRef.current;
                     const otherDevice = !self && person.userId === identity?.id;
-                    const stream = self ? undefined : remoteStreams[person.connectionId];
-                    const hasLocalVideo = self && (camera || sharing) && !!localStream;
+                    const media = self
+                      ? {
+                          camera: localCameraStream ?? undefined,
+                          screen: localScreenStream ?? undefined,
+                        }
+                      : (remoteMedia[person.connectionId] ?? {});
+                    const hasVideo = !!media.camera || !!media.screen;
                     return (
                       <article className={`video-tile ${self ? "self" : ""}`} key={person.connectionId}>
-                        {hasLocalVideo && <StreamVideo stream={localStream!} muted />}
-                        {!self && stream && <StreamVideo stream={stream} />}{" "}
-                        {((!stream && !self) || (self && !hasLocalVideo)) && (
+                        <MediaView {...media} local={self} />
+                        {!hasVideo && (
                           <div className="video-placeholder">
                             <span className="avatar">{initialsFor(person.username)}</span>
                           </div>

@@ -1,26 +1,32 @@
 export type SignalPayload = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit | null;
+  mediaSources?: Partial<Record<MediaSlot, string>>;
 };
+
+export type MediaSlot = "microphone" | "camera" | "screen";
+export type LocalMediaTracks = Partial<Record<MediaSlot, MediaStreamTrack>>;
+export type RemoteMedia = Partial<Record<MediaSlot, MediaStream>>;
 
 type PeerMeshOptions = {
   sendSignal: (peerId: string, payload: SignalPayload) => void;
-  onRemoteStream: (peerId: string, stream: MediaStream) => void;
+  onRemoteMedia: (peerId: string, media: RemoteMedia) => void;
   onFile: (peerId: string, file: File) => void;
   /** Read at signaling time (not just once), since it's only known after room.ready arrives. */
   getLocalId: () => string;
   iceServers?: RTCIceServer[];
 };
 
-type TrackKind = "audio" | "video";
-const trackKinds: TrackKind[] = ["audio", "video"];
+const mediaSlots: MediaSlot[] = ["microphone", "camera", "screen"];
 
 type Peer = {
   connection: RTCPeerConnection;
   channel?: RTCDataChannel;
   fileParts: ArrayBuffer[];
   incomingFile?: { name: string; type: string };
-  senders: Partial<Record<TrackKind, RTCRtpSender>>;
+  senders: Partial<Record<MediaSlot, RTCRtpSender>>;
+  remoteTracks: Map<string, MediaStreamTrack>;
+  remoteSources: Partial<Record<MediaSlot, string>>;
   makingOffer: boolean;
   ignoreOffer: boolean;
   isSettingRemoteAnswerPending: boolean;
@@ -40,14 +46,26 @@ type Peer = {
  */
 export class PeerMesh {
   private readonly peers = new Map<string, Peer>();
-  private stream?: MediaStream;
+  private localTracks: LocalMediaTracks = {};
+  private localStream?: MediaStream;
 
   constructor(private readonly options: PeerMeshOptions) {}
 
-  /** Pass null to stop publishing local media (e.g. after a screen share ends) without tearing down peers. */
-  setLocalStream(stream: MediaStream | null) {
-    this.stream = stream ?? undefined;
-    for (const peer of this.peers.values()) this.applyStream(peer);
+  /** Camera, microphone, and screen are independent senders and may coexist. */
+  setLocalTracks(tracks: LocalMediaTracks) {
+    this.localTracks = tracks;
+    this.localStream ??= new MediaStream();
+    const activeTracks = new Set(Object.values(tracks));
+    for (const track of this.localStream.getTracks()) {
+      if (!activeTracks.has(track)) this.localStream.removeTrack(track);
+    }
+    for (const track of activeTracks) {
+      if (!this.localStream.getTracks().includes(track)) this.localStream.addTrack(track);
+    }
+    for (const [peerId, peer] of this.peers) {
+      this.applyLocalTracks(peer);
+      this.sendMediaSources(peerId);
+    }
   }
 
   async connect(peerId: string, initiator: boolean) {
@@ -114,6 +132,8 @@ export class PeerMesh {
       connection,
       fileParts: [],
       senders: {},
+      remoteTracks: new Map(),
+      remoteSources: {},
       makingOffer: false,
       ignoreOffer: false,
       isSettingRemoteAnswerPending: false,
@@ -123,7 +143,12 @@ export class PeerMesh {
     connection.onicecandidate = (event) => {
       if (event.candidate) this.options.sendSignal(peerId, { candidate: event.candidate.toJSON() });
     };
-    connection.ontrack = (event) => this.options.onRemoteStream(peerId, event.streams[0]);
+    connection.ontrack = (event) => {
+      peer.remoteTracks.set(event.track.id, event.track);
+      const notify = () => this.notifyRemoteMedia(peerId, peer);
+      event.track.addEventListener("ended", notify);
+      notify();
+    };
     connection.ondatachannel = (event) => {
       peer.channel = this.configureChannel(peerId, event.channel);
     };
@@ -154,13 +179,18 @@ export class PeerMesh {
         }
       })();
     };
-    this.applyStream(peer);
+    this.applyLocalTracks(peer);
     this.peers.set(peerId, peer);
+    this.sendMediaSources(peerId);
     return peer;
   }
 
   private async applySignal(peerId: string, peer: Peer, signal: SignalPayload) {
     const { connection } = peer;
+    if (signal.mediaSources) {
+      peer.remoteSources = signal.mediaSources;
+      this.notifyRemoteMedia(peerId, peer);
+    }
     if (signal.description) {
       const readyForOffer =
         !peer.makingOffer && (connection.signalingState === "stable" || peer.isSettingRemoteAnswerPending);
@@ -219,23 +249,50 @@ export class PeerMesh {
     }
   }
 
-  /**
-   * Publishes the current local stream to one peer, kind by kind. Reuses each
-   * sender's own slot rather than matching by `sender.track` so a track can be
-   * swapped (camera <-> screen) or cleared (`replaceTrack(null)`) without
-   * renegotiation, and so a later stream change can still find that sender
-   * after its track has gone null.
-   */
-  private applyStream(peer: Peer) {
-    for (const kind of trackKinds) {
-      const track = this.stream?.getTracks().find((item) => item.kind === kind) ?? null;
-      const sender = peer.senders[kind];
+  private applyLocalTracks(peer: Peer) {
+    for (const slot of mediaSlots) {
+      const track = this.localTracks[slot];
+      const sender = peer.senders[slot];
       if (sender) {
-        if (sender.track !== track) void sender.replaceTrack(track);
-      } else if (track && this.stream) {
-        peer.senders[kind] = peer.connection.addTrack(track, this.stream);
+        if (!track) {
+          peer.connection.removeTrack(sender);
+          delete peer.senders[slot];
+        } else if (sender.track !== track) {
+          void sender.replaceTrack(track);
+        }
+      } else if (track && this.localStream) {
+        peer.senders[slot] = peer.connection.addTrack(track, this.localStream);
       }
     }
+  }
+
+  private sendMediaSources(peerId: string) {
+    this.options.sendSignal(peerId, {
+      mediaSources: Object.fromEntries(
+        mediaSlots.flatMap((slot) => (this.localTracks[slot] ? [[slot, this.localTracks[slot].id]] : [])),
+      ),
+    });
+  }
+
+  private notifyRemoteMedia(peerId: string, peer: Peer) {
+    const media: RemoteMedia = {};
+    for (const slot of mediaSlots) {
+      const trackId = peer.remoteSources[slot];
+      const track = trackId ? peer.remoteTracks.get(trackId) : undefined;
+      if (track && track.readyState !== "ended") media[slot] = new MediaStream([track]);
+    }
+    // During a rolling web deployment, an already-open older client does not send
+    // mediaSources metadata. It can only publish one video, so this fallback keeps
+    // that camera/audio visible until the tab refreshes onto the new protocol.
+    if (!Object.keys(peer.remoteSources).length) {
+      const tracks = [...peer.remoteTracks.values()].filter((track) => track.readyState !== "ended");
+      const audio = tracks.find((track) => track.kind === "audio");
+      const videos = tracks.filter((track) => track.kind === "video");
+      if (audio) media.microphone = new MediaStream([audio]);
+      if (videos[0]) media.camera = new MediaStream([videos[0]]);
+      if (videos[1]) media.screen = new MediaStream([videos[1]]);
+    }
+    this.options.onRemoteMedia(peerId, media);
   }
 
   private configureChannel(peerId: string, channel: RTCDataChannel) {
