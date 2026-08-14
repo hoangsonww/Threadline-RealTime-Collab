@@ -41,6 +41,15 @@ describe("the published OpenAPI document", () => {
     expect(ids).toHaveLength(new Set(ids).size);
   });
 
+  it("does not require a registration field the API treats as optional", () => {
+    const doc = document();
+    const schemas = doc.components.schemas as Record<string, { required?: string[] }>;
+    // The sign-up form sends no username and the API derives one; a contract that
+    // still demands it would be telling every other client to send something the
+    // reference client does not.
+    expect(schemas.RegistrationInput.required).toEqual(["email", "displayName", "password"]);
+  });
+
   it("documents the profile endpoint and no email verification flow", () => {
     const doc = document();
     expect(Object.keys(doc.paths["/v1/auth/me"]).sort()).toEqual(["get", "patch"]);

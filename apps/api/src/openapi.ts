@@ -972,10 +972,17 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RegistrationInput: {
           type: "object",
-          required: ["email", "username", "displayName", "password"],
+          required: ["email", "displayName", "password"],
           properties: {
             email: { type: "string", format: "email" },
-            username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
+            username: {
+              type: "string",
+              pattern: "^[a-zA-Z0-9-]+$",
+              minLength: 3,
+              maxLength: 32,
+              description:
+                "Optional. Omit it and the API derives a free username from the email address — a client deriving one itself collides as soon as two people share a local part across domains. Lower-cased, and rejected with 409 if already taken.",
+            },
             displayName: { type: "string", minLength: 2, maxLength: 80 },
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
           },
