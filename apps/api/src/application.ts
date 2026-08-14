@@ -363,6 +363,16 @@ export function createApp(options: AppOptions, app = express()) {
         .parse(request.body);
       if (await options.repository.getUserByEmail(input.email))
         return clientError(response, 409, "email_in_use", "An account already exists for this email.");
+      // Registration never checked this, so two accounts could claim the same
+      // username outright. Unlike the email check above — which sits behind a unique
+      // index and is therefore decisive — this is a read before a write and cannot
+      // close a genuine race on its own. Making it atomic needs a unique index on
+      // `username`, and building one against a collection that may already hold
+      // duplicates is a migration, not a schema tweak: this repository has already
+      // taken production down exactly that way once (see docs/operations.md). The
+      // check closes the ordinary case; the migration is tracked in docs/roadmap.md.
+      if (await options.repository.getUserByUsername(input.username))
+        return clientError(response, 409, "username_in_use", "That username is already taken.");
       const user: User = {
         id: id(),
         email: input.email,

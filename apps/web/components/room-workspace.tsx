@@ -581,7 +581,14 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 recentEvents?: RoomEvent[];
                 participant?: Participant;
               };
-              if (payload.participant?.connectionId) localIdRef.current = payload.participant.connectionId;
+              // Both taken from room.ready rather than waiting on /v1/auth/me: that
+              // fetch can still be in flight when the first chat message arrives, and
+              // an unset identityIdRef would let your own echoed message through the
+              // "is this from someone else" filter and play an arrival cue at you.
+              if (payload.participant?.connectionId) {
+                localIdRef.current = payload.participant.connectionId;
+                identityIdRef.current = payload.participant.userId;
+              }
               announcePresence(payload.participants ?? [], true);
               setParticipants(payload.participants ?? []);
               payload.recentEvents?.forEach(addEvent);

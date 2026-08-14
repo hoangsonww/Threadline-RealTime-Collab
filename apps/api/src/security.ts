@@ -24,6 +24,9 @@ export const publicUser = (user: User) => ({
   displayName: user.displayName,
   avatar: user.avatar,
   createdAt: user.createdAt,
+  // Declared required by the published User schema. It was missing here, so every
+  // response carrying a user silently violated its own documented contract.
+  updatedAt: user.updatedAt,
 });
 
 export class OidcSigner {

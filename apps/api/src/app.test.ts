@@ -380,6 +380,50 @@ describe("Threadline identity API", () => {
     expect((await request(app).patch("/v1/auth/me").send({ displayName: "Anonymous" })).status).toBe(401);
   });
 
+  it("rejects a username already claimed by another account at registration", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const first = await agent.post("/v1/auth/register").send({
+      email: "first@example.com",
+      username: "shared-handle",
+      displayName: "First User",
+      password: "correct-horse-battery",
+    });
+    expect(first.status).toBe(201);
+
+    // Case-folded, so "Shared-Handle" is the same claim as "shared-handle".
+    const collision = await request(app).post("/v1/auth/register").send({
+      email: "second@example.com",
+      username: "Shared-Handle",
+      displayName: "Second User",
+      password: "correct-horse-battery",
+    });
+    expect(collision.status).toBe(409);
+    expect(collision.body.error).toBe("username_in_use");
+  });
+
+  it("returns every field the published User schema declares required", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const registration = await agent.post("/v1/auth/register").send({
+      email: "shape@example.com",
+      username: "shape-user",
+      displayName: "Shape User",
+      password: "correct-horse-battery",
+    });
+
+    const specification = await request(app).get("/openapi.json");
+    const required: string[] = specification.body.components.schemas.User.required;
+    expect(required.length).toBeGreaterThan(0);
+
+    // publicUser is what every user-carrying response is built from, so a field the
+    // schema promises and it omits is a contract violation on all of them at once.
+    for (const field of required) {
+      expect(registration.body.user, `register is missing ${field}`).toHaveProperty(field);
+      expect((await agent.get("/v1/auth/me")).body.user, `/v1/auth/me is missing ${field}`).toHaveProperty(field);
+    }
+  });
+
   it("does not let a personal access token rename the account that issued it", async () => {
     const { app } = await createTestApp();
     const { agent } = await registerWithOrg(
