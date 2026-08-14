@@ -1,6 +1,6 @@
 # Testing
 
-Two real test suites exist today, each running against the actual runtime it targets rather than a mock of it — no suite for `apps/web` exists yet (see [Everything the automated suites don't cover](#everything-the-automated-suites-dont-cover)).
+Every automated suite here runs against the actual runtime it targets rather than a mock of it. `apps/web` has unit and layout coverage but no component- or page-level suite (see [Everything the automated suites don't cover](#everything-the-automated-suites-dont-cover)).
 
 ```mermaid
 graph TD
@@ -103,7 +103,7 @@ flowchart TB
         rt["apps/realtime Durable Object tests<br/>real workerd runtime via Miniflare"]
     end
     subgraph manual["Manual, run by hand against the live app"]
-        web["apps/web UI correctness<br/>(no automated suite exists)"]
+        web["apps/web page rendering<br/>and fetch-driven state<br/>(no component suite exists)"]
         twoCtx["Two-independent-browser-context<br/>collaboration tests<br/>(real cookie-isolated sessions)"]
         media["Camera/mic media paths<br/>(no test-environment camera exists)"]
     end
@@ -116,7 +116,7 @@ flowchart TB
     style manual fill:#3a1f24,stroke:#ff7b85,color:#fff
 ```
 
-- **`apps/web` has no component or page-level test suite.** The unit and layout tests above mount nothing and assert no fetch-driven state. UI correctness, the WebRTC mesh fix, the room-membership feature, the screen-share state machine, and the whiteboard off-tab-loss fix (see [`frontend.md`](frontend.md#the-whiteboard-had-to-stay-mounted-off-tab)) were all verified through live manual testing against the running app rather than an automated regression suite. This is the single biggest testing gap in the repo — real bugs (the WebRTC mesh initiator issue, the stale-presence-after-disconnect race, the off-tab whiteboard loss) shipped and were only caught by manual multi-session testing, exactly the kind of thing a Playwright-driven two-context suite would catch automatically going forward.
+- **`apps/web` has no component or page-level test suite.** The unit and layout tests above mount nothing and assert no fetch-driven state. The room-membership feature, the screen-share state machine, and the whiteboard off-tab-loss fix (see [`frontend.md`](frontend.md#the-whiteboard-had-to-stay-mounted-off-tab)) were verified through live manual testing against the running app rather than an automated regression suite. The WebRTC mesh fix is the exception — `lib/peer-mesh.test.ts` does cover it. This is the single biggest testing gap in the repo — real bugs (the WebRTC mesh initiator issue, the stale-presence-after-disconnect race, the off-tab whiteboard loss) shipped and were only caught by manual multi-session testing, exactly the kind of thing a Playwright-driven two-context suite would catch automatically going forward.
 - **That manual testing does use genuinely independent browser contexts, just not in CI.** Two `BrowserContext`s (`browser.newContext()`), each with its own cookie jar, each authenticated as a different real registered user — not two tabs sharing one context's cookies (that shares the session and silently re-authenticates the "wrong" tab; see [`troubleshooting.md`](troubleshooting.md#testing-with-two-different-logged-in-accounts-in-one-browser-breaks-the-wrong-tab)), and not a single client asserting against raw WebSocket JSON. Both real browsers render the actual React UI; this is what caught the presence-race bug — the local Durable Object test suite's simulated hibernation runtime doesn't reproduce that timing quirk (see [Durable Object tests](#durable-object-tests) above), so only two real concurrent sessions against the _deployed_ Worker exposed it. The gap that remains is automation: this technique has never been wired into CI as a Playwright test, only run manually.
 - **Camera/microphone media paths are unverified by any automated or sandboxed test.** `getUserMedia` has no real camera device to grant in any available test environment; the actual audio/video (as opposed to signaling and the data channel) has only ever been exercised against real hardware, not in CI.
 - **A network-delay harness verified the loading-skeleton fix**, using a technique worth naming for reuse: local network to both the dev server and the deployed API is normally fast enough that a "still loading" state never stays on screen long enough to actually look at, which makes "does this page show a skeleton while loading, or does it flash the wrong empty state" hard to verify by just clicking around. The fix was verified by opening a CDP session directly (`page.context().newCDPSession(page)`) and either calling `Network.emulateNetworkConditions` to add latency to every request, or intercepting one specific route (`page.route(...)`) and delaying just that response, then screenshotting at intervals through the artificially-widened loading window. This caught, live, exactly the bug being fixed: pages that initialize a list as an empty array render their "genuinely empty" copy (`No rooms yet`, `No members loaded`) before the first fetch ever resolves, because an empty array and a not-yet-loaded array are indistinguishable to a component that doesn't track loading state separately. Like the two-context technique above, this has never been wired into CI — it's a manual verification technique, not a regression suite.
@@ -127,14 +127,15 @@ flowchart TB
 flowchart LR
     Format["npm run format:check<br/>(Prettier)"] --> Lint["npm run lint<br/>(ESLint, --max-warnings=0)"]
     Lint --> Type["npm run typecheck<br/>(tsc --noEmit ×3 workspaces)"]
-    Type --> Test["npm test<br/>(api vitest + realtime vitest-pool-workers)"]
-    Test --> Build["npm run build<br/>(next build; api/realtime have no build step)"]
+    Type --> Test["npm test<br/>(api + web vitest,<br/>realtime vitest-pool-workers)"]
+    Test --> Browser["npm run test:browser<br/>(Playwright layout guards)"]
+    Browser --> Build["npm run build<br/>(next build; api/realtime have no build step)"]
 ```
 
 Run the whole chain before opening a PR:
 
 ```bash
-npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
+npm run format:check && npm run lint && npm run typecheck && npm test && npm run test:browser && npm run build
 ```
 
 `apps/api` and `apps/realtime` don't have a build step of their own — the API runs directly under `tsx`/Node, and the Worker is bundled at `wrangler deploy` time, not before.

@@ -113,7 +113,7 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "register",
           summary: "Create an account",
           description:
-            "Creates a user and a browser session only — the account starts with no organization. A verification action is queued when account-action delivery is configured. Direct the person to `POST /v1/orgs` or `POST /v1/join` next.",
+            "Creates a user and a browser session only — the account starts with no organization. Direct the person to `POST /v1/orgs` or `POST /v1/join` next. Returns `409` if the email or username is already taken.",
           requestBody: { required: true, content: json(schema("RegistrationInput")) },
           responses: {
             "201": response("Account created; a session cookie is set.", schema("RegistrationResponse")),
@@ -1130,7 +1130,7 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
                     emailVerified: {
                       type: "boolean",
                       description:
-                        "Always false. Threadline has no transactional email provider, so there is no verification flow to set it. Retained because the OIDC email_verified claim is derived from it.",
+                        "Reflects `Credential.emailVerifiedAt`. No flow can set it any more — email verification was removed because nothing could deliver its mail — so it is `false` for every account except one that verified before the removal, whose timestamp is retained rather than rewritten. The OIDC `email_verified` claim is derived from the same field.",
                     },
                   },
                 },

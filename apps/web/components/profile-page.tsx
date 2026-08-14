@@ -213,11 +213,11 @@ export function ProfilePage() {
 
           <div className="settings-section">
             <h3>Email address</h3>
-            <p>Your email identifies the account at sign-in. Changing it is not self-serve.</p>
+            <p>Your email identifies the account at sign-in. There is no way to change it yet.</p>
             <div className="key-row">
               <div>
                 <strong>{user?.email ?? "Loading…"}</strong>
-                <span>Contact a workspace owner if this address needs to change.</span>
+                <span>Changing it is not supported yet.</span>
               </div>
             </div>
           </div>

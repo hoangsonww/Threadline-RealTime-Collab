@@ -49,8 +49,10 @@ Remove the email-verification feature rather than leave an endpoint that reports
 4. All user-facing surfaces are gone: the Verified/Unverified badge, both "Resend link" rows, the `/verify-email` page,
    its `VerifyEmailForm`, and its `robots.ts`/`sitemap.ts` entries.
 5. `Credential.emailVerifiedAt` **stays**, and so does the OIDC `email_verified` claim derived from it. The claim is part
-   of the OpenID Connect contract; reporting it as `false` is accurate, and removing it would be a breaking change to a
-   different feature for no benefit.
+   of the OpenID Connect contract, and removing it would be a breaking change to a different feature for no benefit.
+   Nothing can set the timestamp any more, so the claim reads `false` for every account except one that verified while a
+   delivery webhook happened to be configured. Those timestamps are deliberately **not** cleared: the verification did
+   happen, and rewriting history to make a sentence like "always false" true would be the less honest option.
 6. The false "fails fast" claims are corrected in `deployment.md` and `security.md`, and the real behaviour is documented
    in `README.md` and `api.md` under **Email delivery**.
 
@@ -70,7 +72,7 @@ and DKIM records, deliverability monitoring, and a cost — not something to smu
 ## Consequences
 
 - Nothing in the product claims an address is verified or unverified, because nothing can establish that it is.
-- `emailVerified` on `GET /v1/auth/me` is now always `false`. It is documented as such rather than left to be inferred.
+- Nothing can set `emailVerified` on `GET /v1/auth/me` any more. It reads `false` for every account that did not already carry a timestamp, and the published schema says exactly that rather than promising a blanket `false` the data cannot guarantee.
 - **Password recovery has the identical silent failure and is deliberately _not_ removed here.** `POST
   /v1/auth/password-reset/request` still answers `202` — it must, or it would disclose whether an account exists — and
   with no webhook the token expires undelivered, so account recovery does not complete in production. Verification could

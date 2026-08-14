@@ -129,14 +129,16 @@ Same room, same endpoint, same code path — the only input that changed is each
 | `POST /v1/auth/password`                   | session       | Revokes every _other_ active session on success.                                                       |
 | `POST /v1/auth/password-reset/request`     | none          | Always `202`, regardless of whether the email exists (no account enumeration). Rate limited 5/hour/IP. |
 | `POST /v1/auth/password-reset/confirm`     | token in body | One-time token, revokes all sessions on success.                                                       |
-| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`. `user.emailVerified` is always `false` — see below.                 |
+| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`. Nothing can set `user.emailVerified` any more — see below.          |
 | `PATCH /v1/auth/me`                        | session only  | Updates `displayName` and/or `username`. `409` on a username collision. Rejects personal access tokens. |
 
 There is deliberately **no email-verification flow**. It only ever worked when `AUTH_DELIVERY_WEBHOOK` pointed at a
 transactional email service; with none configured, `POST /v1/auth/email-verification/request` wrote a token and answered
 `202 Accepted` for mail that was never sent. Both endpoints were removed rather than left reporting success for something
 they did not do. `Credential.emailVerifiedAt` and the OIDC `email_verified` claim remain — the claim is part of the OIDC
-contract, and reporting it as `false` is accurate. See [Email delivery](#email-delivery).
+contract. Nothing can set the timestamp any more, so it reads `false` for every account except one that verified
+before the removal; those timestamps are retained rather than rewritten, because erasing a fact that was true is not
+more honest than reporting it. See [Email delivery](#email-delivery).
 
 `PATCH /v1/auth/me` takes a browser session and refuses a personal access token, including one holding `admin:*`. No
 automation scope should be able to rename the account that issued it, so the boundary is the session rather than a scope.

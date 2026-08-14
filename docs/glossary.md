@@ -16,7 +16,7 @@ Terms as this codebase actually uses them — not always the industry-general de
 ## C
 
 - **Classification** (room) — `internal` or `confidential`. Only matters when `visibility` is `organization`: a `confidential` room additionally requires explicit `RoomMembership` even for regular org members (org owners/admins still get in via their elevated role). Doesn't apply to `restricted` rooms, which already require explicit membership regardless.
-- **Credential** — The `passwordHash`/`emailVerifiedAt` record, stored as a table separate from `User` so a `User` object can be handled/logged without any risk of a hash traveling with it. `emailVerifiedAt` is always null: there is no verification flow, and the field survives only because the OIDC `email_verified` claim is derived from it.
+- **Credential** — The `passwordHash`/`emailVerifiedAt` record, stored as a table separate from `User` so a `User` object can be handled/logged without any risk of a hash traveling with it. `emailVerifiedAt` can no longer be set — email verification was removed because nothing could deliver its mail — so it is null for every account except one that verified before the removal, whose timestamp is retained rather than rewritten. The field survives because the OIDC `email_verified` claim is derived from it.
 
 ## D
 
