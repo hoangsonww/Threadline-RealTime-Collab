@@ -81,6 +81,11 @@ two narrower kinds of coverage do exist:
 
 - `lib/peer-mesh.test.ts` — WebRTC mesh negotiation against a fake `RTCPeerConnection`: who initiates, renegotiation
   ordering, ICE candidate buffering, and cleanup on disconnect.
+- `lib/call-shortcuts.test.ts` — the call-control shortcut matcher. Asserts the two rules that make the feature safe
+  rather than annoying: keystrokes aimed at an `INPUT`, `TEXTAREA`, `SELECT`, or `contenteditable` are ignored (the room
+  shows a chat box and two editors next to the call controls, so typing "meeting" must not mute anyone), and modified
+  keys are left to the browser so Cmd+S and Ctrl+V keep working. A final test asserts every action the matcher can
+  return has a display key, so a binding cannot be added without the tooltip that makes it discoverable.
 - `lib/sound.test.ts` — the sound engine against a fake `AudioContext` that records the node graph. Asserts that a muted
   client constructs **no** `AudioContext` at all (not merely a silent one), that every envelope is ramped rather than
   switched (a bare `setValueAtTime` to the peak is what puts a click on the front of a cue), that a burst of one cue
