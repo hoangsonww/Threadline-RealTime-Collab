@@ -190,7 +190,7 @@ erDiagram
         string userId PK
         string passwordHash
         date passwordUpdatedAt
-        date emailVerifiedAt "nullable"
+        date emailVerifiedAt "nullable; always null — no verification flow"
     }
     SESSION {
         string id PK
@@ -281,7 +281,7 @@ erDiagram
     ACCOUNT_ACTION_TOKEN {
         string tokenHash PK
         string userId FK
-        string type "password_reset | email_verification"
+        string type "password_reset"
         date expiresAt
     }
 ```

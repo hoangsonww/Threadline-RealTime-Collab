@@ -337,7 +337,7 @@ The middleware order in [application.ts](apps/api/src/application.ts) is archite
 2. CORS accepts the configured web origin plus explicitly configured additional origins and allows credentials.
 3. Pino HTTP logs requests while redacting Authorization, Cookie, and Set-Cookie fields.
 4. The body limit is 1 MB for JSON and URL-encoded data.
-5. Mongo-backed fixed-window rate limits protect registration, login, password-reset requests, email-verification requests, and invite-code joins.
+5. Mongo-backed fixed-window rate limits protect registration, login, password-reset requests, and invite-code joins.
 6. Unsafe requests that use the browser session cookie must have an allowed Origin, providing a CSRF boundary.
 7. Routes parse input with Zod; unexpected failures are reported to Sentry when configured and return a generic 500 response.
 
@@ -345,7 +345,7 @@ The middleware order in [application.ts](apps/api/src/application.ts) is archite
 
 | Surface | Authentication accepted | Main responsibility |
 | --- | --- | --- |
-| Browser account and session endpoints | Session cookie where needed | Register, login, logout, session listing/revocation, password changes, recovery, email verification |
+| Browser account and session endpoints | Session cookie where needed | Register, login, logout, session listing/revocation, profile updates, password changes, recovery |
 | Workspace and room REST endpoints | Session or PAT where a resource scope is required | Organizations, invite codes, memberships, rooms, calendar, room-event history, activity |
 | Personal access token management | Session only | Create, list, and revoke scoped automation tokens |
 | Internal ingest | Ingest shared secret plus event-author ABAC | Persist room events emitted by Durable Objects |
@@ -389,7 +389,7 @@ flowchart TB
 | OIDC authorization code | Hash persisted once and consumed with find-and-delete semantics | PKCE S256 bound, client and redirect bound; expires in 5 minutes |
 | OIDC refresh token | Hash persisted and consumed on every refresh | Single-use rotation; new token gets a new 30-day expiry |
 | OIDC JWTs | OidcSigner signs RS256; public key served through JWKS | Access and ID tokens expire in 15 minutes |
-| Account-action token | SHA-256 hash persisted and consumed once | Password-reset or email-verification type; expires in 1 hour |
+| Account-action token | SHA-256 hash persisted and consumed once | Password-reset only; expires in 1 hour |
 
 Passwords are stored separately as Argon2id hashes with explicit memory, time, and parallelism parameters. The raw password hash is never included in a public user response. Personal access token secrets, raw session values, and raw action values are similarly never stored as plaintext.
 
@@ -791,7 +791,7 @@ sequenceDiagram
 | ROOM_TICKET_SECRET | API runtime and Worker secret | Runtime / Worker secret | Must be exactly identical; API signs and Durable Object verifies room tickets |
 | INTERNAL_INGEST_SECRET / PERSISTENCE_SECRET | API runtime and Worker secret | Runtime / Worker secret | Same secret under different names; authenticates durable event hand-off |
 | PERSISTENCE_WEBHOOK | Worker variable | Worker deploy | Public API internal-ingest URL |
-| AUTH_DELIVERY_WEBHOOK and AUTH_DELIVERY_SECRET | API runtime | Runtime | Optional outbound password-reset/email-verification delivery integration |
+| AUTH_DELIVERY_WEBHOOK and AUTH_DELIVERY_SECRET | API runtime | Runtime | Outbound password-reset delivery integration. Unset means no mail is sent and account recovery does not complete |
 | SENTRY_DSN / NEXT_PUBLIC_SENTRY_DSN | API runtime / web build | Respective lifecycle | Optional monitoring; SDKs remain inert without DSNs |
 
 ~~~mermaid

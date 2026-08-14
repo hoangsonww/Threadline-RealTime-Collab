@@ -59,7 +59,6 @@ graph TD
     Root --> Register["/register"]
     Root --> Forgot["/forgot-password"]
     Root --> Reset["/reset-password"]
-    Root --> Verify["/verify-email"]
     Root --> AppLayout["app/app/layout.tsx<br/>= WorkspaceGate"]
 
     AppLayout --> Dashboard["/app — dashboard.tsx"]
@@ -67,6 +66,7 @@ graph TD
     AppLayout --> Calendar["/app/calendar — calendar-view.tsx"]
     AppLayout --> Activity["/app/activity — activity-feed.tsx"]
     AppLayout --> OrgMembers["/app/org/:orgId/members — members-page.tsx"]
+    AppLayout --> Profile["/app/profile — profile-page.tsx"]
     AppLayout --> Settings["/app/settings(/security,/sessions,/tokens,/clients)"]
     AppLayout --> Room["/app/rooms/:roomId — room-workspace.tsx<br/>(own immersive layout, no AppShell)"]
     AppLayout --> RoomMembers["/app/rooms/:roomId/members — room-members-page.tsx"]
@@ -191,11 +191,14 @@ This class of bug is invisible in code review — it only manifests during an ac
 | `activity-feed.tsx`                                                 | `/app/activity`: durable event stream across visible rooms                                                                                                                                                                                                        |
 | `members-page.tsx`                                                  | `/app/org/:orgId/members`: organization membership, invite-code panel, role management                                                                                                                                                                            |
 | `room-members-page.tsx`                                             | `/app/rooms/:roomId/members`: explicit room membership, only route with a "grant access" flow                                                                                                                                                                     |
-| `settings.tsx`                                                      | `/app/settings(/security,/sessions,/tokens,/clients)`: appearance, sessions, PATs, OIDC clients, email verification                                                                                                                                               |
+| `settings.tsx`                                                      | `/app/settings(/security,/sessions,/tokens,/clients)`: appearance, interface sounds, sessions, PATs, OIDC clients                                                                                                                                                 |
+| `profile-page.tsx`                                                  | `/app/profile`: identity summary, editable display name/username, workspace memberships. Reached from the topbar avatar                                                                                                                                            |
+| `sound-preference.tsx`                                              | The on/off toggle for interface sound; previewing on select doubles as the user gesture that unlocks the audio context                                                                                                                                             |
 | `room-workspace.tsx`                                                | The live room: chat, notes, whiteboard, files, timeline, WebRTC controls — see [`realtime.md`](realtime.md)                                                                                                                                                       |
 | `app-select.tsx`                                                    | Custom accessible listbox/combobox used by every form that isn't a plain text input (role select, room visibility, calendar room picker, etc.)                                                                                                                    |
 | `skeletons.tsx`                                                     | Shimmer loading placeholders (rooms, members, activity, calendar, sessions/tokens/clients) built from the same container classes as the real content, so a still-loading list is never mistaken for a genuinely empty one — see [Loading states](#loading-states) |
 | `theme-sync.tsx`, `theme-preference.tsx`                            | Theme application (mount-time) and the user-facing toggle                                                                                                                                                                                                         |
+| `lib/sound.ts`                                                      | Web Audio cue synthesis and the persisted sound preference — see [Interface sound](../README.md#interface-sound)                                                                                                                                                   |
 
 ## Room workspace: connection lifecycle and reconnection
 

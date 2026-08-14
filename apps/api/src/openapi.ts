@@ -69,7 +69,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
       description:
         "Threadline is a room-centered engineering workspace. This API provides browser session authentication, scoped personal access tokens, ABAC-protected organizations and rooms, calendar/activity data, and a first-party OpenID Connect provider.\n\n" +
         "Use a browser session for interactive product calls. Automation can send `Authorization: Bearer tl_pat_…`; every protected operation documents its required scope. OIDC endpoints follow Authorization Code + PKCE and intentionally do not support implicit or password grants.\n\n" +
-        "All timestamps are ISO 8601 UTC strings. All IDs are UUIDs unless noted otherwise. Errors use the shared `Error` schema.",
+        "All timestamps are ISO 8601 UTC strings. All IDs are UUIDs unless noted otherwise. Errors use the shared `Error` schema.\n\n" +
+        "**Email delivery.** Threadline has no built-in transactional email provider. Any operation that would send mail is delivered by POSTing to the webhook named in `AUTH_DELIVERY_WEBHOOK`; when that variable is unset, no mail leaves the system. There is deliberately no email-verification flow for that reason, and password recovery only completes end to end where the webhook is configured.",
       contact: { name: "Threadline Engineering", url: "https://github.com/hoangsonw/threadline" },
       license: { name: "Private / proprietary" },
     },
@@ -79,7 +80,10 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
     ].filter((server, index, all) => all.findIndex((candidate) => candidate.url === server.url) === index),
     tags: [
       { name: "Service", description: "Service health and API contract discovery." },
-      { name: "Authentication", description: "Password authentication, sessions, recovery, and verification." },
+      {
+        name: "Authentication",
+        description: "Password authentication, browser sessions, the signed-in profile, and password recovery.",
+      },
       {
         name: "Organizations",
         description: "Organization-scoped resources protected by attribute-based access control.",
@@ -160,7 +164,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "requestPasswordReset",
           summary: "Request a password recovery link",
           description:
-            "Always returns an accepted response to avoid disclosing whether an email address has an account.",
+            "Always returns an accepted response to avoid disclosing whether an email address has an account.\n\n" +
+            "The accepted response means the request was recorded, not that mail was sent: a recovery link is only delivered when `AUTH_DELIVERY_WEBHOOK` is configured. With no webhook the token is written and expires unused.",
           requestBody: { required: true, content: json(schema("EmailInput")) },
           responses: {
             "202": response("The request was accepted.", schema("AcceptedMessage")),
@@ -181,27 +186,6 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             "400": errors.BadRequest,
             "422": errors.Validation,
           },
-        },
-      },
-      "/v1/auth/email-verification/request": {
-        post: {
-          tags: ["Authentication"],
-          operationId: "requestEmailVerification",
-          summary: "Request a verification link for the signed-in user",
-          security: sessionSecurity,
-          responses: {
-            "202": response("The request was accepted.", schema("AcceptedMessage")),
-            "401": errors.Unauthorized,
-          },
-        },
-      },
-      "/v1/auth/email-verification/confirm": {
-        post: {
-          tags: ["Authentication"],
-          operationId: "confirmEmailVerification",
-          summary: "Confirm an email address from a verification token",
-          requestBody: { required: true, content: json(schema("VerificationTokenInput")) },
-          responses: { "204": response("Email address verified."), "400": errors.BadRequest, "422": errors.Validation },
         },
       },
       "/v1/auth/me": {
@@ -986,11 +970,6 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
           },
         },
-        VerificationTokenInput: {
-          type: "object",
-          required: ["token"],
-          properties: { token: { type: "string", minLength: 20 } },
-        },
         CreateRoomInput: {
           type: "object",
           required: ["name"],
@@ -1144,7 +1123,17 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             user: {
               allOf: [
                 schema("User"),
-                { type: "object", required: ["emailVerified"], properties: { emailVerified: { type: "boolean" } } },
+                {
+                  type: "object",
+                  required: ["emailVerified"],
+                  properties: {
+                    emailVerified: {
+                      type: "boolean",
+                      description:
+                        "Always false. Threadline has no transactional email provider, so there is no verification flow to set it. Retained because the OIDC email_verified claim is derived from it.",
+                    },
+                  },
+                },
               ],
             },
             organizations: { type: "array", items: schema("Organization") },

@@ -43,6 +43,8 @@ Threadline is a room-centered collaboration workspace for engineering teams. A r
 - [How the three services fit together](#how-the-three-services-fit-together)
 - [Trust model](#trust-model)
 - [Onboarding and workspace roles](#onboarding-and-workspace-roles)
+- [Interface sound](#interface-sound)
+- [Email delivery](#email-delivery)
 - [Engineering principles](#engineering-principles)
 - [Performance and scaling characteristics](#performance-and-scaling-characteristics)
 - [Real incidents found operating this](#real-incidents-found-operating-this)
@@ -76,7 +78,7 @@ Threadline provides a single, unified workspace for a live call and its durable 
 - **The product problem it solves:** most teams run a live call in one tool (a video conferencing app) and keep the record of what happened in a completely different one (a wiki page, a chat thread, a shared doc someone remembers to update afterward). Threadline treats the room itself as the unit that owns both — the live session and its durable history are the same object, not two things a human has to reconcile by hand.
 - **The engineering problem it's built to explore:** a single conventional server handles "many stateless requests" well and "one coordinator per active room, globally consistent, cheap when idle" poorly. Threadline exists to work through that specific mismatch honestly — one plane (`apps/realtime`) is intentionally not stateless, and the rest of the system is designed around that fact rather than around pretending everything can be a normal REST service.
 - **Why it's a real, running deployment rather than a diagram:** every claim in this repository's documentation — the trust boundaries, the failure modes, the incidents — is backed by a system you can actually open, register an account on, and break in the same ways it was broken during development. [Real incidents found operating this](#real-incidents-found-operating-this) and [`docs/operations.md`](docs/operations.md) exist because this was operated, not just designed.
-- **What it deliberately does not try to be:** a broadcast/streaming platform (no SFU, no one-to-many fan-out — see [Known limitations](ARCHITECTURE.md#known-limitations)), a general-purpose project management tool, or a fully managed multi-tenant SaaS with billing. It is scoped to small, focused working sessions for a single organization at a time.
+- **What it deliberately does not try to be:** a broadcast/streaming platform (no SFU, no one-to-many fan-out — see [Architectural trade-offs and current limitations](ARCHITECTURE.md#architectural-trade-offs-and-current-limitations)), a general-purpose project management tool, or a fully managed multi-tenant SaaS with billing. It is scoped to small, focused working sessions for a single organization at a time.
 
 ## Live deployment
 
@@ -84,12 +86,12 @@ Threadline provides a single, unified workspace for a live call and its durable 
 - **Swagger UI:** [threadline-app-api.vercel.app/api-docs](https://threadline-app-api.vercel.app/api-docs) — interactive, try-it-out against the live API.
 - **ReDoc:** [threadline-app-api.vercel.app/api-docs/redoc](https://threadline-app-api.vercel.app/api-docs/redoc) — three-pane reference.
 - **Realtime:** [threadline-realtime.threadline-dn.workers.dev](https://threadline-realtime.threadline-dn.workers.dev) — the Cloudflare Worker that hosts `RoomDurableObject`. There's nothing to browse here: it's a WebSocket/signaling endpoint the web app connects to with a signed room ticket, not a page meant to be opened directly.
-- **What's actually running there:** the same code in this repository, deployed with `apps/web` and `apps/api` both on Vercel (as two separate projects) and `apps/realtime` on Cloudflare Workers — the exact topology diagrammed in [Live deployment topology](ARCHITECTURE.md#live-deployment-topology) and detailed in [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
+- **What's actually running there:** the same code in this repository, deployed with `apps/web` and `apps/api` both on Vercel (as two separate projects) and `apps/realtime` on Cloudflare Workers — the exact topology diagrammed in [Browser-facing topology](ARCHITECTURE.md#browser-facing-topology) and detailed in [`docs/deployment.md`](docs/deployment.md#live-reference-deployment).
 
 ## What's included
 
 - **Web app (`apps/web`):**
-  - Registration, login, password recovery, and email verification. Signing up no longer locks an account into any one workspace — see [Onboarding and workspace roles](#onboarding-and-workspace-roles).
+  - Registration, login, and password recovery. Signing up no longer locks an account into any one workspace — see [Onboarding and workspace roles](#onboarding-and-workspace-roles). There is no email-verification flow, deliberately — see [Email delivery](#email-delivery).
   - A full-screen onboarding step, shown whenever an account has zero workspaces, offering two card-based paths: create a new workspace (becoming its owner) or join an existing one via invite code.
   - A real workspace switcher in the sidebar — accounts can belong to more than one workspace, switch between them from a dropdown, and the last-used workspace is remembered (`localStorage`) and restored on the next visit.
   - Organization dashboard: recent rooms, recent activity, a room-creation modal.
@@ -98,7 +100,9 @@ Threadline provides a single, unified workspace for a live call and its durable 
   - An organization-wide calendar for scheduling sessions, and an org-wide activity feed aggregating durable events across every visible room.
   - Organization membership management: a shareable, regenerable invite code (owner/admin-controlled, optionally delegable to members), per-member role changes (owner/admin/member) with a last-admin self-demotion guard, and per-room membership management (granting explicit access to restricted rooms).
   - Loading skeletons across every list-driven page (rooms, members, activity, calendar, sessions/tokens/clients) so a still-loading list is never mistaken for a genuinely empty one.
-  - Account settings: appearance/theme, active browser sessions (list and revoke), personal access tokens (create, scope, revoke), first-party OIDC clients, and email verification status.
+  - A dedicated profile page reached from the topbar avatar: identity summary, editable display name and username, and every workspace the account belongs to with its role. A rename updates the workspace chrome immediately rather than waiting for a reload.
+  - Account settings: appearance/theme, interface sounds, active browser sessions (list and revoke), personal access tokens (create, scope, revoke), and first-party OIDC clients.
+  - Interface sound feedback for joining, leaving, muting, camera, screen share, chat, and peer presence — synthesised with the Web Audio API rather than shipped as audio files, and switchable off in settings. See [Interface sound](#interface-sound).
   - A custom, branded 404 page rather than a framework default.
 - **API (`apps/api`):**
   - Identity and session management, with three independent authentication surfaces: browser session cookies, personal access tokens, and first-party OIDC.
@@ -200,6 +204,50 @@ Room and call access was already, and remains, gated on organization membership:
 
 Full design and endpoint-by-endpoint detail: [`docs/api.md`](docs/api.md#organizations--rooms) and [`docs/glossary.md`](docs/glossary.md#j).
 
+## Interface sound
+
+Short cues mark the events you can't see happen: joining and leaving a room, muting, camera on/off, starting and
+stopping a screen share, sending and receiving a message, and someone else arriving or leaving.
+
+They are **synthesised at runtime through the Web Audio API**, not shipped as audio files. A dozen cues as WAVs would be
+a few hundred KB of binaries carrying their own licences, and each would need a network round trip before the first mute
+click could be heard. As synthesis the whole palette is a table of frequencies in
+[`apps/web/lib/sound.ts`](apps/web/lib/sound.ts), it costs nothing until something happens, and a cue's character is
+tuned by editing a number instead of re-cutting a file.
+
+The palette is one interval set (D major pentatonic) so cues sound related rather than arbitrary, and every cue is
+paired — whatever rises to turn something on falls to turn it back off. Levels were not guessed: the module was rendered
+through an `OfflineAudioContext` and measured.
+
+| Property                         | Measured                                       |
+| -------------------------------- | ---------------------------------------------- |
+| Loudest cue (`join`) peak        | −14.8 dBFS, 378 ms                             |
+| Realistic 3-cue overlap          | −10.5 dBFS, no clipping                        |
+| All 14 cues fired simultaneously | −0.4 dBFS, still no clipping                   |
+| Max sample-to-sample jump        | 0.0238 — every envelope is ramped, so no click |
+| Sound switched off               | no `AudioContext` is constructed at all        |
+
+Repeats of the same cue inside 90 ms are dropped, so a burst of arrivals does not machine-gun. Off is one click in
+**Settings → Appearance → Interface sounds**, and the preference persists per device.
+
+## Email delivery
+
+**Threadline has no built-in transactional email provider, and that is worth understanding before deploying it.**
+
+Anything that would send mail is handed to the webhook named in `AUTH_DELIVERY_WEBHOOK` — a service you supply. When
+that variable is unset, the delivery callback is never constructed and no mail leaves the system.
+
+Two consequences follow, both stated plainly rather than discovered later:
+
+- **There is no email-verification flow.** It previously existed and silently did nothing: the request endpoint wrote a
+  token and answered `202 Accepted` for mail that was never sent. Reporting success for work not done is worse than not
+  offering the feature, so both endpoints and every piece of "Verified / Unverified / Resend link" UI were removed.
+  `Credential.emailVerifiedAt` and the OIDC `email_verified` claim remain, because the claim is part of the OIDC
+  contract and reporting it as `false` is accurate.
+- **Password recovery does not complete end to end without that webhook.** `POST /v1/auth/password-reset/request` still
+  answers `202` — answering anything else would leak whether an account exists — but the `202` means "recorded", not
+  "sent". Configure `AUTH_DELIVERY_WEBHOOK` and `AUTH_DELIVERY_SECRET` before relying on account recovery in production.
+
 ## Engineering principles
 
 - **Independent re-verification, not shared trust.** Every plane re-derives authorization from scratch on every request rather than caching a decision or trusting what an upstream plane already claims to have checked.
@@ -221,7 +269,7 @@ Concrete numbers, not marketing — what actually happens as usage grows, and wh
 | WebRTC mesh bandwidth per participant | O(n − 1) upload connections for a room of _n_ people — a 6-person room means 5 simultaneous outbound video/audio streams from each participant's browser. Fine at the small-team scale this product targets; a 20-person room would mean 19 outbound streams per participant, which most consumer upload bandwidth can't sustain. See [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md) for the SFU alternative and why it wasn't chosen.        |
 | Durable Object idle cost              | Zero ongoing compute for a room with no active WebSocket connections — Cloudflare hibernates the object between messages (`state.acceptWebSocket()`), so an idle-but-connected room costs nothing until the next message arrives. A brand-new room's Durable Object is created lazily, on the first request that names its ID.                                                                                                                        |
 | API request latency                   | Serverless cold start on Vercel for `apps/api` (a few hundred ms on a cold instance, low single-digit ms once warm) plus one MongoDB Atlas round trip per request that touches the database — every ABAC check re-queries membership rather than caching it, which is a deliberate correctness trade-off (see [Engineering principles](#engineering-principles)), not an oversight.                                                                   |
-| Rate limits                           | Login/register/password-reset/email-verification: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. All backed by an atomic Mongo counter, not process-local memory, so the limit holds across every serverless instance handling that IP — see [`docs/security.md`](docs/security.md#rate-limits).                                             |
+| Rate limits                           | Login/register/password-reset: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. All backed by an atomic Mongo counter, not process-local memory, so the limit holds across every serverless instance handling that IP — see [`docs/security.md`](docs/security.md#rate-limits).                                             |
 | Horizontal scaling (Kubernetes)       | The stateless web/API tier autoscales 2–10 replicas via HPA on CPU, with a PodDisruptionBudget and a soft topology-spread preference so replicas don't collapse onto one node. `apps/realtime` doesn't scale this way at all — it isn't stateless, and Cloudflare's Durable Object placement (one instance per room, globally) is the scaling model, not replica count. See [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). |
 | Room-event history                    | The in-memory timeline broadcast to connected clients keeps the most recent 200 events per room session; the durable `RoomEvent` collection in MongoDB is unbounded and is what the activity feed and timeline actually read from after a reload.                                                                                                                                                                                                     |
 
@@ -244,8 +292,9 @@ This deployment has broken for real, more than once. Every incident — what bro
 
 ## Testing and quality gates
 
-- **Two real automated test suites exist**, each running against the actual runtime it targets rather than a mock of it: `apps/api`'s HTTP-level integration suite (`supertest` against a real `createApp()` and a real `MemoryRepository`, zero mocking of Express or the repository) and `apps/realtime`'s Durable Object suite (real hibernatable WebSocket handlers and SQLite storage inside an actual Workers runtime via `@cloudflare/vitest-pool-workers`).
-- **`apps/web` has no automated test suite yet.** Every UI bug found in this project — including the WebRTC mesh initiator bug, the stale-presence-after-disconnect race, and the whiteboard off-tab stroke loss — was found and verified through live manual testing against the running app, including genuine two-independent-browser-context sessions (two separate cookie jars, two separately registered real users), not an automated regression suite. This is the single largest testing gap in the repository, written down honestly rather than glossed over: [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover).
+- **Every automated suite runs against the actual runtime it targets rather than a mock of it:** `apps/api`'s HTTP-level integration suite (`supertest` against a real `createApp()` and a real `MemoryRepository`, zero mocking of Express or the repository), `apps/realtime`'s Durable Object suite (real hibernatable WebSocket handlers and SQLite storage inside an actual Workers runtime via `@cloudflare/vitest-pool-workers`), and a small `apps/web` layer covering the WebRTC mesh, the sound engine, and CSS-level layout guards run in real Chromium via Playwright (`npm run test:browser`, also gated in CI).
+- **`apps/web` still has no component or page-level test suite.** What exists there is unit and layout coverage, not rendering coverage: no page is mounted, no fetch-driven state is asserted. Every UI bug found in this project — the WebRTC mesh initiator bug, the stale-presence-after-disconnect race, the whiteboard off-tab stroke loss — was found through live manual testing against the running app, including genuine two-independent-browser-context sessions (two separate cookie jars, two separately registered real users). This remains the largest testing gap in the repository, written down honestly rather than glossed over: [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover).
+- **Layout regressions are asserted numerically, not by screenshot.** `control-centering.spec.ts` measures how far a control's contents sit from the centre of its own content box and fails past half a pixel — the check that would have caught the off-centre tab labels and icon buttons, and one verified to fail when the old CSS is restored rather than merely passing against the new.
 - **The full local check, mirroring what gates a merge in CI:**
   ```bash
   npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
@@ -422,7 +471,7 @@ Those solve "many stateless servers agree on shared state" by adding a coordinat
 `apps/web` and `apps/api` can run anywhere Node 22 runs — Docker, Kubernetes, bare metal — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). `apps/realtime` genuinely cannot: it's written against the Durable Objects API, which is Cloudflare-specific, and there's no portable equivalent without rewriting the presence/signaling layer against a different coordination primitive entirely.
 
 **What happens to an in-progress call if `apps/api` goes down?**
-Nothing, live — chat, presence, and WebRTC signaling all keep working, since none of that path touches the API. New room creation, login, and durable-event history reads fail. Full breakdown: [Failure modes and resilience](ARCHITECTURE.md#failure-modes-and-resilience).
+Nothing, live — chat, presence, and WebRTC signaling all keep working, since none of that path touches the API. New room creation, login, and durable-event history reads fail. Full breakdown: [Failure behavior](ARCHITECTURE.md#failure-behavior).
 
 **How much does this cost to run?**
 The [zero-cost public preview](docs/deployment.md#zero-cost-public-preview) path runs on free tiers of Vercel, MongoDB Atlas, and Cloudflare Workers, no domain purchase — real limits apply (cold starts, free-tier caps), but genuinely $0. This project's own [live deployment](#live-deployment) runs this way.

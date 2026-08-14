@@ -6,9 +6,9 @@ import {
   CopyIcon,
   KeyIcon,
   LaptopIcon,
-  PaperPlaneTiltIcon,
   PlusIcon,
   TrashIcon,
+  UserCircleIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "../lib/api";
@@ -57,8 +57,6 @@ export function Settings({ section = "general" }: { section?: Section }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [verificationSent, setVerificationSent] = useState(false);
-  const [sendingVerification, setSendingVerification] = useState(false);
   const load = async () => {
     const [identityData, tokenData, sessionData, clientData] = await Promise.all([
       apiFetch<IdentityResponse>("/v1/auth/me"),
@@ -76,18 +74,6 @@ export function Settings({ section = "general" }: { section?: Section }) {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."))
       .finally(() => setLoading(false));
   }, []);
-  const resendVerification = async () => {
-    setSendingVerification(true);
-    setError("");
-    try {
-      await apiFetch("/v1/auth/email-verification/request", { method: "POST" });
-      setVerificationSent(true);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not send a verification link.");
-    } finally {
-      setSendingVerification(false);
-    }
-  };
   const createToken = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -183,27 +169,12 @@ export function Settings({ section = "general" }: { section?: Section }) {
                 {identity && (
                   <div className="key-row">
                     <div>
-                      <strong>Email verification</strong>
-                      <span>
-                        {identity.user.emailVerified
-                          ? `${identity.user.email} is verified.`
-                          : verificationSent
-                            ? "Check your inbox for the new link."
-                            : `${identity.user.email} has not been verified yet.`}
-                      </span>
+                      <strong>Signed in as</strong>
+                      <span>{identity.user.email}</span>
                     </div>
-                    {identity.user.emailVerified ? (
-                      <span className="session-current">Verified</span>
-                    ) : (
-                      <button
-                        className="button button-secondary"
-                        disabled={sendingVerification || verificationSent}
-                        onClick={() => void resendVerification()}
-                      >
-                        <PaperPlaneTiltIcon size={15} />{" "}
-                        {verificationSent ? "Link sent" : sendingVerification ? "Sending…" : "Resend link"}
-                      </button>
-                    )}
+                    <Link className="button button-secondary" href="/app/profile">
+                      <UserCircleIcon size={16} /> View profile
+                    </Link>
                   </div>
                 )}
               </div>

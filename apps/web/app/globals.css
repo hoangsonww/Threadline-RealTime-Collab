@@ -4249,18 +4249,6 @@ textarea:focus-visible {
   font-weight: 570;
 }
 
-.profile-badge.is-verified {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.profile-badge.is-pending {
-  border-color: color-mix(in srgb, var(--warn) 38%, var(--line));
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--warn);
-}
-
 .profile-form {
   display: grid;
   gap: 16px;

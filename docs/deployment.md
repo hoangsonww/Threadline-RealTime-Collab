@@ -30,7 +30,7 @@ This exact codebase runs at these URLs — the pattern described in [Zero-cost p
 
 Since `apps/api` here is also Vercel (not an always-on host), it runs as serverless functions rather than the long-lived Node process the rest of this doc assumes — everything else (the same-origin rewrite, the ABAC model, the ticket/webhook secrets) is unchanged.
 
-The `apps/realtime` URL above isn't a page to open in a browser — Cloudflare Workers serves it, but the only route it exposes to a plain GET is `/health`; everything else is the WebSocket upgrade the web app performs with a signed room ticket (see [Trust model](../ARCHITECTURE.md#trust-model)). It's listed here for completeness, not as something a reader should click through.
+The `apps/realtime` URL above isn't a page to open in a browser — Cloudflare Workers serves it, but the only route it exposes to a plain GET is `/health`; everything else is the WebSocket upgrade the web app performs with a signed room ticket (see [Trust boundaries](../ARCHITECTURE.md#trust-boundaries)). It's listed here for completeness, not as something a reader should click through.
 
 ## Production checklist
 
@@ -56,7 +56,7 @@ The two dotted arrows are the ones worth slowing down for — they're cross-plat
 3. Deploy the Durable Object service with `npm run deploy --workspace=@threadline/realtime`; set secrets with `wrangler secret put`.
 4. Deploy `apps/web` to Vercel and configure both public origins using HTTPS URLs.
 5. Create a Cloudflare Realtime TURN key and set its ID and API token on `apps/api` as `TURN_KEY_ID` and `TURN_KEY_API_TOKEN`. The authenticated room-ticket response generates 24-hour credentials for each room join and passes only those short-lived credentials to `PeerMesh`; the permanent API token never reaches the browser. Port 53 candidates are removed because browsers block them. If TURN is temporarily unavailable, joining falls back to direct STUN-assisted connectivity instead of failing the room ticket.
-6. Configure `AUTH_DELIVERY_WEBHOOK` and `AUTH_DELIVERY_SECRET` to a transactional-email worker. It receives the recipient and one-time action URL for password reset and email verification. The API fails fast in production when this delivery path is missing.
+6. Configure `AUTH_DELIVERY_WEBHOOK` and `AUTH_DELIVERY_SECRET` to a transactional-email worker. It receives the recipient and one-time action URL for a password reset. **The API does not fail fast when this is missing** — it only refuses to boot when the webhook is set without its secret. With neither set, `POST /v1/auth/password-reset/request` still answers `202` (it has to, or it would leak whether an account exists) and the token expires undelivered, so account recovery silently does not work. Set both before relying on recovery in production. There is no email-verification flow to configure; it was removed for exactly this reason — see [`api.md`](api.md#email-delivery).
 7. The initial `threadline-web` OIDC redirect is seeded as `<WEB_ORIGIN>/oidc/callback`; add additional first-party clients directly to `oauth_clients`. Exact matching is enforced.
 8. Run the same checks as CI: `npm run format:check && npm run lint && npm run typecheck && npm test && npm run build`.
 

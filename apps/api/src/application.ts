@@ -92,9 +92,9 @@ type AppOptions = {
   getIceServers?: (
     userId: string,
   ) => Promise<Array<{ urls: string | string[]; username?: string; credential?: string }>>;
-  actionUrl: (type: "password_reset" | "email_verification", token: string) => string;
+  actionUrl: (type: "password_reset", token: string) => string;
   deliverAccountAction?: (input: {
-    type: "password_reset" | "email_verification";
+    type: "password_reset";
     recipient: string;
     displayName: string;
     actionUrl: string;
@@ -180,7 +180,6 @@ export function createApp(options: AppOptions, app = express()) {
   app.use("/v1/auth/login", rateLimit(12, 15 * 60 * 1000));
   app.use("/v1/auth/register", rateLimit(8, 60 * 60 * 1000));
   app.use("/v1/auth/password-reset/request", rateLimit(5, 60 * 60 * 1000));
-  app.use("/v1/auth/email-verification/request", rateLimit(5, 60 * 60 * 1000));
   // /v1/join checks a caller-supplied secret against every organization's join code,
   // the same shape of risk as a password check — rate limit it like one so guessing
   // codes at scale (across however many orgs exist) isn't free.
@@ -268,7 +267,7 @@ export function createApp(options: AppOptions, app = express()) {
     return rawToken;
   };
 
-  const issueAccountAction = async (type: "password_reset" | "email_verification", user: User) => {
+  const issueAccountAction = async (type: "password_reset", user: User) => {
     const rawToken = opaqueToken(36);
     await options.repository.createAccountActionToken({
       tokenHash: digest(rawToken),
@@ -389,7 +388,6 @@ export function createApp(options: AppOptions, app = express()) {
         targetId: user.id,
         createdAt: now(),
       });
-      await issueAccountAction("email_verification", user);
       setSessionCookie(request, response, rawToken)
         .status(201)
         .json({ user: publicUser(user) });
@@ -598,42 +596,15 @@ export function createApp(options: AppOptions, app = express()) {
     }
   });
 
-  app.post("/v1/auth/email-verification/request", async (request, response, next) => {
-    try {
-      const context = await requireUser(request, response);
-      if (!context) return;
-      const credential = await options.repository.getCredential(context.user.id);
-      if (!credential?.emailVerifiedAt) await issueAccountAction("email_verification", context.user);
-      response.status(202).json({ message: "If needed, a verification link is on its way." });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/v1/auth/email-verification/confirm", async (request, response, next) => {
-    try {
-      const input = z.object({ token: z.string().min(20) }).parse(request.body);
-      const action = await options.repository.consumeAccountActionToken(digest(input.token), "email_verification");
-      if (!action || action.expiresAt <= now())
-        return clientError(response, 400, "invalid_token", "This verification link is invalid or has expired.");
-      const credential = await options.repository.getCredential(action.userId);
-      if (!credential)
-        return clientError(response, 400, "invalid_token", "This verification link is invalid or has expired.");
-      credential.emailVerifiedAt = now();
-      await options.repository.updateCredential(credential);
-      await options.repository.writeAudit({
-        id: id(),
-        actorId: action.userId,
-        action: "auth.email_verified",
-        targetType: "user",
-        targetId: action.userId,
-        createdAt: now(),
-      });
-      response.status(204).end();
-    } catch (error) {
-      next(error);
-    }
-  });
+  // Email verification is deliberately not exposed. It only ever worked when
+  // AUTH_DELIVERY_WEBHOOK pointed at a transactional email service, and with no
+  // such service configured the request endpoint wrote a token and answered
+  // "202, a link is on its way" for mail that was never sent. An endpoint that
+  // reports success for something it did not do is worse than no endpoint, so
+  // the flow is gone until there is a mail provider behind it.
+  //
+  // Credential.emailVerifiedAt and the OIDC email_verified claim stay: the claim
+  // is part of the OIDC contract and reporting it as false is accurate.
 
   app.get("/v1/auth/me", async (request, response, next) => {
     try {

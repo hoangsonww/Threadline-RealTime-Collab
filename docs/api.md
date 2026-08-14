@@ -129,9 +129,28 @@ Same room, same endpoint, same code path — the only input that changed is each
 | `POST /v1/auth/password`                   | session       | Revokes every _other_ active session on success.                                                       |
 | `POST /v1/auth/password-reset/request`     | none          | Always `202`, regardless of whether the email exists (no account enumeration). Rate limited 5/hour/IP. |
 | `POST /v1/auth/password-reset/confirm`     | token in body | One-time token, revokes all sessions on success.                                                       |
-| `POST /v1/auth/email-verification/request` | session       | Rate limited 5/hour/IP.                                                                                |
-| `POST /v1/auth/email-verification/confirm` | token in body | One-time token.                                                                                        |
-| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`; `user.emailVerified` reflects `Credential.emailVerifiedAt`.         |
+| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`. `user.emailVerified` is always `false` — see below.                 |
+| `PATCH /v1/auth/me`                        | session only  | Updates `displayName` and/or `username`. `409` on a username collision. Rejects personal access tokens. |
+
+There is deliberately **no email-verification flow**. It only ever worked when `AUTH_DELIVERY_WEBHOOK` pointed at a
+transactional email service; with none configured, `POST /v1/auth/email-verification/request` wrote a token and answered
+`202 Accepted` for mail that was never sent. Both endpoints were removed rather than left reporting success for something
+they did not do. `Credential.emailVerifiedAt` and the OIDC `email_verified` claim remain — the claim is part of the OIDC
+contract, and reporting it as `false` is accurate. See [Email delivery](#email-delivery).
+
+`PATCH /v1/auth/me` takes a browser session and refuses a personal access token, including one holding `admin:*`. No
+automation scope should be able to rename the account that issued it, so the boundary is the session rather than a scope.
+
+### Email delivery
+
+Threadline has **no built-in transactional email provider**. Anything that would send mail is delivered by POSTing to the
+webhook named in `AUTH_DELIVERY_WEBHOOK`, which you supply. When that variable is unset the callback is never
+constructed, so no mail leaves the system.
+
+The consequence worth stating plainly: **password recovery does not complete end to end unless that webhook is
+configured.** `POST /v1/auth/password-reset/request` still answers `202`, because answering anything else would leak
+whether an account exists — but the `202` means "recorded", not "sent". With no webhook the token is written and expires
+unused an hour later.
 
 ### Sessions
 

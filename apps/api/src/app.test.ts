@@ -310,26 +310,35 @@ describe("Threadline identity API", () => {
     expect((await agent.get("/v1/auth/me")).status).toBe(401);
   });
 
-  it("tracks email verification state through registration, resend, and confirmation", async () => {
+  it("exposes no email verification flow, and never issues a token nobody can deliver", async () => {
     const { app, delivered } = await createTestApp();
     const agent = request.agent(app);
-    await agent.post("/v1/auth/register").send({
+    const registration = await agent.post("/v1/auth/register").send({
       email: "verify@example.com",
       username: "verify-user",
       displayName: "Verify User",
       password: "correct-horse-battery",
     });
+    expect(registration.status).toBe(201);
+
+    // Registration used to mint a verification token and hand it to a delivery
+    // callback that is only configured when AUTH_DELIVERY_WEBHOOK is set. With no
+    // mail provider that produced a token nobody could ever receive.
+    expect(delivered.some((item) => item.type === "email_verification")).toBe(false);
+
+    // Both endpoints are gone rather than answering 202 for mail that is never sent.
+    expect((await agent.post("/v1/auth/email-verification/request")).status).toBe(404);
+    expect(
+      (
+        await request(app)
+          .post("/v1/auth/email-verification/confirm")
+          .send({ token: "x".repeat(24) })
+      ).status,
+    ).toBe(404);
+
+    // The field survives because the OIDC email_verified claim is derived from it,
+    // and reporting it as false is accurate.
     expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(false);
-
-    const resend = await agent.post("/v1/auth/email-verification/request");
-    expect(resend.status).toBe(202);
-    const delivery = [...delivered].reverse().find((item) => item.type === "email_verification");
-    const token = new URL(delivery?.actionUrl ?? "https://invalid.test").searchParams.get("token");
-    expect(token).toBeTruthy();
-
-    const confirm = await request(app).post("/v1/auth/email-verification/confirm").send({ token });
-    expect(confirm.status).toBe(204);
-    expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(true);
   });
 
   it("updates a profile from a browser session, keeping usernames unique and lowercased", async () => {

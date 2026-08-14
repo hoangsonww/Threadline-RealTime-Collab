@@ -95,8 +95,7 @@ async function createConfiguredApp() {
       ingestSecret: secret("INTERNAL_INGEST_SECRET", "development-ingest-secret-change-me"),
       signer,
       getIceServers: createIceServerProvider(),
-      actionUrl: (type, token) =>
-        `${actionBaseUrl}/${type === "password_reset" ? "reset-password" : "verify-email"}?token=${encodeURIComponent(token)}`,
+      actionUrl: (_type, token) => `${actionBaseUrl}/reset-password?token=${encodeURIComponent(token)}`,
       deliverAccountAction: deliveryWebhook
         ? async (input) => {
             try {

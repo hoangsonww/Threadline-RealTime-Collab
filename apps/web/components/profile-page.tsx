@@ -1,16 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {
-  AtIcon,
-  BuildingsIcon,
-  CheckCircleIcon,
-  EnvelopeSimpleIcon,
-  KeyIcon,
-  LaptopIcon,
-  PaperPlaneTiltIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react";
+import { AtIcon, BuildingsIcon, CheckCircleIcon, EnvelopeSimpleIcon, KeyIcon, LaptopIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { announceIdentityUpdate, ApiError, apiFetch, type IdentityResponse } from "../lib/api";
 import { playSound } from "../lib/sound";
@@ -37,8 +28,6 @@ export function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
-  const [sendingVerification, setSendingVerification] = useState(false);
-  const [verificationSent, setVerificationSent] = useState(false);
 
   const adopt = (data: IdentityResponse) => {
     setIdentity(data);
@@ -106,19 +95,6 @@ export function ProfilePage() {
     }
   };
 
-  const resendVerification = async () => {
-    setSendingVerification(true);
-    setError("");
-    try {
-      await apiFetch("/v1/auth/email-verification/request", { method: "POST" });
-      setVerificationSent(true);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not send a verification link.");
-    } finally {
-      setSendingVerification(false);
-    }
-  };
-
   return (
     <div className="content">
       <div className="page-header">
@@ -153,17 +129,6 @@ export function ProfilePage() {
                   <div className="profile-badges">
                     <span className="profile-badge">
                       <EnvelopeSimpleIcon size={13} aria-hidden="true" /> {user?.email}
-                    </span>
-                    <span className={`profile-badge ${user?.emailVerified ? "is-verified" : "is-pending"}`}>
-                      {user?.emailVerified ? (
-                        <>
-                          <CheckCircleIcon size={13} weight="fill" aria-hidden="true" /> Verified
-                        </>
-                      ) : (
-                        <>
-                          <WarningCircleIcon size={13} weight="fill" aria-hidden="true" /> Unverified
-                        </>
-                      )}
                     </span>
                     {joinedOn(user?.createdAt) && (
                       <span className="profile-badge">Joined {joinedOn(user?.createdAt)}</span>
@@ -248,30 +213,12 @@ export function ProfilePage() {
 
           <div className="settings-section">
             <h3>Email address</h3>
-            <p>Email changes are not self-serve — verification is what keeps account recovery trustworthy.</p>
+            <p>Your email identifies the account at sign-in. Changing it is not self-serve.</p>
             <div className="key-row">
               <div>
                 <strong>{user?.email ?? "Loading…"}</strong>
-                <span>
-                  {user?.emailVerified
-                    ? "This address is verified."
-                    : verificationSent
-                      ? "Check your inbox for the new link."
-                      : "This address has not been verified yet."}
-                </span>
+                <span>Contact a workspace owner if this address needs to change.</span>
               </div>
-              {user?.emailVerified ? (
-                <span className="session-current">Verified</span>
-              ) : (
-                <button
-                  className="button button-secondary"
-                  disabled={loading || sendingVerification || verificationSent}
-                  onClick={() => void resendVerification()}
-                >
-                  <PaperPlaneTiltIcon size={15} />{" "}
-                  {verificationSent ? "Link sent" : sendingVerification ? "Sending…" : "Resend link"}
-                </button>
-              )}
             </div>
           </div>
 

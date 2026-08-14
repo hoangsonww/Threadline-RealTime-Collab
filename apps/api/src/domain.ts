@@ -149,7 +149,7 @@ export interface RefreshToken {
 export interface AccountActionToken {
   tokenHash: string;
   userId: string;
-  type: "password_reset" | "email_verification";
+  type: "password_reset";
   expiresAt: Date;
   createdAt: Date;
 }
