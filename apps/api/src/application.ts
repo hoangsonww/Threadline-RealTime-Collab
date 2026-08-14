@@ -10,10 +10,13 @@ import { apiDocsCsp, renderRedocDocs, renderSwaggerDocs } from "./api-docs.js";
 import { scopes, type Organization, type Scope, type Session, type User } from "./domain.js";
 import { createOpenApiDocument } from "./openapi.js";
 import { canInviteToOrganization, canOrganization, canRoom, effectiveRoomRole } from "./policy.js";
+import { UsernameTakenError } from "./repository.js";
 import type { Repository } from "./repository.js";
 import {
   digest,
   generateJoinCode,
+  generateRecoveryCode,
+  normalizeRecoveryCode,
   hashPassword,
   id,
   now,
@@ -40,6 +43,8 @@ const usernameSchema = z
   .regex(/^[a-z0-9-]+$/i)
   .transform((value) => value.toLowerCase());
 const displayNameSchema = z.string().trim().min(2).max(80);
+const recoveryCodeSchema = z.string().trim().min(8).max(64);
+const recoveryCodeCount = 8;
 const scopeSchema = z.array(z.enum(scopes)).min(1).max(scopes.length);
 const ingestedRoomEventSchema = z
   .discriminatedUnion("type", [
@@ -180,6 +185,9 @@ export function createApp(options: AppOptions, app = express()) {
   app.use("/v1/auth/login", rateLimit(12, 15 * 60 * 1000));
   app.use("/v1/auth/register", rateLimit(8, 60 * 60 * 1000));
   app.use("/v1/auth/password-reset/request", rateLimit(5, 60 * 60 * 1000));
+  // A caller-supplied secret checked against an account — the same shape of risk as
+  // a login, so limited like one.
+  app.use("/v1/auth/password-reset/redeem", rateLimit(10, 15 * 60 * 1000));
   // /v1/join checks a caller-supplied secret against every organization's join code,
   // the same shape of risk as a password check — rate limit it like one so guessing
   // codes at scale (across however many orgs exist) isn't free.
@@ -285,6 +293,53 @@ export function createApp(options: AppOptions, app = express()) {
       });
   };
 
+  /**
+   * Mint a fresh set of recovery codes, replacing any the account already has.
+   *
+   * Returns the plaintext because this is the only moment it exists — only hashes
+   * are stored, so a code that is not written down here is gone. Regenerating
+   * deliberately invalidates the previous set: a code someone printed a year ago
+   * should stop working the moment they decide it might have been seen.
+   */
+  /**
+   * Build a free username from an email address.
+   *
+   * The local part is the obvious starting point, but two people at different
+   * domains routinely share one, so the first collision falls back to a random
+   * suffix rather than a counter — a counter would leak how many accounts already
+   * wanted that name. The unique index behind createUser remains the real
+   * guarantee; this only avoids handing a new account an error it cannot act on.
+   */
+  const deriveUsername = async (email: string) => {
+    const base =
+      email
+        .split("@")[0]
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 24) || "member";
+    if (!(await options.repository.getUserByUsername(base))) return base;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const candidate = `${base}-${generateJoinCode(4).toLowerCase()}`.slice(0, 32);
+      if (!(await options.repository.getUserByUsername(candidate))) return candidate;
+    }
+    return `${base.slice(0, 20)}-${id().replace(/-/g, "").slice(0, 10)}`;
+  };
+
+  const issueRecoveryCodes = async (userId: string) => {
+    const plaintext = Array.from({ length: recoveryCodeCount }, generateRecoveryCode);
+    await options.repository.replaceRecoveryCodes(
+      userId,
+      plaintext.map((code) => ({
+        id: id(),
+        userId,
+        codeHash: digest(normalizeRecoveryCode(code)),
+        createdAt: now(),
+      })),
+    );
+    return plaintext;
+  };
+
   const roomAccess = async (roomId: string, userId: string) => {
     const room = await options.repository.getRoom(roomId);
     if (!room) return undefined;
@@ -356,27 +411,26 @@ export function createApp(options: AppOptions, app = express()) {
       const input = z
         .object({
           email: emailSchema,
-          username: usernameSchema,
+          // Optional: Threadline's sign-up form has no handle field, and a client
+          // deriving one from the email address collides the moment two people share
+          // a local part. Uniqueness is the API's problem, so the API generates it.
+          username: usernameSchema.optional(),
           displayName: displayNameSchema,
           password: passwordSchema,
         })
         .parse(request.body);
       if (await options.repository.getUserByEmail(input.email))
         return clientError(response, 409, "email_in_use", "An account already exists for this email.");
-      // Registration never checked this, so two accounts could claim the same
-      // username outright. Unlike the email check above — which sits behind a unique
-      // index and is therefore decisive — this is a read before a write and cannot
-      // close a genuine race on its own. Making it atomic needs a unique index on
-      // `username`, and building one against a collection that may already hold
-      // duplicates is a migration, not a schema tweak: this repository has already
-      // taken production down exactly that way once (see docs/operations.md). The
-      // check closes the ordinary case; the migration is tracked in docs/roadmap.md.
-      if (await options.repository.getUserByUsername(input.username))
+      const username = input.username ?? (await deriveUsername(input.email));
+      // Only meaningful for a caller that chose its own username; a derived one is
+      // already known to be free. Either way the unique index behind createUser is
+      // what actually settles it — this just produces a clearer error first.
+      if (input.username && (await options.repository.getUserByUsername(input.username)))
         return clientError(response, 409, "username_in_use", "That username is already taken.");
       const user: User = {
         id: id(),
         email: input.email,
-        username: input.username,
+        username,
         displayName: input.displayName,
         createdAt: now(),
         updatedAt: now(),
@@ -398,9 +452,13 @@ export function createApp(options: AppOptions, app = express()) {
         targetId: user.id,
         createdAt: now(),
       });
+      // Returned exactly once, at the only moment the plaintext exists. Without a
+      // mail provider these codes are the account's only route back in, so they are
+      // issued up front rather than left as something to opt into later.
+      const recoveryCodes = await issueRecoveryCodes(user.id);
       setSessionCookie(request, response, rawToken)
         .status(201)
-        .json({ user: publicUser(user) });
+        .json({ user: publicUser(user), recoveryCodes });
     } catch (error) {
       next(error);
     }
@@ -615,6 +673,89 @@ export function createApp(options: AppOptions, app = express()) {
   //
   // Credential.emailVerifiedAt and the OIDC email_verified claim stay: the claim
   // is part of the OIDC contract and reporting it as false is accurate.
+
+  app.get("/v1/auth/recovery-codes", async (request, response, next) => {
+    try {
+      const context = await requireUser(request, response);
+      if (!context) return;
+      const codes = await options.repository.listRecoveryCodes(context.user.id);
+      // Never the codes themselves — only hashes exist by now. This is the "you have
+      // N left" panel, not a way to read them back.
+      response.json({
+        remaining: codes.filter((code) => !code.usedAt).length,
+        total: codes.length,
+        generatedAt: codes[0]?.createdAt,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/v1/auth/recovery-codes", async (request, response, next) => {
+    try {
+      const context = await requireUser(request, response);
+      if (!context) return;
+      const recoveryCodes = await issueRecoveryCodes(context.user.id);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "auth.recovery_codes_regenerated",
+        targetType: "user",
+        targetId: context.user.id,
+        createdAt: now(),
+      });
+      response.status(201).json({ recoveryCodes });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // The no-email recovery path. Proves possession of a secret rather than knowledge
+  // of account facts, deliberately: publicUser hands a member's email, username, and
+  // display name to everyone else in their workspace, so a check built on those
+  // would let a coworker take the account over.
+  app.post("/v1/auth/password-reset/redeem", async (request, response, next) => {
+    try {
+      const input = z
+        .object({ email: emailSchema, code: recoveryCodeSchema, password: passwordSchema })
+        .parse(request.body);
+      const user = await options.repository.getUserByEmail(input.email);
+      // One message for "no such account" and for "wrong code". Distinguishing them
+      // would turn this endpoint into an account-existence oracle.
+      const rejected = () =>
+        clientError(response, 400, "invalid_recovery_code", "That email and recovery code do not match.");
+      if (!user) return rejected();
+      const consumed = await options.repository.consumeRecoveryCode(user.id, digest(normalizeRecoveryCode(input.code)));
+      if (!consumed) return rejected();
+      const credential = await options.repository.getCredential(user.id);
+      if (!credential) return rejected();
+      credential.passwordHash = await hashPassword(input.password);
+      credential.passwordUpdatedAt = now();
+      await options.repository.updateCredential(credential);
+      // Whoever held the old password is evicted: a reset is only meaningful if it
+      // ends the sessions it was meant to protect against.
+      const sessions = await options.repository.listSessions(user.id);
+      await Promise.all(
+        sessions.map(async (session) => {
+          session.revokedAt = now();
+          await options.repository.updateSession(session);
+        }),
+      );
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: user.id,
+        action: "auth.password_reset_via_recovery_code",
+        targetType: "user",
+        targetId: user.id,
+        metadata: { recoveryCodeId: consumed.id },
+        createdAt: now(),
+      });
+      const remaining = (await options.repository.listRecoveryCodes(user.id)).filter((code) => !code.usedAt).length;
+      response.json({ remaining });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.get("/v1/auth/me", async (request, response, next) => {
     try {
@@ -1651,6 +1792,11 @@ export function createApp(options: AppOptions, app = express()) {
       return clientError(response, 400, "invalid_request", "The token request is malformed.");
     if (error instanceof z.ZodError)
       return clientError(response, 422, "validation_error", error.issues[0]?.message ?? "Request validation failed.");
+    // Handled centrally rather than at each call site: the route-level checks are a
+    // read before a write and cannot close the race, so the decisive answer comes
+    // from the repository's unique constraint on whichever path triggered it.
+    if (error instanceof UsernameTakenError)
+      return clientError(response, 409, "username_in_use", "That username is already taken.");
     // Validation errors above are expected user-input noise, not bugs — only
     // report the truly unexpected branch to Sentry.
     Sentry.captureException(error);

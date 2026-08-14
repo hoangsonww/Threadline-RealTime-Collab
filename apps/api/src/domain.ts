@@ -154,6 +154,26 @@ export interface AccountActionToken {
   createdAt: Date;
 }
 
+/**
+ * A single-use account recovery code.
+ *
+ * Threadline has no transactional email provider, so a mailed reset link is not a
+ * mechanism it can offer. These are the substitute: high-entropy secrets issued at
+ * registration, shown exactly once, and stored only as hashes. Recovery therefore
+ * proves possession of a secret rather than knowledge of account facts — which
+ * matters here because `publicUser` hands a member's email, username, and display
+ * name to every other member of their workspace, so any check built on those would
+ * let a coworker take the account over.
+ */
+export interface RecoveryCode {
+  id: string;
+  userId: string;
+  /** SHA-256 of the normalized code. The plaintext is never stored. */
+  codeHash: string;
+  createdAt: Date;
+  usedAt?: Date;
+}
+
 export interface AuditLog {
   id: string;
   actorId?: string;

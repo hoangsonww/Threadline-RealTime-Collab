@@ -380,6 +380,156 @@ describe("Threadline identity API", () => {
     expect((await request(app).patch("/v1/auth/me").send({ displayName: "Anonymous" })).status).toBe(401);
   });
 
+  it("derives a free username when the client does not supply one", async () => {
+    const { app } = await createTestApp();
+    // Same local part, different domains — the case a client-side "email prefix +
+    // suffix" scheme collides on, which would otherwise fail the second signup with
+    // an error about a field its sign-up form does not even show.
+    const first = await request(app).post("/v1/auth/register").send({
+      email: "avery@first.example",
+      displayName: "Avery One",
+      password: "correct-horse-battery",
+    });
+    const second = await request(app).post("/v1/auth/register").send({
+      email: "avery@second.example",
+      displayName: "Avery Two",
+      password: "correct-horse-battery",
+    });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.user.username).toBe("avery");
+    expect(second.body.user.username).not.toBe(first.body.user.username);
+    expect(second.body.user.username).toMatch(/^avery-[a-z0-9]{4}$/);
+  });
+
+  it("recovers an account with a single-use recovery code and evicts every old session", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const registration = await agent.post("/v1/auth/register").send({
+      email: "locked-out@example.com",
+      username: "locked-out",
+      displayName: "Locked Out",
+      password: "correct-horse-battery",
+    });
+    expect(registration.status).toBe(201);
+
+    // Issued once, at registration, because there is no mail provider to send them later.
+    const codes: string[] = registration.body.recoveryCodes;
+    expect(codes).toHaveLength(8);
+    expect(new Set(codes).size).toBe(8);
+    for (const code of codes) expect(code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+
+    // The old session must stop working once the password is reset through it.
+    expect((await agent.get("/v1/auth/me")).status).toBe(200);
+
+    const redeemed = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({
+        // Formatting and case are stripped before hashing, so how it is typed back is irrelevant.
+        email: "Locked-Out@example.com",
+        code: codes[0].toLowerCase().replace(/-/g, " "),
+        password: "brand-new-passphrase",
+      });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body.remaining).toBe(7);
+
+    expect((await agent.get("/v1/auth/me")).status).toBe(401);
+
+    const oldPassword = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "locked-out@example.com", password: "correct-horse-battery" });
+    expect(oldPassword.status).toBe(401);
+    const newPassword = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "locked-out@example.com", password: "brand-new-passphrase" });
+    expect(newPassword.status).toBe(200);
+
+    // Single use: the same code must not work twice.
+    const replay = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({ email: "locked-out@example.com", code: codes[0], password: "third-passphrase-here" });
+    expect(replay.status).toBe(400);
+    expect(replay.body.error).toBe("invalid_recovery_code");
+  });
+
+  it("does not reveal whether an account exists when a recovery code is rejected", async () => {
+    const { app } = await createTestApp();
+    const registration = await request(app).post("/v1/auth/register").send({
+      email: "known@example.com",
+      username: "known-user",
+      displayName: "Known User",
+      password: "correct-horse-battery",
+    });
+    const valid: string = registration.body.recoveryCodes[0];
+
+    const wrongCode = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({ email: "known@example.com", code: "ZZZZ-ZZZZ-ZZZZ", password: "brand-new-passphrase" });
+    const unknownAccount = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({ email: "nobody@example.com", code: valid, password: "brand-new-passphrase" });
+
+    // A real account with a bad code and a nonexistent account must be
+    // indistinguishable, or this endpoint becomes an account-existence oracle.
+    expect(wrongCode.status).toBe(unknownAccount.status);
+    expect(wrongCode.body).toEqual(unknownAccount.body);
+    expect(wrongCode.status).toBe(400);
+  });
+
+  it("regenerates recovery codes, invalidating every previous one", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const registration = await agent.post("/v1/auth/register").send({
+      email: "rotate@example.com",
+      username: "rotate-user",
+      displayName: "Rotate User",
+      password: "correct-horse-battery",
+    });
+    const original: string[] = registration.body.recoveryCodes;
+
+    expect((await agent.get("/v1/auth/recovery-codes")).body).toMatchObject({ remaining: 8, total: 8 });
+
+    const regenerated = await agent.post("/v1/auth/recovery-codes");
+    expect(regenerated.status).toBe(201);
+    const replacements: string[] = regenerated.body.recoveryCodes;
+    expect(replacements).toHaveLength(8);
+    expect(replacements.some((code) => original.includes(code))).toBe(false);
+
+    // The point of regenerating is that anything printed earlier stops working.
+    const stale = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({ email: "rotate@example.com", code: original[0], password: "brand-new-passphrase" });
+    expect(stale.status).toBe(400);
+
+    const fresh = await request(app)
+      .post("/v1/auth/password-reset/redeem")
+      .send({ email: "rotate@example.com", code: replacements[0], password: "brand-new-passphrase" });
+    expect(fresh.status).toBe(200);
+  });
+
+  it("never exposes recovery codes through a read endpoint", async () => {
+    const { app } = await createTestApp();
+    const agent = request.agent(app);
+    const registration = await agent.post("/v1/auth/register").send({
+      email: "opaque@example.com",
+      username: "opaque-user",
+      displayName: "Opaque User",
+      password: "correct-horse-battery",
+    });
+    const codes: string[] = registration.body.recoveryCodes;
+
+    const listed = await agent.get("/v1/auth/recovery-codes");
+    expect(listed.status).toBe(200);
+    // Only hashes are stored, so there is nothing to read back — the status endpoint
+    // must not leak the plaintext by any route, including nested fields.
+    const serialized = JSON.stringify(listed.body);
+    for (const code of codes) expect(serialized).not.toContain(code);
+    expect(serialized).not.toContain("codeHash");
+
+    expect((await request(app).get("/v1/auth/recovery-codes")).status).toBe(401);
+  });
+
   it("rejects a username already claimed by another account at registration", async () => {
     const { app } = await createTestApp();
     const agent = request.agent(app);

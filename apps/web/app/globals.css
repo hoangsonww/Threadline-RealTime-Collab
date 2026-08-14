@@ -4192,6 +4192,83 @@ textarea:focus-visible {
   color: var(--ink);
 }
 
+/* Recovery codes ---------------------------------------------------------- */
+
+.recovery-codes {
+  display: grid;
+  gap: 14px;
+}
+
+.recovery-codes-warning {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.recovery-codes-warning svg {
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+.recovery-code-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--canvas-deep) 72%, var(--surface));
+  list-style: none;
+}
+
+.recovery-code-grid code {
+  display: block;
+  color: var(--ink);
+  font-family: var(--font-geist-mono), "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  /* Selectable per line: copying one code by hand is a normal thing to do. */
+  user-select: all;
+}
+
+.recovery-codes-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.recovery-codes-confirm {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.recovery-codes-confirm input {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+@media (max-width: 480px) {
+  .recovery-code-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Profile ----------------------------------------------------------------- */
 
 .profile-identity {

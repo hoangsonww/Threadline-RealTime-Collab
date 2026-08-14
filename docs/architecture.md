@@ -284,6 +284,12 @@ erDiagram
         string type "password_reset"
         date expiresAt
     }
+    RECOVERY_CODE {
+        string id PK
+        string userId FK
+        string codeHash "sha256; plaintext never stored"
+        date usedAt "nullable; single use"
+    }
 ```
 
 `RoomEvent` is the one table that two different systems write to: the API writes `room.created` directly (from `POST /v1/orgs/:orgId/rooms`), and the Durable Object writes everything that happens live (`participant.joined`, `chat`, `editor`, `screen-share`, `participant.left`) via the ingest webhook. `cursor`, `signal`, and `whiteboard` events are intentionally **not** persisted — they're too high-frequency and not meaningful as a durable record.

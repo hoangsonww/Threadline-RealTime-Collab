@@ -1,4 +1,4 @@
-import { MongoClient, type Collection } from "mongodb";
+import { MongoClient, type Collection, type Db } from "mongodb";
 import type {
   AuditLog,
   CalendarEvent,
@@ -13,6 +13,7 @@ import type {
   RefreshToken,
   Room,
   RoomEvent,
+  RecoveryCode,
   RoomMembership,
   Session,
   User,
@@ -36,6 +37,30 @@ function firstPartyWebClient(redirectUri = "http://localhost:3000/oidc/callback"
     createdAt: new Date(),
   };
 }
+
+/**
+ * Raised when a write would give two accounts the same username.
+ *
+ * `MongoRepository` raises it from the driver's duplicate-key error, which is the
+ * only check that is actually decisive — a read-then-write in the route layer
+ * cannot close the window between the two. `MemoryRepository` raises it from an
+ * explicit scan so both implementations behave identically under test.
+ */
+export class UsernameTakenError extends Error {
+  constructor(readonly username: string) {
+    super(`The username ${username} is already taken.`);
+    this.name = "UsernameTakenError";
+  }
+}
+
+/** MongoDB's duplicate-key error code. */
+const duplicateKeyErrorCode = 11000;
+
+const isDuplicateUsernameError = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  (error as { code?: unknown }).code === duplicateKeyErrorCode &&
+  JSON.stringify((error as { keyPattern?: unknown }).keyPattern ?? {}).includes("username");
 
 export interface Repository {
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -83,9 +108,51 @@ export interface Repository {
   writeRoomEvent(event: RoomEvent): Promise<void>;
   listRoomEvents(roomId: string): Promise<RoomEvent[]>;
   listRoomEventsForRooms(roomIds: string[]): Promise<RoomEvent[]>;
+  replaceRecoveryCodes(userId: string, codes: RecoveryCode[]): Promise<void>;
+  listRecoveryCodes(userId: string): Promise<RecoveryCode[]>;
+  /** Marks the matching unused code used and returns it, or undefined. Must be atomic. */
+  consumeRecoveryCode(userId: string, codeHash: string): Promise<RecoveryCode | undefined>;
   writeAudit(log: AuditLog): Promise<void>;
   /** Atomically increments the counter for `key`, resetting it if the window has elapsed. */
   incrementRateLimit(key: string, windowMs: number): Promise<RateLimitEntry>;
+}
+
+/**
+ * Build the unique index that makes username uniqueness actually decisive.
+ *
+ * Kept out of the boot-time `Promise.all` and non-fatal on purpose. Registration
+ * accepted duplicate usernames for most of this service's life, so an existing
+ * deployment may still hold some — and a unique index that cannot build against a
+ * populated collection is exactly what took every request down once before (see
+ * docs/operations.md). Failing the boot here would repeat that outage to fix a
+ * lesser problem.
+ *
+ * So: build it where it can be built, and where it cannot, log loudly enough that
+ * the duplicates get cleaned up (`npm run dedupe:usernames --workspace=@threadline/api`)
+ * rather than silently degrade. The application-level check still runs either way;
+ * it just cannot close the race on its own.
+ */
+async function ensureUniqueUsernameIndex(db: Db) {
+  try {
+    await db.collection<User>("users").createIndex({ username: 1 }, { unique: true, name: "username_unique" });
+  } catch (error) {
+    const duplicates = await db
+      .collection<User>("users")
+      .aggregate([{ $group: { _id: "$username", count: { $sum: 1 } } }, { $match: { count: { $gt: 1 } } }])
+      .toArray()
+      .catch(() => []);
+    console.error(
+      "[threadline] Could not create the unique index on users.username. Usernames are NOT being enforced " +
+        "atomically; concurrent requests can still create duplicates. Resolve the duplicates below and restart.\n" +
+        `  duplicate usernames: ${duplicates.map((entry) => `${String(entry._id)} (${entry.count})`).join(", ") || "unknown"}\n` +
+        `  underlying error: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    // Fall back to the non-unique index so lookups stay indexed either way.
+    await db
+      .collection<User>("users")
+      .createIndex({ username: 1 })
+      .catch(() => undefined);
+  }
 }
 
 export class MemoryRepository implements Repository {
@@ -105,6 +172,7 @@ export class MemoryRepository implements Repository {
   private calendarEvents = new Map<string, CalendarEvent>();
   private audits: AuditLog[] = [];
   private rateLimits = new Map<string, RateLimitEntry>();
+  private recoveryCodes = new Map<string, RecoveryCode>();
 
   constructor() {
     this.clients.set("threadline-web", firstPartyWebClient());
@@ -120,11 +188,34 @@ export class MemoryRepository implements Repository {
     return [...this.users.values()].find((user) => user.username === username);
   }
   async createUser(user: User, credential: Credential) {
+    this.assertUsernameFree(user);
     this.users.set(user.id, user);
     this.credentials.set(user.id, credential);
   }
   async updateUser(user: User) {
+    this.assertUsernameFree(user);
     this.users.set(user.id, user);
+  }
+  /** Stands in for the unique index MongoRepository relies on. */
+  private assertUsernameFree(user: User) {
+    for (const existing of this.users.values())
+      if (existing.username === user.username && existing.id !== user.id) throw new UsernameTakenError(user.username);
+  }
+  async replaceRecoveryCodes(userId: string, codes: RecoveryCode[]) {
+    for (const [key, code] of this.recoveryCodes) if (code.userId === userId) this.recoveryCodes.delete(key);
+    for (const code of codes) this.recoveryCodes.set(code.id, code);
+  }
+  async listRecoveryCodes(userId: string) {
+    return [...this.recoveryCodes.values()].filter((code) => code.userId === userId);
+  }
+  async consumeRecoveryCode(userId: string, codeHash: string) {
+    const match = [...this.recoveryCodes.values()].find(
+      (code) => code.userId === userId && code.codeHash === codeHash && !code.usedAt,
+    );
+    if (!match) return undefined;
+    const used = { ...match, usedAt: new Date() };
+    this.recoveryCodes.set(match.id, used);
+    return used;
   }
   async getCredential(userId: string) {
     return this.credentials.get(userId);
@@ -320,6 +411,7 @@ export class MongoRepository implements Repository {
     private roomEvents: Collection<RoomEvent>,
     private audits: Collection<AuditLog>,
     private rateLimits: Collection<RateLimitEntry>,
+    private recoveryCodes: Collection<RecoveryCode>,
   ) {}
 
   static async connect(uri: string, webRedirectUri?: string) {
@@ -329,10 +421,6 @@ export class MongoRepository implements Repository {
     await Promise.all([
       db.collection<Session>("sessions").createIndex({ refreshTokenHash: 1 }, { unique: true }),
       db.collection<User>("users").createIndex({ email: 1 }, { unique: true }),
-      // Deliberately not unique. Username uniqueness is enforced in the application
-      // layer on profile updates; a unique index here would fail to build against any
-      // deployment that already accepted duplicate usernames at registration time.
-      db.collection<User>("users").createIndex({ username: 1 }),
       db.collection<PersonalAccessToken>("personal_access_tokens").createIndex({ tokenHash: 1 }, { unique: true }),
       db.collection<AuthorizationCode>("auth_codes").createIndex({ codeHash: 1 }, { unique: true }),
       db.collection<AccountActionToken>("account_action_tokens").createIndex({ tokenHash: 1 }, { unique: true }),
@@ -357,7 +445,10 @@ export class MongoRepository implements Repository {
         { upsert: true },
       ),
       db.collection<RateLimitEntry>("rate_limits").createIndex({ resetAt: 1 }, { expireAfterSeconds: 0 }),
+      db.collection<RecoveryCode>("recovery_codes").createIndex({ userId: 1 }),
+      db.collection<RecoveryCode>("recovery_codes").createIndex({ userId: 1, codeHash: 1 }, { unique: true }),
     ]);
+    await ensureUniqueUsernameIndex(db);
     return new MongoRepository(
       client,
       db.collection("users"),
@@ -376,6 +467,7 @@ export class MongoRepository implements Repository {
       db.collection("room_events"),
       db.collection("audit_logs"),
       db.collection("rate_limits"),
+      db.collection("recovery_codes"),
     );
   }
 
@@ -389,11 +481,41 @@ export class MongoRepository implements Repository {
     return (await this.users.findOne({ username })) ?? undefined;
   }
   async createUser(user: User, credential: Credential) {
-    await this.users.insertOne(user);
+    try {
+      await this.users.insertOne(user);
+    } catch (error) {
+      if (isDuplicateUsernameError(error)) throw new UsernameTakenError(user.username);
+      throw error;
+    }
     await this.credentials.insertOne(credential);
   }
   async updateUser(user: User) {
-    await this.users.replaceOne({ id: user.id }, user);
+    try {
+      await this.users.replaceOne({ id: user.id }, user);
+    } catch (error) {
+      if (isDuplicateUsernameError(error)) throw new UsernameTakenError(user.username);
+      throw error;
+    }
+  }
+  async replaceRecoveryCodes(userId: string, codes: RecoveryCode[]) {
+    // Regenerating invalidates every previous code, so the delete and the insert
+    // belong together — a crash between them must not leave the account with no
+    // way back in.
+    await this.recoveryCodes.deleteMany({ userId });
+    if (codes.length) await this.recoveryCodes.insertMany(codes);
+  }
+  async listRecoveryCodes(userId: string) {
+    return this.recoveryCodes.find({ userId }).toArray();
+  }
+  async consumeRecoveryCode(userId: string, codeHash: string) {
+    // findOneAndUpdate, not find-then-update: two requests presenting the same code
+    // must not both succeed, and only the driver's atomic match can guarantee that.
+    const consumed = await this.recoveryCodes.findOneAndUpdate(
+      { userId, codeHash, usedAt: { $exists: false } },
+      { $set: { usedAt: new Date() } },
+      { returnDocument: "after" },
+    );
+    return consumed ?? undefined;
   }
   async getCredential(userId: string) {
     return (await this.credentials.findOne({ userId })) ?? undefined;

@@ -131,6 +131,9 @@ Same room, same endpoint, same code path — the only input that changed is each
 | `POST /v1/auth/password-reset/confirm`     | token in body | One-time token, revokes all sessions on success.                                                       |
 | `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`. Nothing can set `user.emailVerified` any more — see below.          |
 | `PATCH /v1/auth/me`                        | session only  | Updates `displayName` and/or `username`. `409` on a username collision. Rejects personal access tokens. |
+| `POST /v1/auth/password-reset/redeem`      | none          | Email + one single-use recovery code. Resets the password and revokes every session. Rate limited 10/15min/IP. |
+| `GET /v1/auth/recovery-codes`              | session       | Counts only — the plaintext is unreadable after issuance.                                              |
+| `POST /v1/auth/recovery-codes`             | session       | Issues a fresh set, invalidating all previous codes. Shown once.                                        |
 
 There is deliberately **no email-verification flow**. It only ever worked when `AUTH_DELIVERY_WEBHOOK` pointed at a
 transactional email service; with none configured, `POST /v1/auth/email-verification/request` wrote a token and answered
@@ -149,10 +152,20 @@ Threadline has **no built-in transactional email provider**. Anything that would
 webhook named in `AUTH_DELIVERY_WEBHOOK`, which you supply. When that variable is unset the callback is never
 constructed, so no mail leaves the system.
 
-The consequence worth stating plainly: **password recovery does not complete end to end unless that webhook is
-configured.** `POST /v1/auth/password-reset/request` still answers `202`, because answering anything else would leak
-whether an account exists — but the `202` means "recorded", not "sent". With no webhook the token is written and expires
-unused an hour later.
+**Account recovery does not depend on it.** Every account is issued eight single-use recovery codes at registration
+(`RegistrationResponse.recoveryCodes`), shown once and stored only as SHA-256 hashes. `POST
+/v1/auth/password-reset/redeem` takes an email plus one code, sets a new password, and revokes every session.
+
+That design is deliberate rather than convenient. `publicUser` returns a member's email, username, and display name to
+every other member of their workspace, so any recovery flow built on "confirm these account details" would hand a
+colleague everything needed to take the account over. A recovery code is ~59 bits no one else has seen.
+
+Codes are case- and format-insensitive on redemption, single-use, and invalidated wholesale when regenerated. A wrong
+code and an unregistered email return byte-identical responses, so the endpoint cannot be used to discover whether an
+address has an account; it is rate limited 10/15min/IP on top of that.
+
+The link-based `password-reset/request` / `confirm` pair still exists for deployments that do configure a webhook. With
+no webhook it answers `202` (anything else would leak account existence) and the token expires unused an hour later.
 
 ### Sessions
 

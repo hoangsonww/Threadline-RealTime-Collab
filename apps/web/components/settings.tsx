@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import {
+  ArrowsClockwiseIcon,
   CheckCircleIcon,
   CopyIcon,
   KeyIcon,
@@ -12,6 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "../lib/api";
+import { RecoveryCodes } from "./recovery-codes";
 import { KeyRowSkeleton } from "./skeletons";
 import { SoundPreference } from "./sound-preference";
 import { ThemePreference } from "./theme-preference";
@@ -57,13 +59,18 @@ export function Settings({ section = "general" }: { section?: Section }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [recovery, setRecovery] = useState<{ remaining: number; total: number }>();
+  const [newCodes, setNewCodes] = useState<string[]>();
+  const [regenerating, setRegenerating] = useState(false);
   const load = async () => {
-    const [identityData, tokenData, sessionData, clientData] = await Promise.all([
+    const [identityData, tokenData, sessionData, clientData, recoveryData] = await Promise.all([
       apiFetch<IdentityResponse>("/v1/auth/me"),
       apiFetch<{ tokens: Token[] }>("/v1/pats"),
       apiFetch<{ sessions: Session[] }>("/v1/sessions"),
       apiFetch<{ clients: OidcClient[] }>("/v1/oidc/clients"),
+      apiFetch<{ remaining: number; total: number }>("/v1/auth/recovery-codes"),
     ]);
+    setRecovery(recoveryData);
     setIdentity(identityData);
     setTokens(tokenData.tokens.filter((token) => !token.revokedAt));
     setSessions(sessionData.sessions.filter((session) => !session.revokedAt));
@@ -74,6 +81,19 @@ export function Settings({ section = "general" }: { section?: Section }) {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."))
       .finally(() => setLoading(false));
   }, []);
+  const regenerateRecoveryCodes = async () => {
+    setRegenerating(true);
+    setError("");
+    try {
+      const data = await apiFetch<{ recoveryCodes: string[] }>("/v1/auth/recovery-codes", { method: "POST" });
+      setNewCodes(data.recoveryCodes);
+      setRecovery({ remaining: data.recoveryCodes.length, total: data.recoveryCodes.length });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate new recovery codes.");
+    } finally {
+      setRegenerating(false);
+    }
+  };
   const createToken = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -177,6 +197,23 @@ export function Settings({ section = "general" }: { section?: Section }) {
                     </Link>
                   </div>
                 )}
+                <div className="key-row">
+                  <div>
+                    <strong>Recovery codes</strong>
+                    <span>
+                      {recovery
+                        ? `${recovery.remaining} of ${recovery.total} unused. Threadline sends no email, so these are the only way back into a locked-out account.`
+                        : "Loading…"}
+                    </span>
+                  </div>
+                  <button
+                    className="button button-secondary"
+                    disabled={regenerating}
+                    onClick={() => void regenerateRecoveryCodes()}
+                  >
+                    <ArrowsClockwiseIcon size={15} /> {regenerating ? "Generating…" : "Regenerate"}
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -329,6 +366,24 @@ export function Settings({ section = "general" }: { section?: Section }) {
               </div>
             </div>
           </form>
+        </div>
+      )}
+      {newCodes && (
+        <div className="modal-backdrop">
+          <section className="modal" role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div>
+                <h3>Your new recovery codes</h3>
+                <p>The previous set no longer works. These are shown once.</p>
+              </div>
+            </div>
+            <RecoveryCodes
+              codes={newCodes}
+              email={identity?.user.email}
+              continueLabel="I stored them safely"
+              onContinue={() => setNewCodes(undefined)}
+            />
+          </section>
         </div>
       )}
       {secret && (

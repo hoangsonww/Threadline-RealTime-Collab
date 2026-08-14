@@ -232,7 +232,7 @@ Repeats of the same cue inside 90 ms are dropped, so a burst of arrivals does no
 
 ## Email delivery
 
-**Threadline has no built-in transactional email provider, and that is worth understanding before deploying it.**
+**Threadline has no built-in transactional email provider.** Account recovery does not need one; everything else that would have sent mail is gone.
 
 Anything that would send mail is handed to the webhook named in `AUTH_DELIVERY_WEBHOOK` — a service you supply. When
 that variable is unset, the delivery callback is never constructed and no mail leaves the system.
@@ -244,9 +244,15 @@ Two consequences follow, both stated plainly rather than discovered later:
   offering the feature, so both endpoints and every piece of "Verified / Unverified / Resend link" UI were removed.
   `Credential.emailVerifiedAt` and the OIDC `email_verified` claim remain, because the claim is part of the OIDC
   contract and reporting it as `false` is accurate.
-- **Password recovery does not complete end to end without that webhook.** `POST /v1/auth/password-reset/request` still
-  answers `202` — answering anything else would leak whether an account exists — but the `202` means "recorded", not
-  "sent". Configure `AUTH_DELIVERY_WEBHOOK` and `AUTH_DELIVERY_SECRET` before relying on account recovery in production.
+- **Password recovery does not depend on mail.** Every account is issued eight single-use **recovery codes** at
+  registration, shown once and stored only as hashes. `POST /v1/auth/password-reset/redeem` takes an email and one code,
+  sets a new password, and revokes every session for the account. The link-based `password-reset/request`/`confirm` pair
+  still exists for deployments that do configure a webhook, and still only completes there.
+
+Recovery deliberately proves **possession of a secret**, not knowledge of account facts. `publicUser` hands a member's
+email, username, and display name to everyone else in their workspace, so a "confirm these details to reset" flow would
+let any colleague take over any account — including an owner's. A recovery code is ~59 bits of entropy that no one but
+the account holder has ever seen.
 
 ## Engineering principles
 

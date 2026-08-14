@@ -14,6 +14,7 @@ This is the trust model in one sentence: **every plane re-verifies authorization
 - [Realtime → API ingest secret](#realtime--api-ingest-secret)
 - [First-party OIDC](#first-party-oidc)
 - [Password reset tokens](#password-reset-tokens)
+- [Recovery codes](#recovery-codes)
 - [Boot-time validation](#boot-time-validation)
 - [Audit log](#audit-log)
 - [Content Security Policy](#content-security-policy)
@@ -84,6 +85,7 @@ flowchart LR
 | `POST /v1/auth/login`                      | 12 / 15 min | `baseUrl + sha256(request.ip)` |
 | `POST /v1/auth/register`                   | 8 / hour    | same                           |
 | `POST /v1/auth/password-reset/request`     | 5 / hour    | same                           |
+| `POST /v1/auth/password-reset/redeem`      | 10 / 15 min | same                           |
 | `POST /v1/join`                            | 10 / 15 min | same                           |
 
 `POST /v1/join` checks a caller-supplied secret (an organization's invite code) against every organization in the system — the same shape of risk as a password check, and it's rate limited at the same tier as login rather than left unlimited, to keep guessing codes at scale (across however many organizations exist) from being free.
@@ -194,7 +196,32 @@ variables before relying on account recovery.
 
 There is no email-verification equivalent. It had the identical shape and the identical silent failure, so rather than
 leave an endpoint reporting success for mail it never sent, the flow was removed — see [`api.md`](api.md#email-delivery).
-`Credential.emailVerifiedAt` survives only as the source of the OIDC `email_verified` claim, which is accurately `false`.
+`Credential.emailVerifiedAt` survives only as the source of the OIDC `email_verified` claim.
+
+## Recovery codes
+
+Because the mailed path cannot be relied on, every account is issued eight single-use recovery codes at registration.
+They are the reason a Threadline deployment can lose a password without losing the account.
+
+| Property         | Choice                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| Entropy          | 12 symbols from a 31-character unambiguous alphabet — ~59 bits, well beyond guessing               |
+| Storage          | SHA-256 of the normalized code. The plaintext exists only in the response that created it          |
+| Redemption       | `findOneAndUpdate` matching `usedAt: {$exists: false}` — atomic, so a code cannot be spent twice   |
+| Regeneration     | Replaces the whole set; anything printed earlier stops working immediately                        |
+| On success       | Password rehashed **and every session revoked** — a reset that leaves the intruder logged in is no reset |
+| Failure response | Identical for a wrong code and an unregistered email, so it is not an account-existence oracle      |
+| Rate limit       | 10 / 15 min / hashed IP, same bucket shape as a login                                              |
+
+**Why possession, not knowledge.** The obvious no-email design — "enter your email and confirm a few account details" —
+is unsafe *in this system specifically*: `publicUser` returns a member's email, username, display name, and creation
+date to every other member of their workspace via `GET /v1/orgs/:orgId/members`. A recovery check built on those facts
+would let any colleague reset any account, including an owner's, using data the API hands them on request. A recovery
+code is a secret no one but the account holder has ever seen.
+
+The residual risk is honest and inherent: **a lost set of codes is a lost account.** There is no side channel to restore
+one, which is precisely what makes the codes trustworthy. Regenerating from Settings is the mitigation, and the sign-up
+flow gates its continue button behind an explicit acknowledgement rather than letting someone click past it.
 
 ## Boot-time validation
 

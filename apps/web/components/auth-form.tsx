@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { apiFetch } from "../lib/api";
 import { PasswordField } from "./password-field";
+import { RecoveryCodes } from "./recovery-codes";
 
 type Mode = "login" | "register";
 
@@ -12,6 +13,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // Held here rather than routed to a page of their own: the plaintext exists only
+  // in this response, so navigating away before it is saved would destroy it.
+  const [issued, setIssued] = useState<{ codes: string[]; email: string; destination: string }>();
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
@@ -42,28 +46,23 @@ export function AuthForm({ mode }: { mode: Mode }) {
     try {
       const payload =
         mode === "register"
-          ? {
-              email,
-              password,
-              displayName: String(form.get("displayName")).trim(),
-              // Threadline has no user-facing handle; this only fills an internal/OIDC
-              // field, so it just needs to satisfy the API's 3-32 char shape.
-              username: `${email
-                .split("@")[0]
-                .toLowerCase()
-                .replace(/[^a-z0-9-]/g, "-")}000`.slice(0, 32),
-            }
+          ? { email, password, displayName: String(form.get("displayName")).trim() }
           : { email, password };
-      await apiFetch(`/v1/auth/${mode === "register" ? "register" : "login"}`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      // No username is sent. Deriving one from the email address client-side collides
+      // as soon as two people share a local part across domains, and the sign-up form
+      // has no handle field for them to resolve it with — so the API generates a free
+      // one instead.
+      const created = await apiFetch<{ recoveryCodes?: string[] }>(
+        `/v1/auth/${mode === "register" ? "register" : "login"}`,
+        { method: "POST", body: JSON.stringify(payload) },
+      );
       const returnTo = new URLSearchParams(window.location.search).get("returnTo");
       const destination = returnTo?.startsWith("/app") ? returnTo : "/app";
       if (mode === "register") {
-        // A brand-new account belongs to no workspace yet — send it through
-        // onboarding first, carrying the original destination along.
-        router.push(`/onboarding${destination !== "/app" ? `?returnTo=${encodeURIComponent(destination)}` : ""}`);
+        // A brand-new account belongs to no workspace yet — onboarding comes next,
+        // but only after the recovery codes have been shown and acknowledged.
+        setIssued({ codes: created.recoveryCodes ?? [], email, destination });
+        setBusy(false);
         return;
       }
       const identity = await apiFetch<{ organizations: unknown[] }>("/v1/auth/me");
@@ -77,6 +76,22 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setBusy(false);
     }
   };
+  if (issued)
+    return (
+      <div className="auth-form">
+        <RecoveryCodes
+          codes={issued.codes}
+          email={issued.email}
+          continueLabel="Continue to your workspace"
+          onContinue={() =>
+            router.push(
+              `/onboarding${issued.destination !== "/app" ? `?returnTo=${encodeURIComponent(issued.destination)}` : ""}`,
+            )
+          }
+        />
+      </div>
+    );
+
   return (
     <form className="auth-form" onSubmit={submit} noValidate>
       {mode === "register" && (
