@@ -26,6 +26,8 @@ type ShortcutEvent = {
   ctrlKey?: boolean;
   metaKey?: boolean;
   altKey?: boolean;
+  /** True mid-IME-composition, when the keystroke belongs to the input method. */
+  isComposing?: boolean;
   /** Where the keystroke landed. Anything text-editable is left alone. */
   target?: EventTarget | null;
 };
@@ -50,6 +52,10 @@ export function callShortcutFor(event: ShortcutEvent): CallShortcut | undefined 
   // would break saving a page or pasting, for a feature nobody asked to have
   // priority over either.
   if (event.ctrlKey || event.metaKey || event.altKey) return undefined;
+  // Composing with an IME always happens inside a field the check below already
+  // covers, so this is belt and braces — but it is the guarantee that someone
+  // typing Japanese or Korean cannot mute a call mid-word, and it costs one line.
+  if (event.isComposing) return undefined;
   if (isEditingTarget(event.target)) return undefined;
   if (event.key.length !== 1) return undefined;
   return bindings[event.key.toLowerCase()];

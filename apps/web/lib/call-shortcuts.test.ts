@@ -29,6 +29,14 @@ describe("call keyboard shortcuts", () => {
     expect(callShortcutFor({ key: "m", altKey: true })).toBeUndefined();
   });
 
+  it("does not fire mid-IME-composition", () => {
+    // Composing happens inside a field the editable-target check already covers,
+    // so this is redundant by construction — and it is what makes "typing
+    // Japanese cannot mute the call" a guarantee rather than a consequence.
+    expect(callShortcutFor({ key: "m", isComposing: true })).toBeUndefined();
+    expect(callShortcutFor({ key: "s", isComposing: true, target: null })).toBeUndefined();
+  });
+
   it("does not fire while the person is typing", () => {
     // The room shows a chat box, shared notes, and a code editor alongside the
     // call controls. Without this, typing "meeting" would mute the call.
