@@ -13,6 +13,7 @@ import {
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "../lib/api";
 import { KeyRowSkeleton } from "./skeletons";
+import { SoundPreference } from "./sound-preference";
 import { ThemePreference } from "./theme-preference";
 
 type Token = {
@@ -151,13 +152,20 @@ export function Settings({ section = "general" }: { section?: Section }) {
             <>
               <div className="settings-section">
                 <h3>Appearance</h3>
-                <p>Choose the interface contrast that is most comfortable for this device.</p>
+                <p>Choose the interface contrast and feedback that are most comfortable for this device.</p>
                 <div className="key-row appearance-row">
                   <div>
                     <strong>Color theme</strong>
                     <span>Your choice stays on this device.</span>
                   </div>
                   <ThemePreference />
+                </div>
+                <div className="key-row appearance-row">
+                  <div>
+                    <strong>Interface sounds</strong>
+                    <span>Short cues when you join, leave, mute, share, or receive a message.</span>
+                  </div>
+                  <SoundPreference />
                 </div>
               </div>
               <div className="settings-section">
@@ -305,7 +313,8 @@ export function Settings({ section = "general" }: { section?: Section }) {
           )}
         </section>
         <aside className="settings-side">
-          <h3>Settings</h3>
+          <h3>Account</h3>
+          <Link href="/app/profile">Profile</Link>
           {nav.map(([key, href, label]) => (
             <Link href={href} className={section === key ? "active" : ""} key={key}>
               {label}

@@ -5,7 +5,7 @@ export function AppShell({
   active = "home",
 }: {
   children: React.ReactNode;
-  active?: "home" | "rooms" | "calendar" | "activity" | "settings" | "members";
+  active?: "home" | "rooms" | "calendar" | "activity" | "settings" | "members" | "profile";
 }) {
   return (
     <div className="app-layout">

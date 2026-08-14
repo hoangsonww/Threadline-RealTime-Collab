@@ -27,6 +27,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
+import { playSound } from "../lib/sound";
 import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
@@ -292,11 +293,45 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const connectPromiseRef = useRef<Promise<boolean> | null>(null);
   const hasOtherDeviceRef = useRef(false);
   const fileUrlsRef = useRef<string[]>([]);
+  const identityIdRef = useRef("");
+  const presenceIdsRef = useRef<Set<string>>(new Set());
+  const wasConnectedRef = useRef(false);
 
   useEffect(() => {
     const fitPanelToViewport = () => setPanelWidth((width) => clampPanelWidth(width));
     window.addEventListener("resize", fitPanelToViewport);
     return () => window.removeEventListener("resize", fitPanelToViewport);
+  }, []);
+
+  // Driven off the rendered state rather than the socket handler so a recovered
+  // connection is announced the same way the first one was — from the caller's
+  // point of view, being back in the room is the same event either time.
+  useEffect(() => {
+    if (connected && !wasConnectedRef.current) playSound("join");
+    wasConnectedRef.current = connected;
+  }, [connected]);
+
+  useEffect(() => {
+    if (roomError) playSound("error");
+  }, [roomError]);
+
+  /**
+   * Announce only the people who arrived or left since the last presence frame.
+   *
+   * The room re-broadcasts its full participant list on every change, so
+   * comparing against the previous frame is what separates "someone joined" from
+   * "here is the roster again". The baseline is seeded from room.ready without a
+   * cue, so joining a room that already has ten people in it stays silent.
+   */
+  const announcePresence = useCallback((people: Participant[], silent = false) => {
+    const current = new Set(
+      people.map((person) => person.connectionId).filter((connectionId) => connectionId !== localIdRef.current),
+    );
+    const previous = presenceIdsRef.current;
+    presenceIdsRef.current = current;
+    if (silent) return;
+    if ([...current].some((connectionId) => !previous.has(connectionId))) playSound("peerJoin");
+    if ([...previous].some((connectionId) => !current.has(connectionId))) playSound("peerLeave");
   }, []);
 
   const addEvent = useCallback((event: RoomEvent) => {
@@ -331,6 +366,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         ]);
         if (cancelled) return;
         setIdentity(identityData.user);
+        identityIdRef.current = identityData.user.id;
         setRoom(roomData.room);
         eventData.events.forEach(addEvent);
         hydrateEditorState(eventData.events);
@@ -433,6 +469,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             iceServers,
             onFile: (_peerId, file) => {
               const downloadUrl = URL.createObjectURL(file);
+              playSound("success");
               fileUrlsRef.current.push(downloadUrl);
               setFiles((items) => [
                 {
@@ -532,6 +569,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             const event = JSON.parse(wire.data) as { type: string; payload?: unknown; from?: string; at?: string };
             if (event.type === "presence") {
               const people = (event.payload as Participant[]) ?? [];
+              announcePresence(people);
               setParticipants(people);
               syncPeers(people);
               syncOtherDevices(people);
@@ -544,6 +582,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 participant?: Participant;
               };
               if (payload.participant?.connectionId) localIdRef.current = payload.participant.connectionId;
+              announcePresence(payload.participants ?? [], true);
               setParticipants(payload.participants ?? []);
               payload.recentEvents?.forEach(addEvent);
               hydrateEditorState(payload.recentEvents ?? []);
@@ -579,6 +618,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
               else if (payload.from && payload.to) drawLine(payload.from, payload.to);
             }
+            // Announced here rather than in addEvent: addEvent also replays the
+            // room's stored history on load, and a page refresh must not sound
+            // like every message in the backlog just arrived. The room echoes
+            // chat back to its sender, so your own message is filtered out by
+            // actor — `from` on a chat event is the sender's user id.
+            if (event.type === "chat" && event.from && event.from !== identityIdRef.current)
+              playSound("messageReceived");
             if (event.type !== "cursor") addEvent({ ...event, payload: event.payload ?? null, at: event.at });
           };
         });
@@ -592,7 +638,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     const result = await attempt;
     if (connectPromiseRef.current === attempt) connectPromiseRef.current = null;
     return result;
-  }, [addEvent, drawLine, hydrateEditorState, roomId]);
+  }, [addEvent, announcePresence, drawLine, hydrateEditorState, roomId]);
 
   const retryRoomConnection = useCallback(() => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
@@ -611,6 +657,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       cameraStreamRef.current = stream;
       setLocalCameraStream(stream);
       setCamera(true);
+      playSound("cameraOn");
       publishLocalTracks();
     } catch {
       setRoomError("Camera access was not granted.");
@@ -622,6 +669,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       microphoneStreamRef.current = null;
       setLocalMicrophoneStream(null);
       setMic(false);
+      playSound("micOff");
       publishLocalTracks();
       return;
     }
@@ -632,6 +680,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       microphoneStreamRef.current = stream;
       setLocalMicrophoneStream(stream);
       setMic(true);
+      playSound("micOn");
       publishLocalTracks();
     } catch {
       setRoomError("Microphone access was not granted.");
@@ -644,6 +693,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       cameraStreamRef.current = null;
       setLocalCameraStream(null);
       setCamera(false);
+      playSound("cameraOff");
       publishLocalTracks();
     }
   };
@@ -652,6 +702,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     screenStreamRef.current = null;
     setLocalScreenStream(null);
     setSharing(false);
+    // Also reached when the browser's own "stop sharing" bar is used, which is
+    // the case that most needs an in-app confirmation that it took effect.
+    playSound("shareStop");
     publish("screen-share", { active: false });
     publishLocalTracks();
   }, [publish, publishLocalTracks]);
@@ -665,6 +718,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       screenStreamRef.current = screen;
       setLocalScreenStream(screen);
       setSharing(true);
+      playSound("shareStart");
       publishLocalTracks();
       publish("screen-share", { active: true });
     } catch {
@@ -672,6 +726,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     }
   };
   const leave = () => {
+    // Played before the teardown so it is not competing with the route change;
+    // the audio graph lives outside React, so it finishes after this unmounts.
+    playSound("leave");
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
     reconnectTimerRef.current = null;
@@ -690,6 +747,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     meshRef.current?.close();
     meshRef.current = null;
     knownPeersRef.current.clear();
+    presenceIdsRef.current.clear();
     localIdRef.current = "";
     setRemoteMedia({});
     setLocalCameraStream(null);
@@ -711,6 +769,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       setRoomError("Join the live room before sending a message.");
       return;
     }
+    playSound("messageSent");
     setDraft("");
   };
   const pointFor = (event: React.PointerEvent<HTMLCanvasElement>) => {

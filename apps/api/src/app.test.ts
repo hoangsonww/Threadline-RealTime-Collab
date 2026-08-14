@@ -332,6 +332,64 @@ describe("Threadline identity API", () => {
     expect((await agent.get("/v1/auth/me")).body.user.emailVerified).toBe(true);
   });
 
+  it("updates a profile from a browser session, keeping usernames unique and lowercased", async () => {
+    const { app } = await createTestApp();
+    const { agent } = await registerWithOrg(
+      app,
+      { email: "profile@example.com", username: "profile-user", displayName: "Profile User" },
+      "Profile Org",
+    );
+    await registerWithOrg(
+      app,
+      { email: "taken@example.com", username: "already-taken", displayName: "Taken User" },
+      "Taken Org",
+    );
+
+    const renamed = await agent.patch("/v1/auth/me").send({ displayName: "  Renamed Person  " });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.user.displayName).toBe("Renamed Person");
+    // A partial update must not blank out the field it did not mention.
+    expect(renamed.body.user.username).toBe("profile-user");
+    expect(renamed.body.organizations).toHaveLength(1);
+
+    const rehandled = await agent.patch("/v1/auth/me").send({ username: "Renamed-Handle" });
+    expect(rehandled.status).toBe(200);
+    expect(rehandled.body.user.username).toBe("renamed-handle");
+    expect((await agent.get("/v1/auth/me")).body.user.username).toBe("renamed-handle");
+
+    // Case-folding means "Already-Taken" collides with the other account's handle.
+    const collision = await agent.patch("/v1/auth/me").send({ username: "Already-Taken" });
+    expect(collision.status).toBe(409);
+    expect(collision.body.error).toBe("username_in_use");
+
+    // Re-submitting your own current username is a no-op, not a conflict with yourself.
+    expect((await agent.patch("/v1/auth/me").send({ username: "renamed-handle" })).status).toBe(200);
+
+    expect((await agent.patch("/v1/auth/me").send({})).status).toBe(422);
+    expect((await agent.patch("/v1/auth/me").send({ username: "no spaces" })).status).toBe(422);
+    expect((await agent.patch("/v1/auth/me").send({ displayName: "x" })).status).toBe(422);
+    expect((await request(app).patch("/v1/auth/me").send({ displayName: "Anonymous" })).status).toBe(401);
+  });
+
+  it("does not let a personal access token rename the account that issued it", async () => {
+    const { app } = await createTestApp();
+    const { agent } = await registerWithOrg(
+      app,
+      { email: "pat-profile@example.com", username: "pat-profile", displayName: "Pat Profile" },
+      "Pat Org",
+    );
+    const token = await agent.post("/v1/pats").send({ label: "automation", scopes: ["admin:*"] });
+    expect(token.status).toBe(201);
+
+    // admin:* is the broadest scope there is, and it still must not reach identity.
+    const attempt = await request(app)
+      .patch("/v1/auth/me")
+      .set("authorization", `Bearer ${token.body.secret}`)
+      .send({ displayName: "Escalated" });
+    expect(attempt.status).toBe(401);
+    expect((await agent.get("/v1/auth/me")).body.user.displayName).toBe("Pat Profile");
+  });
+
   it("tracks rate limits per route, not globally across every rate-limited endpoint", async () => {
     const { app } = await createTestApp();
     // Login and register are mounted at distinct exact paths, so a naive key built

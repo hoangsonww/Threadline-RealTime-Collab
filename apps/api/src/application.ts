@@ -32,6 +32,14 @@ const emailSchema = z
   .string()
   .email()
   .transform((value) => value.toLowerCase());
+const usernameSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(32)
+  .regex(/^[a-z0-9-]+$/i)
+  .transform((value) => value.toLowerCase());
+const displayNameSchema = z.string().trim().min(2).max(80);
 const scopeSchema = z.array(z.enum(scopes)).min(1).max(scopes.length);
 const ingestedRoomEventSchema = z
   .discriminatedUnion("type", [
@@ -349,13 +357,8 @@ export function createApp(options: AppOptions, app = express()) {
       const input = z
         .object({
           email: emailSchema,
-          username: z
-            .string()
-            .trim()
-            .min(3)
-            .max(32)
-            .regex(/^[a-z0-9-]+$/i),
-          displayName: z.string().trim().min(2).max(80),
+          username: usernameSchema,
+          displayName: displayNameSchema,
           password: passwordSchema,
         })
         .parse(request.body);
@@ -364,7 +367,7 @@ export function createApp(options: AppOptions, app = express()) {
       const user: User = {
         id: id(),
         email: input.email,
-        username: input.username.toLowerCase(),
+        username: input.username,
         displayName: input.displayName,
         createdAt: now(),
         updatedAt: now(),
@@ -640,6 +643,53 @@ export function createApp(options: AppOptions, app = express()) {
       response.json({
         user: { ...publicUser(context.user), emailVerified: Boolean(credential?.emailVerifiedAt) },
         organizations: await organizationsForUser(context.user.id),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // requireUser, not requireScope: no personal access token scope covers "change who
+  // this account is", so editing a profile stays deliberately limited to a real
+  // browser session, which the CSRF check above already guards.
+  app.patch("/v1/auth/me", async (request, response, next) => {
+    try {
+      const context = await requireUser(request, response);
+      if (!context) return;
+      const input = z
+        .object({ displayName: displayNameSchema.optional(), username: usernameSchema.optional() })
+        .refine((value) => value.displayName !== undefined || value.username !== undefined, {
+          message: "Provide a display name or username to update.",
+        })
+        .parse(request.body);
+      if (input.username && input.username !== context.user.username) {
+        const existing = await options.repository.getUserByUsername(input.username);
+        if (existing && existing.id !== context.user.id)
+          return clientError(response, 409, "username_in_use", "That username is already taken.");
+      }
+      const updated: User = {
+        ...context.user,
+        displayName: input.displayName ?? context.user.displayName,
+        username: input.username ?? context.user.username,
+        updatedAt: now(),
+      };
+      await options.repository.updateUser(updated);
+      await options.repository.writeAudit({
+        id: id(),
+        actorId: context.user.id,
+        action: "auth.profile_update",
+        targetType: "user",
+        targetId: updated.id,
+        metadata: {
+          ...(input.displayName !== undefined ? { displayName: updated.displayName } : {}),
+          ...(input.username !== undefined ? { username: updated.username } : {}),
+        },
+        createdAt: now(),
+      });
+      const credential = await options.repository.getCredential(updated.id);
+      response.json({
+        user: { ...publicUser(updated), emailVerified: Boolean(credential?.emailVerifiedAt) },
+        organizations: await organizationsForUser(updated.id),
       });
     } catch (error) {
       next(error);

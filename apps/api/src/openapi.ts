@@ -215,6 +215,21 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             "401": errors.Unauthorized,
           },
         },
+        patch: {
+          tags: ["Authentication"],
+          operationId: "updateCurrentUser",
+          summary: "Update the signed-in user’s profile",
+          description:
+            "Accepts a browser session only — no personal access token scope grants the ability to change an account's own identity. Usernames are lowercased and must be unique.",
+          security: sessionSecurity,
+          requestBody: { required: true, content: json(schema("UpdateProfileInput")) },
+          responses: {
+            "200": response("The updated identity.", schema("CurrentUserResponse")),
+            "401": errors.Unauthorized,
+            "409": errors.Conflict,
+            "422": errors.Validation,
+          },
+        },
       },
       "/v1/sessions": {
         get: {
@@ -935,6 +950,15 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
             displayName: { type: "string", minLength: 2, maxLength: 80 },
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
+          },
+        },
+        UpdateProfileInput: {
+          type: "object",
+          minProperties: 1,
+          description: "At least one field must be supplied. Omitted fields are left unchanged.",
+          properties: {
+            username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
+            displayName: { type: "string", minLength: 2, maxLength: 80 },
           },
         },
         LoginInput: {

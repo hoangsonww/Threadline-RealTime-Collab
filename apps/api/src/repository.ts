@@ -40,7 +40,9 @@ function firstPartyWebClient(redirectUri = "http://localhost:3000/oidc/callback"
 export interface Repository {
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserById(id: string): Promise<User | undefined>;
+  getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: User, credential: Credential): Promise<void>;
+  updateUser(user: User): Promise<void>;
   getCredential(userId: string): Promise<Credential | undefined>;
   updateCredential(credential: Credential): Promise<void>;
   getSessionByTokenHash(tokenHash: string): Promise<Session | undefined>;
@@ -114,9 +116,15 @@ export class MemoryRepository implements Repository {
   async getUserById(id: string) {
     return this.users.get(id);
   }
+  async getUserByUsername(username: string) {
+    return [...this.users.values()].find((user) => user.username === username);
+  }
   async createUser(user: User, credential: Credential) {
     this.users.set(user.id, user);
     this.credentials.set(user.id, credential);
+  }
+  async updateUser(user: User) {
+    this.users.set(user.id, user);
   }
   async getCredential(userId: string) {
     return this.credentials.get(userId);
@@ -321,6 +329,10 @@ export class MongoRepository implements Repository {
     await Promise.all([
       db.collection<Session>("sessions").createIndex({ refreshTokenHash: 1 }, { unique: true }),
       db.collection<User>("users").createIndex({ email: 1 }, { unique: true }),
+      // Deliberately not unique. Username uniqueness is enforced in the application
+      // layer on profile updates; a unique index here would fail to build against any
+      // deployment that already accepted duplicate usernames at registration time.
+      db.collection<User>("users").createIndex({ username: 1 }),
       db.collection<PersonalAccessToken>("personal_access_tokens").createIndex({ tokenHash: 1 }, { unique: true }),
       db.collection<AuthorizationCode>("auth_codes").createIndex({ codeHash: 1 }, { unique: true }),
       db.collection<AccountActionToken>("account_action_tokens").createIndex({ tokenHash: 1 }, { unique: true }),
@@ -373,9 +385,15 @@ export class MongoRepository implements Repository {
   async getUserById(id: string) {
     return (await this.users.findOne({ id })) ?? undefined;
   }
+  async getUserByUsername(username: string) {
+    return (await this.users.findOne({ username })) ?? undefined;
+  }
   async createUser(user: User, credential: Credential) {
     await this.users.insertOne(user);
     await this.credentials.insertOne(credential);
+  }
+  async updateUser(user: User) {
+    await this.users.replaceOne({ id: user.id }, user);
   }
   async getCredential(userId: string) {
     return (await this.credentials.findOne({ userId })) ?? undefined;

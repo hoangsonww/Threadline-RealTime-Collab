@@ -202,6 +202,7 @@ a {
   place-items: center;
   width: 28px;
   height: 28px;
+  padding: 0;
   border: 0;
   border-radius: 7px;
   color: var(--subtle);
@@ -1679,9 +1680,13 @@ textarea:focus-visible {
   color: var(--danger);
 }
 
+/* Square, so a glyph with no optical bias of its own (the close X especially)
+   sits the same distance from every edge instead of being centred in a box that
+   is 2px taller than it is wide. */
 .button-icon {
-  width: 40px;
-  min-width: 40px;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
   padding: 0;
 }
 
@@ -3269,6 +3274,7 @@ textarea:focus-visible {
   place-items: center;
   width: 22px;
   height: 64px;
+  padding: 0;
   border: 1px solid var(--line);
   border-right: 0;
   border-radius: 10px 0 0 10px;
@@ -3412,6 +3418,42 @@ textarea:focus-visible {
 
 .topbar-actions {
   gap: 7px;
+}
+
+/* The avatar is a different kind of target from the icon buttons beside it — it
+   opens the profile rather than a workspace surface — so it gets a rule and a
+   hairline of its own instead of sitting flush in the same 7px rhythm. */
+.topbar-profile {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  margin-left: 15px;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.topbar-profile::before {
+  position: absolute;
+  top: 50%;
+  left: -15px;
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+  content: "";
+  transform: translateY(-50%);
+}
+
+.topbar-profile:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: translateY(-1px);
+}
+
+.topbar-profile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .content {
@@ -3707,9 +3749,15 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--canvas) 92%, transparent);
 }
 
+/* The UA stylesheet gives every button 6px of inline padding. On a button with a
+   fixed width that is only a little larger than its icon, that padding shrinks the
+   content box below the icon's size, and grid/flex `center` then falls back to
+   `start` — so the icon renders visibly off-centre. Every fixed-size icon button
+   here resets padding for that reason. */
 .control {
   width: 39px;
   height: 39px;
+  padding: 0;
   border-color: var(--line);
   border-radius: 12px;
   background: var(--surface-raised);
@@ -3835,6 +3883,10 @@ textarea:focus-visible {
 }
 
 .room-panel-tabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 34px;
   border: 1px solid transparent;
   border-radius: 9px;
@@ -4049,7 +4101,8 @@ textarea:focus-visible {
   gap: 22px;
 }
 
-.theme-preference {
+.theme-preference,
+.sound-preference {
   display: inline-flex;
   flex: 0 0 auto;
   gap: 4px;
@@ -4059,7 +4112,8 @@ textarea:focus-visible {
   background: color-mix(in srgb, var(--canvas-deep) 68%, var(--surface));
 }
 
-.theme-preference button {
+.theme-preference button,
+.sound-preference button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -4077,11 +4131,13 @@ textarea:focus-visible {
     color 160ms ease;
 }
 
-.theme-preference button:hover {
+.theme-preference button:hover,
+.sound-preference button:hover {
   color: var(--ink);
 }
 
-.theme-preference button.active {
+.theme-preference button.active,
+.sound-preference button.active {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
   background: var(--surface-raised);
   color: var(--ink);
@@ -4134,6 +4190,125 @@ textarea:focus-visible {
   border-color: var(--line-soft);
   background: var(--surface-raised);
   color: var(--ink);
+}
+
+/* Profile ----------------------------------------------------------------- */
+
+.profile-identity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+}
+
+/* Compounded with .avatar so it outranks the .avatar.large sizing it sits next to. */
+.avatar.profile-avatar {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  font-size: 22px;
+}
+
+.profile-identity-copy {
+  min-width: 0;
+}
+
+.profile-identity-copy h3 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.profile-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.profile-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.profile-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 70%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 570;
+}
+
+.profile-badge.is-verified {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.profile-badge.is-pending {
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--line));
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.profile-form {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+  max-width: 460px;
+}
+
+.profile-form .form-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  justify-self: start;
+}
+
+.profile-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.profile-side-note {
+  display: grid;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 11px 9px 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.profile-side-note p {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.profile-side-note svg {
+  margin-top: 2px;
+}
+
+@media (max-width: 560px) {
+  .profile-identity {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
 }
 
 /* Responsive -------------------------------------------------------------- */
@@ -4587,6 +4762,7 @@ textarea:focus-visible {
   place-items: center;
   width: 32px;
   height: 32px;
+  padding: 0;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: transparent;
@@ -4978,6 +5154,7 @@ textarea:focus-visible {
   flex: none;
   width: 25px;
   height: 25px;
+  padding: 0;
   place-items: center;
   border: 0;
   border-radius: 7px;
@@ -5200,10 +5377,18 @@ button.member-picker-option:hover,
   line-height: 1.5;
 }
 
+/* Absolutely positioned rather than an inline sibling of the label: as a normal
+   inline-flex child the dot pushed the tab name off-centre, and the two shared
+   the button's centring so every locked tab read as misaligned next to the
+   unlocked one. Out of flow, the label stays exactly centred whether or not the
+   tab is locked. */
 .room-panel-tabs button[data-locked]::after {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: block;
   width: 4px;
   height: 4px;
-  margin-left: 5px;
   border-radius: 999px;
   background: var(--subtle);
   content: "";
@@ -5420,6 +5605,12 @@ button.member-picker-option:hover,
 
   .room-actions .button {
     min-height: 36px;
+  }
+
+  .room-actions .button-icon {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
   }
 
   .room-panel {

@@ -33,6 +33,7 @@ export type WorkspaceUser = {
   username: string;
   displayName: string;
   emailVerified: boolean;
+  createdAt?: string;
 };
 export type Organization = {
   id: string;
@@ -57,4 +58,24 @@ export type IdentityResponse = { user: WorkspaceUser; organizations: Organizatio
 
 export function selectedOrganization(identity: IdentityResponse, organizationId?: string | null) {
   return identity.organizations.find((organization) => organization.id === organizationId) ?? identity.organizations[0];
+}
+
+/**
+ * Broadcast that the signed-in user's own identity changed.
+ *
+ * Every surface that shows a name or avatar reads /v1/auth/me once when it
+ * mounts, so a rename on the profile page would otherwise leave the topbar
+ * showing the previous name until a full reload — the one change a person is
+ * guaranteed to be looking for right after they make it.
+ */
+const identityUpdatedEvent = "threadline:identity-updated";
+
+export function announceIdentityUpdate() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(identityUpdatedEvent));
+}
+
+export function onIdentityUpdate(listener: () => void) {
+  if (typeof window === "undefined") return () => undefined;
+  window.addEventListener(identityUpdatedEvent, listener);
+  return () => window.removeEventListener(identityUpdatedEvent, listener);
 }

@@ -9,6 +9,7 @@ import {
   ListIcon,
   PlusIcon,
   SignOutIcon,
+  UserCircleIcon,
   UsersThreeIcon,
   VideoConferenceIcon,
   XIcon,
@@ -23,7 +24,7 @@ import { SidebarRoomSkeleton } from "./skeletons";
 
 const ADD_WORKSPACE = "__add_workspace__";
 
-type Active = "home" | "rooms" | "calendar" | "activity" | "settings" | "members";
+type Active = "home" | "rooms" | "calendar" | "activity" | "settings" | "members" | "profile";
 type SidebarData = { identity?: IdentityResponse; organization?: Organization; rooms: Room[]; error?: string };
 
 const initials = (name: string) =>
@@ -178,6 +179,9 @@ export function WorkspaceSidebar({ active }: { active: Active }) {
                 <UsersThreeIcon size={17} weight="duotone" /> Members
               </Link>
             )}
+            <Link className={active === "profile" ? "active" : ""} href="/app/profile">
+              <UserCircleIcon size={17} weight="duotone" /> Profile
+            </Link>
             <Link className={active === "settings" ? "active" : ""} href="/app/settings">
               <GearSixIcon size={17} weight="duotone" /> Settings
             </Link>
