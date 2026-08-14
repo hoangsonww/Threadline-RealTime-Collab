@@ -4,7 +4,7 @@ import { BuildingsIcon, UserCircleIcon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { apiFetch, selectedOrganization, type IdentityResponse } from "../lib/api";
+import { apiFetch, onIdentityUpdate, selectedOrganization, type IdentityResponse } from "../lib/api";
 import { getPreferredOrgId } from "../lib/workspace-preference";
 
 type Identity = { title: string; subtitle: string; initials: string };
@@ -22,20 +22,23 @@ export function WorkspaceTopbar() {
   const [identity, setIdentity] = useState(defaultIdentity);
   const selectedOrgId = useSearchParams().get("org") ?? getPreferredOrgId();
   useEffect(() => {
-    void apiFetch<IdentityResponse>("/v1/auth/me")
-      .then((data) => {
-        const name = data.user.displayName as string;
-        const role = selectedOrganization(data, selectedOrgId)?.role;
-        const roleLabel = role ? role[0].toUpperCase() + role.slice(1) : undefined;
-        setIdentity({
-          title: selectedOrganization(data, selectedOrgId)?.name ?? "Your workspace",
-          subtitle: name ? `${name}${roleLabel ? ` · ${roleLabel}` : ""}` : "Your workspace",
-          initials: initialsFor(name),
-        });
-      })
-      .catch(() =>
-        setIdentity({ title: "Session unavailable", subtitle: "Sign in to access your workspace", initials: "TL" }),
-      );
+    const load = () =>
+      apiFetch<IdentityResponse>("/v1/auth/me")
+        .then((data) => {
+          const name = data.user.displayName as string;
+          const role = selectedOrganization(data, selectedOrgId)?.role;
+          const roleLabel = role ? role[0].toUpperCase() + role.slice(1) : undefined;
+          setIdentity({
+            title: selectedOrganization(data, selectedOrgId)?.name ?? "Your workspace",
+            subtitle: name ? `${name}${roleLabel ? ` · ${roleLabel}` : ""}` : "Your workspace",
+            initials: initialsFor(name),
+          });
+        })
+        .catch(() =>
+          setIdentity({ title: "Session unavailable", subtitle: "Sign in to access your workspace", initials: "TL" }),
+        );
+    void load();
+    return onIdentityUpdate(() => void load());
   }, [selectedOrgId]);
   return (
     <header className="topbar">
@@ -53,7 +56,7 @@ export function WorkspaceTopbar() {
         <Link className="button button-ghost button-icon" href="/app/settings" aria-label="Personal settings">
           <UserCircleIcon size={19} />
         </Link>
-        <Link className="avatar topbar-profile" href="/app/settings" aria-label="Open personal settings">
+        <Link className="avatar topbar-profile" href="/app/profile" aria-label="Open your profile" title="Your profile">
           {identity.initials}
         </Link>
       </div>

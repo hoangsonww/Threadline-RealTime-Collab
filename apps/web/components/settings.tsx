@@ -2,17 +2,20 @@
 
 import Link from "next/link";
 import {
+  ArrowsClockwiseIcon,
   CheckCircleIcon,
   CopyIcon,
   KeyIcon,
   LaptopIcon,
-  PaperPlaneTiltIcon,
   PlusIcon,
   TrashIcon,
+  UserCircleIcon,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "../lib/api";
+import { RecoveryCodes } from "./recovery-codes";
 import { KeyRowSkeleton } from "./skeletons";
+import { SoundPreference } from "./sound-preference";
 import { ThemePreference } from "./theme-preference";
 
 type Token = {
@@ -56,15 +59,18 @@ export function Settings({ section = "general" }: { section?: Section }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [verificationSent, setVerificationSent] = useState(false);
-  const [sendingVerification, setSendingVerification] = useState(false);
+  const [recovery, setRecovery] = useState<{ remaining: number; total: number }>();
+  const [newCodes, setNewCodes] = useState<string[]>();
+  const [regenerating, setRegenerating] = useState(false);
   const load = async () => {
-    const [identityData, tokenData, sessionData, clientData] = await Promise.all([
+    const [identityData, tokenData, sessionData, clientData, recoveryData] = await Promise.all([
       apiFetch<IdentityResponse>("/v1/auth/me"),
       apiFetch<{ tokens: Token[] }>("/v1/pats"),
       apiFetch<{ sessions: Session[] }>("/v1/sessions"),
       apiFetch<{ clients: OidcClient[] }>("/v1/oidc/clients"),
+      apiFetch<{ remaining: number; total: number }>("/v1/auth/recovery-codes"),
     ]);
+    setRecovery(recoveryData);
     setIdentity(identityData);
     setTokens(tokenData.tokens.filter((token) => !token.revokedAt));
     setSessions(sessionData.sessions.filter((session) => !session.revokedAt));
@@ -75,16 +81,17 @@ export function Settings({ section = "general" }: { section?: Section }) {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "Could not load settings."))
       .finally(() => setLoading(false));
   }, []);
-  const resendVerification = async () => {
-    setSendingVerification(true);
+  const regenerateRecoveryCodes = async () => {
+    setRegenerating(true);
     setError("");
     try {
-      await apiFetch("/v1/auth/email-verification/request", { method: "POST" });
-      setVerificationSent(true);
+      const data = await apiFetch<{ recoveryCodes: string[] }>("/v1/auth/recovery-codes", { method: "POST" });
+      setNewCodes(data.recoveryCodes);
+      setRecovery({ remaining: data.recoveryCodes.length, total: data.recoveryCodes.length });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not send a verification link.");
+      setError(cause instanceof Error ? cause.message : "Could not generate new recovery codes.");
     } finally {
-      setSendingVerification(false);
+      setRegenerating(false);
     }
   };
   const createToken = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -151,13 +158,20 @@ export function Settings({ section = "general" }: { section?: Section }) {
             <>
               <div className="settings-section">
                 <h3>Appearance</h3>
-                <p>Choose the interface contrast that is most comfortable for this device.</p>
+                <p>Choose the interface contrast and feedback that are most comfortable for this device.</p>
                 <div className="key-row appearance-row">
                   <div>
                     <strong>Color theme</strong>
                     <span>Your choice stays on this device.</span>
                   </div>
                   <ThemePreference />
+                </div>
+                <div className="key-row appearance-row">
+                  <div>
+                    <strong>Interface sounds</strong>
+                    <span>Short cues when you join, leave, mute, share, or receive a message.</span>
+                  </div>
+                  <SoundPreference />
                 </div>
               </div>
               <div className="settings-section">
@@ -175,29 +189,31 @@ export function Settings({ section = "general" }: { section?: Section }) {
                 {identity && (
                   <div className="key-row">
                     <div>
-                      <strong>Email verification</strong>
-                      <span>
-                        {identity.user.emailVerified
-                          ? `${identity.user.email} is verified.`
-                          : verificationSent
-                            ? "Check your inbox for the new link."
-                            : `${identity.user.email} has not been verified yet.`}
-                      </span>
+                      <strong>Signed in as</strong>
+                      <span>{identity.user.email}</span>
                     </div>
-                    {identity.user.emailVerified ? (
-                      <span className="session-current">Verified</span>
-                    ) : (
-                      <button
-                        className="button button-secondary"
-                        disabled={sendingVerification || verificationSent}
-                        onClick={() => void resendVerification()}
-                      >
-                        <PaperPlaneTiltIcon size={15} />{" "}
-                        {verificationSent ? "Link sent" : sendingVerification ? "Sending…" : "Resend link"}
-                      </button>
-                    )}
+                    <Link className="button button-secondary" href="/app/profile">
+                      <UserCircleIcon size={16} /> View profile
+                    </Link>
                   </div>
                 )}
+                <div className="key-row">
+                  <div>
+                    <strong>Recovery codes</strong>
+                    <span>
+                      {recovery
+                        ? `${recovery.remaining} of ${recovery.total} unused. Threadline sends no email, so these are the only way back into a locked-out account.`
+                        : "Loading…"}
+                    </span>
+                  </div>
+                  <button
+                    className="button button-secondary"
+                    disabled={regenerating}
+                    onClick={() => void regenerateRecoveryCodes()}
+                  >
+                    <ArrowsClockwiseIcon size={15} /> {regenerating ? "Generating…" : "Regenerate"}
+                  </button>
+                </div>
               </div>
             </>
           )}
@@ -305,7 +321,8 @@ export function Settings({ section = "general" }: { section?: Section }) {
           )}
         </section>
         <aside className="settings-side">
-          <h3>Settings</h3>
+          <h3>Account</h3>
+          <Link href="/app/profile">Profile</Link>
           {nav.map(([key, href, label]) => (
             <Link href={href} className={section === key ? "active" : ""} key={key}>
               {label}
@@ -349,6 +366,24 @@ export function Settings({ section = "general" }: { section?: Section }) {
               </div>
             </div>
           </form>
+        </div>
+      )}
+      {newCodes && (
+        <div className="modal-backdrop">
+          <section className="modal" role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div>
+                <h3>Your new recovery codes</h3>
+                <p>The previous set no longer works. These are shown once.</p>
+              </div>
+            </div>
+            <RecoveryCodes
+              codes={newCodes}
+              email={identity?.user.email}
+              continueLabel="I stored them safely"
+              onContinue={() => setNewCodes(undefined)}
+            />
+          </section>
         </div>
       )}
       {secret && (

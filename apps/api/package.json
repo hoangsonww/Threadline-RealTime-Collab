@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dedupe:usernames": "tsx scripts/dedupe-usernames.ts",
     "dev": "tsx watch src/index.ts",
     "generate:oidc-key": "tsx scripts/generate-oidc-key.ts",
     "start": "tsx src/index.ts",

@@ -4,7 +4,7 @@ import { ForgotPasswordForm } from "../../components/password-recovery";
 
 export const metadata: Metadata = {
   title: "Reset your password",
-  description: "Request a single-use, short-lived link to reset your Threadline account password.",
+  description: "Reset your Threadline password with one of the single-use recovery codes issued when you signed up.",
   robots: { index: false, follow: false },
 };
 
@@ -16,13 +16,13 @@ export default function ForgotPasswordPage() {
         <div className="auth-aside-copy">
           <p className="eyebrow">Account recovery</p>
           <h1>Reset access without losing your room history.</h1>
-          <p>Password reset links are intentionally short-lived and single-use.</p>
+          <p>Recovery codes are single-use and prove it&apos;s you without relying on email.</p>
         </div>
       </aside>
       <section className="auth-main">
         <div className="auth-card">
           <h2>Reset your password</h2>
-          <p>Enter the email associated with your Threadline account.</p>
+          <p>Enter your email and one of the recovery codes you saved when you created your account.</p>
           <ForgotPasswordForm />
         </div>
       </section>

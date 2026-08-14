@@ -10,6 +10,5 @@ export default function sitemap(): MetadataRoute.Sitemap {
     { url: `${siteUrl}/register`, lastModified: now, changeFrequency: "yearly", priority: 0.8 },
     { url: `${siteUrl}/forgot-password`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
     { url: `${siteUrl}/reset-password`, lastModified: now, changeFrequency: "yearly", priority: 0.1 },
-    { url: `${siteUrl}/verify-email`, lastModified: now, changeFrequency: "yearly", priority: 0.1 },
   ];
 }

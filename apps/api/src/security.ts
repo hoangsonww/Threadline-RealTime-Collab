@@ -12,6 +12,25 @@ const joinCodeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const generateJoinCode = (length = 8) =>
   Array.from({ length }, () => joinCodeAlphabet[randomInt(joinCodeAlphabet.length)]).join("");
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+
+/**
+ * Generate a single-use account recovery code.
+ *
+ * Twelve symbols from the 31-character unambiguous alphabet is a little over 59
+ * bits — far beyond guessing, while still being something a person can copy off a
+ * screen and type back correctly. Formatted in groups of four purely for legibility;
+ * `normalizeRecoveryCode` strips the formatting before hashing, so how the person
+ * types it back does not matter.
+ */
+export const generateRecoveryCode = () =>
+  (
+    Array.from({ length: 12 }, () => joinCodeAlphabet[randomInt(joinCodeAlphabet.length)])
+      .join("")
+      .match(/.{4}/g) ?? []
+  ).join("-");
+
+/** Upper-cases and strips separators/whitespace so formatting never affects the hash. */
+export const normalizeRecoveryCode = (value: string) => value.toUpperCase().replace(/[^A-Z0-9]/g, "");
 export const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
 export const hashPassword = (value: string) =>
   argon2.hash(value, { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
@@ -24,6 +43,9 @@ export const publicUser = (user: User) => ({
   displayName: user.displayName,
   avatar: user.avatar,
   createdAt: user.createdAt,
+  // Declared required by the published User schema. It was missing here, so every
+  // response carrying a user silently violated its own documented contract.
+  updatedAt: user.updatedAt,
 });
 
 export class OidcSigner {

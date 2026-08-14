@@ -17,6 +17,8 @@ Each ADR here captures a decision already made in this codebase — the context,
 | [0004](0004-three-auth-surfaces.md)                | Three separate authentication surfaces: session cookie, PAT, first-party OIDC    |
 | [0005](0005-sqlite-hibernatable-durable-object.md) | SQLite-backed, hibernatable Durable Object storage                               |
 | [0006](0006-self-service-workspace-membership.md)  | Self-service workspace creation and invite-code joining, not org-at-registration |
+| [0007](0007-no-email-verification-without-a-mail-provider.md) | Remove email verification rather than ship a flow that silently sends nothing     |
+| [0008](0008-recovery-codes-not-knowledge-based-reset.md) | Recovery codes for account recovery, not knowledge-based reset |
 
 ## Adding a new ADR
 

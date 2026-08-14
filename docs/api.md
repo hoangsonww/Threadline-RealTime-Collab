@@ -123,15 +123,55 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 | Method & path                              | Auth          | Notes                                                                                                  |
 | ------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
-| `POST /v1/auth/register`                   | none          | Creates a user + session only — no organization. Rate limited 8/hour/IP.                               |
+| `POST /v1/auth/register`                   | none          | Creates a user + session only — no organization. `username` is optional; omit it and the API derives a free one from the email. Returns the account's recovery codes. Rate limited 8/hour/IP. |
 | `POST /v1/auth/login`                      | none          | Rate limited 12/15min/IP.                                                                              |
 | `POST /v1/auth/logout`                     | session       | Revokes the current session only.                                                                      |
 | `POST /v1/auth/password`                   | session       | Revokes every _other_ active session on success.                                                       |
 | `POST /v1/auth/password-reset/request`     | none          | Always `202`, regardless of whether the email exists (no account enumeration). Rate limited 5/hour/IP. |
 | `POST /v1/auth/password-reset/confirm`     | token in body | One-time token, revokes all sessions on success.                                                       |
-| `POST /v1/auth/email-verification/request` | session       | Rate limited 5/hour/IP.                                                                                |
-| `POST /v1/auth/email-verification/confirm` | token in body | One-time token.                                                                                        |
-| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`; `user.emailVerified` reflects `Credential.emailVerifiedAt`.         |
+| `GET /v1/auth/me`                          | session       | Returns `{ user, organizations }`. Nothing can set `user.emailVerified` any more — see below.          |
+| `PATCH /v1/auth/me`                        | session only  | Updates `displayName` and/or `username`. `409` on a username collision. Rejects personal access tokens. |
+| `POST /v1/auth/password-reset/redeem`      | none          | Email + one single-use recovery code. Resets the password and revokes every session. Rate limited 10/15min/IP. |
+| `GET /v1/auth/recovery-codes`              | session       | Counts only — the plaintext is unreadable after issuance.                                              |
+| `POST /v1/auth/recovery-codes`             | session       | Issues a fresh set, invalidating all previous codes. Shown once.                                        |
+
+There is deliberately **no email-verification flow**. It only ever worked when `AUTH_DELIVERY_WEBHOOK` pointed at a
+transactional email service; with none configured, `POST /v1/auth/email-verification/request` wrote a token and answered
+`202 Accepted` for mail that was never sent. Both endpoints were removed rather than left reporting success for something
+they did not do. `Credential.emailVerifiedAt` and the OIDC `email_verified` claim remain — the claim is part of the OIDC
+contract. Nothing can set the timestamp any more, so it reads `false` for every account except one that verified
+before the removal; those timestamps are retained rather than rewritten, because erasing a fact that was true is not
+more honest than reporting it. See [Email delivery](#email-delivery).
+
+`PATCH /v1/auth/me` takes a browser session and refuses a personal access token, including one holding `admin:*`. No
+automation scope should be able to rename the account that issued it, so the boundary is the session rather than a scope.
+
+`username` is optional at registration on purpose. The sign-up form has no handle field, and deriving one client-side
+from the email local part collides the moment two people share it across domains — leaving the second person with an
+error about a field they were never shown. The API derives from the local part, falls back to a random suffix on
+collision (a counter would leak how many accounts already wanted that name), and the unique index on `users.username`
+settles it either way.
+
+### Email delivery
+
+Threadline has **no built-in transactional email provider**. Anything that would send mail is delivered by POSTing to the
+webhook named in `AUTH_DELIVERY_WEBHOOK`, which you supply. When that variable is unset the callback is never
+constructed, so no mail leaves the system.
+
+**Account recovery does not depend on it.** Every account is issued eight single-use recovery codes at registration
+(`RegistrationResponse.recoveryCodes`), shown once and stored only as SHA-256 hashes. `POST
+/v1/auth/password-reset/redeem` takes an email plus one code, sets a new password, and revokes every session.
+
+That design is deliberate rather than convenient. `publicUser` returns a member's email, username, and display name to
+every other member of their workspace, so any recovery flow built on "confirm these account details" would hand a
+colleague everything needed to take the account over. A recovery code is ~59 bits no one else has seen.
+
+Codes are case- and format-insensitive on redemption, single-use, and invalidated wholesale when regenerated. A wrong
+code and an unregistered email return byte-identical responses, so the endpoint cannot be used to discover whether an
+address has an account; it is rate limited 10/15min/IP on top of that.
+
+The link-based `password-reset/request` / `confirm` pair still exists for deployments that do configure a webhook. With
+no webhook it answers `202` (anything else would leak account existence) and the token expires unused an hour later.
 
 ### Sessions
 

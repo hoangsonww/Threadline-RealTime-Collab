@@ -69,7 +69,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
       description:
         "Threadline is a room-centered engineering workspace. This API provides browser session authentication, scoped personal access tokens, ABAC-protected organizations and rooms, calendar/activity data, and a first-party OpenID Connect provider.\n\n" +
         "Use a browser session for interactive product calls. Automation can send `Authorization: Bearer tl_pat_…`; every protected operation documents its required scope. OIDC endpoints follow Authorization Code + PKCE and intentionally do not support implicit or password grants.\n\n" +
-        "All timestamps are ISO 8601 UTC strings. All IDs are UUIDs unless noted otherwise. Errors use the shared `Error` schema.",
+        "All timestamps are ISO 8601 UTC strings. All IDs are UUIDs unless noted otherwise. Errors use the shared `Error` schema.\n\n" +
+        "**Email delivery.** Threadline has no built-in transactional email provider. Any operation that would send mail is delivered by POSTing to the webhook named in `AUTH_DELIVERY_WEBHOOK`; when that variable is unset, no mail leaves the system. There is deliberately no email-verification flow for that reason. Password recovery does not depend on mail either: `POST /v1/auth/password-reset/redeem` resets a password with a single-use recovery code issued at registration. The link-based `password-reset/request`/`confirm` pair still exists and only completes where the webhook is configured.",
       contact: { name: "Threadline Engineering", url: "https://github.com/hoangsonw/threadline" },
       license: { name: "Private / proprietary" },
     },
@@ -79,7 +80,10 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
     ].filter((server, index, all) => all.findIndex((candidate) => candidate.url === server.url) === index),
     tags: [
       { name: "Service", description: "Service health and API contract discovery." },
-      { name: "Authentication", description: "Password authentication, sessions, recovery, and verification." },
+      {
+        name: "Authentication",
+        description: "Password authentication, browser sessions, the signed-in profile, and password recovery.",
+      },
       {
         name: "Organizations",
         description: "Organization-scoped resources protected by attribute-based access control.",
@@ -109,7 +113,7 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "register",
           summary: "Create an account",
           description:
-            "Creates a user and a browser session only — the account starts with no organization. A verification action is queued when account-action delivery is configured. Direct the person to `POST /v1/orgs` or `POST /v1/join` next.",
+            "Creates a user and a browser session only — the account starts with no organization. Direct the person to `POST /v1/orgs` or `POST /v1/join` next. Returns `409` if the email or username is already taken.",
           requestBody: { required: true, content: json(schema("RegistrationInput")) },
           responses: {
             "201": response("Account created; a session cookie is set.", schema("RegistrationResponse")),
@@ -160,7 +164,8 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "requestPasswordReset",
           summary: "Request a password recovery link",
           description:
-            "Always returns an accepted response to avoid disclosing whether an email address has an account.",
+            "Always returns an accepted response to avoid disclosing whether an email address has an account.\n\n" +
+            "The accepted response means the request was recorded, not that mail was sent: a recovery link is only delivered when `AUTH_DELIVERY_WEBHOOK` is configured. With no webhook the token is written and expires unused.",
           requestBody: { required: true, content: json(schema("EmailInput")) },
           responses: {
             "202": response("The request was accepted.", schema("AcceptedMessage")),
@@ -183,25 +188,48 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           },
         },
       },
-      "/v1/auth/email-verification/request": {
+      "/v1/auth/password-reset/redeem": {
         post: {
           tags: ["Authentication"],
-          operationId: "requestEmailVerification",
-          summary: "Request a verification link for the signed-in user",
-          security: sessionSecurity,
+          operationId: "redeemRecoveryCode",
+          summary: "Reset a password with a recovery code",
+          description:
+            "The recovery path for a deployment with no transactional email provider. Consumes one single-use recovery code and sets a new password, then revokes every session for the account.\n\n" +
+            "Deliberately proves possession of a secret rather than knowledge of account facts: member listings expose a user's email, username, and display name to everyone else in their workspace, so a check built on those would let a colleague take the account over.\n\n" +
+            "A wrong code and an email with no account return the identical response, so this endpoint cannot be used to discover whether an address is registered. Codes are case- and format-insensitive. Rate limited 10/15min/IP.",
+          requestBody: { required: true, content: json(schema("RedeemRecoveryCodeInput")) },
           responses: {
-            "202": response("The request was accepted.", schema("AcceptedMessage")),
-            "401": errors.Unauthorized,
+            "200": response("Password reset; all sessions revoked.", schema("RecoveryCodeRedemption")),
+            "400": errors.BadRequest,
+            "422": errors.Validation,
+            "429": errors.RateLimited,
           },
         },
       },
-      "/v1/auth/email-verification/confirm": {
+      "/v1/auth/recovery-codes": {
+        get: {
+          tags: ["Authentication"],
+          operationId: "getRecoveryCodeStatus",
+          summary: "Count the signed-in user's remaining recovery codes",
+          description:
+            "Returns counts only. Codes are stored as hashes, so the plaintext cannot be read back by any route — it exists only in the response that created it.",
+          security: sessionSecurity,
+          responses: {
+            "200": response("How many codes remain unused.", schema("RecoveryCodeStatus")),
+            "401": errors.Unauthorized,
+          },
+        },
         post: {
           tags: ["Authentication"],
-          operationId: "confirmEmailVerification",
-          summary: "Confirm an email address from a verification token",
-          requestBody: { required: true, content: json(schema("VerificationTokenInput")) },
-          responses: { "204": response("Email address verified."), "400": errors.BadRequest, "422": errors.Validation },
+          operationId: "regenerateRecoveryCodes",
+          summary: "Replace the signed-in user's recovery codes",
+          description:
+            "Issues a fresh set and invalidates every previous code. The plaintext is returned exactly once; it is not recoverable afterwards.",
+          security: sessionSecurity,
+          responses: {
+            "201": response("A new set of codes, shown once.", schema("RecoveryCodes")),
+            "401": errors.Unauthorized,
+          },
         },
       },
       "/v1/auth/me": {
@@ -213,6 +241,21 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           responses: {
             "200": response("Current identity.", schema("CurrentUserResponse")),
             "401": errors.Unauthorized,
+          },
+        },
+        patch: {
+          tags: ["Authentication"],
+          operationId: "updateCurrentUser",
+          summary: "Update the signed-in user’s profile",
+          description:
+            "Accepts a browser session only — no personal access token scope grants the ability to change an account's own identity. Usernames are lowercased and must be unique.",
+          security: sessionSecurity,
+          requestBody: { required: true, content: json(schema("UpdateProfileInput")) },
+          responses: {
+            "200": response("The updated identity.", schema("CurrentUserResponse")),
+            "401": errors.Unauthorized,
+            "409": errors.Conflict,
+            "422": errors.Validation,
           },
         },
       },
@@ -929,12 +972,28 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RegistrationInput: {
           type: "object",
-          required: ["email", "username", "displayName", "password"],
+          required: ["email", "displayName", "password"],
           properties: {
             email: { type: "string", format: "email" },
-            username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
+            username: {
+              type: "string",
+              pattern: "^[a-zA-Z0-9-]+$",
+              minLength: 3,
+              maxLength: 32,
+              description:
+                "Optional. Omit it and the API derives a free username from the email address — a client deriving one itself collides as soon as two people share a local part across domains. Lower-cased, and rejected with 409 if already taken.",
+            },
             displayName: { type: "string", minLength: 2, maxLength: 80 },
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
+          },
+        },
+        UpdateProfileInput: {
+          type: "object",
+          minProperties: 1,
+          description: "At least one field must be supplied. Omitted fields are left unchanged.",
+          properties: {
+            username: { type: "string", pattern: "^[a-zA-Z0-9-]+$", minLength: 3, maxLength: 32 },
+            displayName: { type: "string", minLength: 2, maxLength: 80 },
           },
         },
         LoginInput: {
@@ -961,11 +1020,6 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             token: { type: "string", minLength: 20 },
             password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
           },
-        },
-        VerificationTokenInput: {
-          type: "object",
-          required: ["token"],
-          properties: { token: { type: "string", minLength: 20 } },
         },
         CreateRoomInput: {
           type: "object",
@@ -1108,8 +1162,50 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RegistrationResponse: {
           type: "object",
-          required: ["user"],
-          properties: { user: schema("User") },
+          required: ["user", "recoveryCodes"],
+          properties: {
+            user: schema("User"),
+            recoveryCodes: {
+              type: "array",
+              description:
+                "Single-use account recovery codes, returned only here. With no mail provider these are the account's only route back in, so they must be captured at this point.",
+              items: { type: "string", example: "4KJ9-QW2M-7T5X" },
+            },
+          },
+        },
+        RecoveryCodes: {
+          type: "object",
+          required: ["recoveryCodes"],
+          properties: {
+            recoveryCodes: {
+              type: "array",
+              description: "Single-use codes, shown exactly once. Only their hashes are stored.",
+              items: { type: "string", example: "4KJ9-QW2M-7T5X" },
+            },
+          },
+        },
+        RecoveryCodeStatus: {
+          type: "object",
+          required: ["remaining", "total"],
+          properties: {
+            remaining: { type: "integer", description: "Codes not yet used." },
+            total: { type: "integer" },
+            generatedAt: { type: "string", format: "date-time" },
+          },
+        },
+        RecoveryCodeRedemption: {
+          type: "object",
+          required: ["remaining"],
+          properties: { remaining: { type: "integer", description: "Codes still unused after this redemption." } },
+        },
+        RedeemRecoveryCodeInput: {
+          type: "object",
+          required: ["email", "code", "password"],
+          properties: {
+            email: { type: "string", format: "email" },
+            code: { type: "string", description: "Case- and format-insensitive.", example: "4KJ9-QW2M-7T5X" },
+            password: { type: "string", format: "password", minLength: 10, maxLength: 128 },
+          },
         },
         LoginResponse: { type: "object", required: ["user"], properties: { user: schema("User") } },
         AcceptedMessage: { type: "object", required: ["message"], properties: { message: { type: "string" } } },
@@ -1120,7 +1216,17 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
             user: {
               allOf: [
                 schema("User"),
-                { type: "object", required: ["emailVerified"], properties: { emailVerified: { type: "boolean" } } },
+                {
+                  type: "object",
+                  required: ["emailVerified"],
+                  properties: {
+                    emailVerified: {
+                      type: "boolean",
+                      description:
+                        "Reflects `Credential.emailVerifiedAt`. No flow can set it any more — email verification was removed because nothing could deliver its mail — so it is `false` for every account except one that verified before the removal, whose timestamp is retained rather than rewritten. The OIDC `email_verified` claim is derived from the same field.",
+                    },
+                  },
+                },
               ],
             },
             organizations: { type: "array", items: schema("Organization") },

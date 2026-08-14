@@ -9,14 +9,15 @@ Terms as this codebase actually uses them — not always the industry-general de
 ## A
 
 - **ABAC (Attribute-Based Access Control)** — Threadline's access model: every decision is derived from the caller's organization role, explicitly delegated attributes (`canCreateRooms`, `canManageMembers`, `canSchedule`), and — for rooms — the room's own visibility/classification, re-evaluated on every request. Never inferred from an ID alone. See [`api.md`](api.md#attribute-based-access-control-abac).
-- **Account action token** (`AccountActionToken`) — A single-use, hashed, 1-hour-expiry token backing password reset and email verification links. Not a session or access token; it can only be redeemed at its one specific confirm endpoint.
+- **Account action token** (`AccountActionToken`) — A single-use, hashed, 1-hour-expiry token backing password reset links. Not a session or access token; it can only be redeemed at its one specific confirm endpoint. Only delivered when `AUTH_DELIVERY_WEBHOOK` is configured — see [`api.md`](api.md#email-delivery).
+- **Recovery code** (`RecoveryCode`) — One of eight single-use secrets issued at registration and stored only as a SHA-256 hash. Redeeming one with the matching email resets the password and revokes every session. This is Threadline's account recovery, since it has no transactional email provider — and it deliberately proves possession of a secret rather than knowledge of account facts, because member listings publish a user's email, username, and display name to their whole workspace. See [`security.md`](security.md#recovery-codes).
 - **Activity feed** — `/app/activity`. The last 100 durable `RoomEvent`s across every room the caller can currently see, org-wide.
 - **Alarm** — A Durable Object's built-in scheduled-callback mechanism (`state.storage.setAlarm`). `RoomDurableObject` uses it as its only retry loop: if the webhook hand-off to the API fails, it schedules an alarm 30 seconds out and tries again. See [`realtime.md`](realtime.md#roomdurableobject).
 
 ## C
 
 - **Classification** (room) — `internal` or `confidential`. Only matters when `visibility` is `organization`: a `confidential` room additionally requires explicit `RoomMembership` even for regular org members (org owners/admins still get in via their elevated role). Doesn't apply to `restricted` rooms, which already require explicit membership regardless.
-- **Credential** — The `passwordHash`/`emailVerifiedAt` record, stored as a table separate from `User` so a `User` object can be handled/logged without any risk of a hash traveling with it.
+- **Credential** — The `passwordHash`/`emailVerifiedAt` record, stored as a table separate from `User` so a `User` object can be handled/logged without any risk of a hash traveling with it. `emailVerifiedAt` can no longer be set — email verification was removed because nothing could deliver its mail — so it is null for every account except one that verified before the removal, whose timestamp is retained rather than rewritten. The field survives because the OIDC `email_verified` claim is derived from it.
 
 ## D
 
