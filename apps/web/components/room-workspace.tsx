@@ -27,6 +27,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
+import { callShortcutFor, shortcutKey } from "../lib/call-shortcuts";
 import { playSound } from "../lib/sound";
 import { Skeleton } from "./skeletons";
 
@@ -314,6 +315,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   useEffect(() => {
     if (roomError) playSound("error");
   }, [roomError]);
+
+  // Bound to the window rather than a container so the shortcuts work wherever
+  // focus happens to be — including on the video stage, which holds no focusable
+  // element of its own. Only while connected: there is nothing to toggle before
+  // that, and a stray keypress on the pre-join screen should not ask for a device.
 
   /**
    * Announce only the people who arrived or left since the last presence frame.
@@ -732,6 +738,27 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       setRoomError("Screen share was not started.");
     }
   };
+  // Held in a ref so the listener below can be registered once per connection
+  // instead of on every render. The toggles are recreated each render and the room
+  // re-renders on every presence and speaking-state change, so binding the handler
+  // directly would add and remove a window listener many times a second.
+  const toggleRef = useRef({ toggleMic, toggleCamera, toggleScreenShare });
+  toggleRef.current = { toggleMic, toggleCamera, toggleScreenShare };
+
+  useEffect(() => {
+    if (!connected) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = callShortcutFor(event);
+      if (!action) return;
+      event.preventDefault();
+      if (action === "toggleMic") void toggleRef.current.toggleMic();
+      else if (action === "toggleCamera") toggleRef.current.toggleCamera();
+      else void toggleRef.current.toggleScreenShare();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [connected]);
+
   const leave = () => {
     // Played before the teardown so it is not competing with the route change;
     // the audio graph lives outside React, so it finishes after this unmounts.
@@ -1006,7 +1033,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${mic ? "active" : ""}`}
                 onClick={toggleMic}
                 aria-label={mic ? "Mute microphone" : "Unmute microphone"}
-                title={mic ? "Mute microphone" : "Unmute microphone"}
+                aria-keyshortcuts={shortcutKey.toggleMic}
+                title={`${mic ? "Mute microphone" : "Unmute microphone"} (${shortcutKey.toggleMic})`}
               >
                 {mic ? <MicrophoneIcon size={18} /> : <MicrophoneSlashIcon size={18} />}
               </button>
@@ -1014,7 +1042,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${camera ? "active" : ""}`}
                 onClick={toggleCamera}
                 aria-label={camera ? "Turn off camera" : "Turn on camera"}
-                title={camera ? "Turn off camera" : "Turn on camera"}
+                aria-keyshortcuts={shortcutKey.toggleCamera}
+                title={`${camera ? "Turn off camera" : "Turn on camera"} (${shortcutKey.toggleCamera})`}
               >
                 {camera ? <VideoCameraIcon size={18} /> : <VideoCameraSlashIcon size={18} />}
               </button>
@@ -1022,7 +1051,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${sharing ? "active" : ""}`}
                 onClick={() => void toggleScreenShare()}
                 aria-label={sharing ? "Stop sharing screen" : "Share screen"}
-                title={sharing ? "Stop sharing screen" : "Share screen"}
+                aria-keyshortcuts={shortcutKey.toggleScreenShare}
+                title={`${sharing ? "Stop sharing screen" : "Share screen"} (${shortcutKey.toggleScreenShare})`}
               >
                 <MonitorArrowUpIcon size={18} />
               </button>
