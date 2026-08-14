@@ -482,8 +482,8 @@ Nothing, live — chat, presence, and WebRTC signaling all keep working, since n
 **How much does this cost to run?**
 The [zero-cost public preview](docs/deployment.md#zero-cost-public-preview) path runs on free tiers of Vercel, MongoDB Atlas, and Cloudflare Workers, no domain purchase — real limits apply (cold starts, free-tier caps), but genuinely $0. This project's own [live deployment](#live-deployment) runs this way.
 
-**Why is there no automated test suite for the frontend?**
-Named honestly as the single largest testing gap in the repository rather than hidden — see [Testing and quality gates](#testing-and-quality-gates) for exactly what that means and what catches bugs instead.
+**Why is there no component test suite for the frontend?**
+There is some `apps/web` coverage — the WebRTC mesh, the sound engine, and CSS-level layout guards that run in real Chromium — but nothing that mounts a page or asserts fetch-driven state. That remains the largest testing gap in the repository, named rather than hidden: see [Testing and quality gates](#testing-and-quality-gates) for exactly what it covers and what catches bugs instead.
 
 ## Documentation index
 

@@ -19,6 +19,8 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
   - [Incident: stale presence after disconnect, and the whiteboard off-tab loss](#incident-stale-presence-after-disconnect-and-the-whiteboard-off-tab-loss)
   - [Incident: a unique index on a pre-existing collection took down every request](#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request)
   - [Incident: deploying from the wrong branch silently reverted production](#incident-deploying-from-the-wrong-branch-silently-reverted-production)
+  - [Near-miss: the username unique index could not build, and this time nothing went down](#near-miss-the-username-unique-index-could-not-build-and-this-time-nothing-went-down)
+- [Runbook: resolving duplicate usernames](#runbook-resolving-duplicate-usernames)
 - [Known gaps carried here from live testing](#known-gaps-carried-here-from-live-testing)
 
 ## Monitoring and health checks
@@ -152,6 +154,63 @@ Both are real UI/realtime bugs (not configuration), each with its own root-cause
 **Found by:** Testing the live registration flow against the actual production URL immediately after the deploy, as a matter of habit, rather than trusting a green build.
 
 **Fix:** Cherry-picked the Sentry commit onto the correct branch (the one with the org/workspace rework already on it) instead of the stale one, redeployed `apps/api` and `apps/web` from that combined branch, and re-verified the registration flow lived. The standalone Sentry pull request was closed in favor of folding its one commit into the existing, still-open PR, so there is exactly one branch to deploy from going forward rather than two that can silently diverge.
+
+### Near-miss: the username unique index could not build, and this time nothing went down
+
+**Date:** 2026-08-14. **Impact:** none — recorded because the absence of impact is the point.
+
+**What happened:** `users.username` gained a unique index in the same change that made username uniqueness atomic.
+On the first production boot after that deploy, the index failed to build:
+
+```
+[threadline] Could not create the unique index on users.username. Usernames are NOT being enforced
+atomically; concurrent requests can still create duplicates. Resolve the duplicates below and restart.
+  duplicate usernames: test (2), test000 (2)
+  underlying error: E11000 duplicate key error ... index: username_unique dup key: { username: "test" }
+```
+
+**Why it did not become an outage:** this is the same failure mode as
+[the joinCode incident](#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request), which took down
+every request. The lesson from that one was written into the code: `ensureUniqueUsernameIndex` is deliberately kept out
+of the boot-time `Promise.all` and is non-fatal. It logs the offending usernames, falls back to a non-unique index so
+lookups stay indexed, and lets the service boot. The application-level check still returned `409` for the ordinary case
+throughout; only a genuine concurrent race was unprotected.
+
+**Where the duplicates came from:** the web sign-up form used to derive a username from the email local part and append
+`000`. Two accounts at different domains sharing a local part therefore collided — `test@gm.com` / `test@gm.comm` and
+`test@mim.com` / `test@aa.com`. That derivation now happens server-side against a uniqueness check.
+
+**Resolution:** ran the dedupe runbook below, redeployed the API, and confirmed the index built (`username_unique
+unique=true`, 0 duplicates, and a probe insert of a taken username rejected with `11000`). A redundant non-unique
+`username_1` index left behind by the fallback was dropped.
+
+**The transferable lesson:** the joinCode incident's fix was a one-off backfill script; its *durable* fix was making the
+index build non-fatal. The second time the same class of problem occurred, that decision converted an outage into a log
+line. Prefer degrading loudly over failing closed for anything that runs during boot against data you do not control.
+
+## Runbook: resolving duplicate usernames
+
+Symptom: the log line above, or `inspectUsernameUniqueness` reporting `indexed: false`.
+
+```bash
+# Report only — reads, writes nothing. Shows exactly which accounts would be renamed.
+MONGODB_URI='<production uri>' npm run dedupe:usernames --workspace=@threadline/api
+
+# Apply — the oldest holder of each name keeps it; every other holder is renamed
+# with a short random suffix. Accounts are never deleted or merged.
+MONGODB_URI='<production uri>' npm run dedupe:usernames --workspace=@threadline/api -- --apply
+```
+
+Then redeploy (or wait for a cold start) so `MongoRepository.connect` retries the index, and confirm it took:
+
+```
+index: username_unique  unique=true
+duplicates: 0
+```
+
+Renaming only changes the handle. Email, password hash, and sessions are untouched, and usernames are not used for
+sign-in — so the affected people keep working without noticing. Run the report first regardless; it is the record of
+what changed.
 
 ## Known gaps carried here from live testing
 

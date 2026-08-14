@@ -345,7 +345,7 @@ The middleware order in [application.ts](apps/api/src/application.ts) is archite
 
 | Surface | Authentication accepted | Main responsibility |
 | --- | --- | --- |
-| Browser account and session endpoints | Session cookie where needed | Register, login, logout, session listing/revocation, profile updates, password changes, recovery |
+| Browser account and session endpoints | Session cookie where needed | Register, login, logout, session listing/revocation, profile updates, password changes, recovery-code issuance and redemption |
 | Workspace and room REST endpoints | Session or PAT where a resource scope is required | Organizations, invite codes, memberships, rooms, calendar, room-event history, activity |
 | Personal access token management | Session only | Create, list, and revoke scoped automation tokens |
 | Internal ingest | Ingest shared secret plus event-author ABAC | Persist room events emitted by Durable Objects |
@@ -390,6 +390,7 @@ flowchart TB
 | OIDC refresh token | Hash persisted and consumed on every refresh | Single-use rotation; new token gets a new 30-day expiry |
 | OIDC JWTs | OidcSigner signs RS256; public key served through JWKS | Access and ID tokens expire in 15 minutes |
 | Account-action token | SHA-256 hash persisted and consumed once | Password-reset only; expires in 1 hour |
+| Recovery code | SHA-256 hash persisted; consumed with an atomic find-and-update on the unused state | Eight per account, issued at registration, single use, no expiry; regenerating replaces the whole set |
 
 Passwords are stored separately as Argon2id hashes with explicit memory, time, and parallelism parameters. The raw password hash is never included in a public user response. Personal access token secrets, raw session values, and raw action values are similarly never stored as plaintext.
 
@@ -454,6 +455,7 @@ erDiagram
     USER ||--o{ REFRESH_TOKEN : owns
     OAUTH_CLIENT ||--o{ REFRESH_TOKEN : issues
     USER ||--o{ ACCOUNT_ACTION_TOKEN : redeems
+    USER ||--o{ RECOVERY_CODE : redeems
 
     USER {
         string id
@@ -498,7 +500,8 @@ erDiagram
 
 | Collection / type | Important behavior |
 | --- | --- |
-| users and credentials | User identity and separately stored password / verification state |
+| users and credentials | User identity and separately stored password state. `username` carries a unique index, so collisions are settled by the database rather than a read-before-write |
+| recovery_codes | Eight single-use, SHA-256-hashed account recovery codes per user. Redeemed atomically; regenerating replaces the set |
 | sessions | Opaque browser session record with token hash, user agent, hashed IP, expiry, last use, revocation |
 | orgs and memberships | Top-level tenant, self-service join code, base role, explicit delegated attributes |
 | rooms and room_members | Room metadata plus explicit room role; confidentiality and restriction require this relationship for ordinary members |
@@ -791,7 +794,7 @@ sequenceDiagram
 | ROOM_TICKET_SECRET | API runtime and Worker secret | Runtime / Worker secret | Must be exactly identical; API signs and Durable Object verifies room tickets |
 | INTERNAL_INGEST_SECRET / PERSISTENCE_SECRET | API runtime and Worker secret | Runtime / Worker secret | Same secret under different names; authenticates durable event hand-off |
 | PERSISTENCE_WEBHOOK | Worker variable | Worker deploy | Public API internal-ingest URL |
-| AUTH_DELIVERY_WEBHOOK and AUTH_DELIVERY_SECRET | API runtime | Runtime | Outbound password-reset delivery integration. Unset means no mail is sent and account recovery does not complete |
+| AUTH_DELIVERY_WEBHOOK and AUTH_DELIVERY_SECRET | API runtime | Runtime | Optional outbound delivery for the mailed reset link. Unset means no mail is sent at all; account recovery is unaffected because it runs on recovery codes |
 | SENTRY_DSN / NEXT_PUBLIC_SENTRY_DSN | API runtime / web build | Respective lifecycle | Optional monitoring; SDKs remain inert without DSNs |
 
 ~~~mermaid

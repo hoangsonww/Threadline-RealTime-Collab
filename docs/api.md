@@ -123,7 +123,7 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 | Method & path                              | Auth          | Notes                                                                                                  |
 | ------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------ |
-| `POST /v1/auth/register`                   | none          | Creates a user + session only — no organization. Rate limited 8/hour/IP.                               |
+| `POST /v1/auth/register`                   | none          | Creates a user + session only — no organization. `username` is optional; omit it and the API derives a free one from the email. Returns the account's recovery codes. Rate limited 8/hour/IP. |
 | `POST /v1/auth/login`                      | none          | Rate limited 12/15min/IP.                                                                              |
 | `POST /v1/auth/logout`                     | session       | Revokes the current session only.                                                                      |
 | `POST /v1/auth/password`                   | session       | Revokes every _other_ active session on success.                                                       |
@@ -145,6 +145,12 @@ more honest than reporting it. See [Email delivery](#email-delivery).
 
 `PATCH /v1/auth/me` takes a browser session and refuses a personal access token, including one holding `admin:*`. No
 automation scope should be able to rename the account that issued it, so the boundary is the session rather than a scope.
+
+`username` is optional at registration on purpose. The sign-up form has no handle field, and deriving one client-side
+from the email local part collides the moment two people share it across domains — leaving the second person with an
+error about a field they were never shown. The API derives from the local part, falls back to a random suffix on
+collision (a counter would leak how many accounts already wanted that name), and the unique index on `users.username`
+settles it either way.
 
 ### Email delivery
 

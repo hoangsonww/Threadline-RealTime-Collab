@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. The consequence below about password recovery was resolved by [ADR-0008](0008-recovery-codes-not-knowledge-based-reset.md), which replaced the mailed reset link with recovery codes; the reasoning here is left as written rather than edited after the fact.
 
 ## Date
 
