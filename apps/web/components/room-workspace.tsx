@@ -29,6 +29,7 @@ import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
 import { callShortcutFor, shortcutKey } from "../lib/call-shortcuts";
 import { playSound } from "../lib/sound";
+import { CallShortcutsHint } from "./call-shortcuts-hint";
 import { Skeleton } from "./skeletons";
 
 type Panel = "chat" | "notes" | "board" | "files" | "timeline";
@@ -1056,6 +1057,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               >
                 <MonitorArrowUpIcon size={18} />
               </button>
+              <CallShortcutsHint />
               <button className="control danger" onClick={leave} aria-label="Leave the room" title="Leave the room">
                 <PhoneDisconnectIcon size={18} /> <span className="control-label">Leave call</span>
               </button>

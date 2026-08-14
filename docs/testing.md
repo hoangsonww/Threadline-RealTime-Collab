@@ -85,7 +85,9 @@ two narrower kinds of coverage do exist:
   rather than annoying: keystrokes aimed at an `INPUT`, `TEXTAREA`, `SELECT`, or `contenteditable` are ignored (the room
   shows a chat box and two editors next to the call controls, so typing "meeting" must not mute anyone), and modified
   keys are left to the browser so Cmd+S and Ctrl+V keep working. A final test asserts every action the matcher can
-  return has a display key, so a binding cannot be added without the tooltip that makes it discoverable.
+  return has a display key, so a binding cannot be added without the tooltip that makes it discoverable, and another
+  asserts every catalog entry actually resolves through the matcher — the on-screen shortcut list is rendered from
+  that same catalog, so a key that works but is not listed is impossible while it holds.
 - `lib/sound.test.ts` — the sound engine against a fake `AudioContext` that records the node graph. Asserts that a muted
   client constructs **no** `AudioContext` at all (not merely a silent one), that every envelope is ramped rather than
   switched (a bare `setValueAtTime` to the peak is what puts a click on the front of a cue), that a burst of one cue

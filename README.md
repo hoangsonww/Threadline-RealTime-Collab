@@ -97,7 +97,7 @@ Threadline provides a single, unified workspace for a live call and its durable 
   - Organization dashboard: recent rooms, recent activity, a room-creation modal.
   - A dedicated rooms directory listing every room the caller can see.
   - A live room view with five panels — chat, shared notes, a drawable whiteboard, direct peer-to-peer file transfer, and a durable event timeline — plus a separate shared code editor mode and camera/mic/screen-share controls.
-  - Keyboard shortcuts for the call controls — **M** microphone, **V** camera, **S** screen share — ignored while typing so they can't fire from a chat message. Leaving a call deliberately has no shortcut.
+  - Keyboard shortcuts for the call controls — **M** microphone, **V** camera, **S** screen share — ignored while typing so they can't fire from a chat message, and listed behind a keyboard button in the call bar rather than left for people to discover by accident. Leaving a call deliberately has no shortcut.
   - An organization-wide calendar for scheduling sessions, and an org-wide activity feed aggregating durable events across every visible room.
   - Organization membership management: a shareable, regenerable invite code (owner/admin-controlled, optionally delegable to members), per-member role changes (owner/admin/member) with a last-admin self-demotion guard, and per-room membership management (granting explicit access to restricted rooms).
   - Loading skeletons across every list-driven page (rooms, members, activity, calendar, sessions/tokens/clients) so a still-loading list is never mistaken for a genuinely empty one.

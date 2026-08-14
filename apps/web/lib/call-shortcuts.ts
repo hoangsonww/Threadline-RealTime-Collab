@@ -8,18 +8,29 @@
 
 export type CallShortcut = "toggleMic" | "toggleCamera" | "toggleScreenShare";
 
-const bindings: Record<string, CallShortcut> = {
-  m: "toggleMic",
-  v: "toggleCamera",
-  s: "toggleScreenShare",
-};
+/**
+ * The single source of truth for what is bound and how it is described.
+ *
+ * The matcher, the tooltips, and the on-screen shortcut list all read from here,
+ * so a binding cannot exist without a label — which is the difference between a
+ * shortcut people use and one only its author knows about.
+ */
+export const shortcutCatalog: ReadonlyArray<{ action: CallShortcut; key: string; label: string }> = [
+  { action: "toggleMic", key: "M", label: "Microphone" },
+  { action: "toggleCamera", key: "V", label: "Camera" },
+  { action: "toggleScreenShare", key: "S", label: "Screen share" },
+];
+
+const bindings = Object.fromEntries(shortcutCatalog.map((entry) => [entry.key.toLowerCase(), entry.action])) as Record<
+  string,
+  CallShortcut
+>;
 
 /** Human-readable key for each action, for tooltips and `aria-keyshortcuts`. */
-export const shortcutKey: Record<CallShortcut, string> = {
-  toggleMic: "M",
-  toggleCamera: "V",
-  toggleScreenShare: "S",
-};
+export const shortcutKey = Object.fromEntries(shortcutCatalog.map((entry) => [entry.action, entry.key])) as Record<
+  CallShortcut,
+  string
+>;
 
 type ShortcutEvent = {
   key: string;

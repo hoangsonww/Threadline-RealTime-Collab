@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callShortcutFor, shortcutKey } from "./call-shortcuts";
+import { callShortcutFor, shortcutCatalog, shortcutKey } from "./call-shortcuts";
 
 const element = (tagName: string, contentEditable = false) =>
   ({ tagName, isContentEditable: contentEditable }) as unknown as EventTarget;
@@ -49,6 +49,18 @@ describe("call keyboard shortcuts", () => {
     expect(callShortcutFor({ key: "m", target: element("BUTTON") })).toBe("toggleMic");
     expect(callShortcutFor({ key: "m", target: element("BODY") })).toBe("toggleMic");
     expect(callShortcutFor({ key: "m", target: null })).toBe("toggleMic");
+  });
+
+  it("keeps the on-screen shortcut list and the bindings in step", () => {
+    // The popover renders from shortcutCatalog and the matcher binds from it, so a
+    // key that works but is not listed — or listed but does nothing — is impossible
+    // as long as this holds.
+    for (const entry of shortcutCatalog) {
+      expect(callShortcutFor({ key: entry.key })).toBe(entry.action);
+      expect(callShortcutFor({ key: entry.key.toLowerCase() })).toBe(entry.action);
+      expect(entry.label.length).toBeGreaterThan(0);
+    }
+    expect(new Set(shortcutCatalog.map((entry) => entry.key)).size).toBe(shortcutCatalog.length);
   });
 
   it("publishes a display key for every action it can return", () => {
