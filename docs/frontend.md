@@ -12,6 +12,7 @@ Next.js App Router, no global state library, no server-side data fetching for au
 - [Theme](#theme)
 - [Loading states](#loading-states)
 - [Component inventory](#component-inventory)
+- [Call control shortcuts](#call-control-shortcuts)
 - [Room workspace: connection lifecycle and reconnection](#room-workspace-connection-lifecycle-and-reconnection)
 - [Client-side ABAC is UX only](#client-side-abac-is-ux-only)
 
@@ -200,6 +201,34 @@ This class of bug is invisible in code review — it only manifests during an ac
 | `skeletons.tsx`                                                     | Shimmer loading placeholders (rooms, members, activity, calendar, sessions/tokens/clients) built from the same container classes as the real content, so a still-loading list is never mistaken for a genuinely empty one — see [Loading states](#loading-states) |
 | `theme-sync.tsx`, `theme-preference.tsx`                            | Theme application (mount-time) and the user-facing toggle                                                                                                                                                                                                         |
 | `lib/sound.ts`                                                      | Web Audio cue synthesis and the persisted sound preference — see [Interface sound](../README.md#interface-sound)                                                                                                                                                   |
+| `lib/call-shortcuts.ts`                                             | Pure keyboard-shortcut matcher for the call controls — testable without a DOM, and the place the "don't fire while typing" rule lives                                                                                                                              |
+| `call-shortcuts-hint.tsx`                                           | The keyboard button in the call bar and its shortcut list. Rendered from the same catalog the matcher binds from, so a shortcut cannot exist without being listed                                                                                                   |
+
+## Call control shortcuts
+
+**M** toggles the microphone, **V** the camera, **S** screen sharing. Leaving deliberately has none — a single keystroke
+should not be able to drop someone out of a call.
+
+Two details are worth knowing before changing this:
+
+- **The listener is on `window`, not a container.** The video stage holds no focusable element of its own, so a
+  container-scoped handler would only work after the person happened to click a button. The cost of that choice is that
+  the "am I typing?" check in `lib/call-shortcuts.ts` is load-bearing rather than defensive — the room renders a chat
+  input, a shared-notes textarea, and a code editor at the same time as the controls.
+- **It binds once per connection, with the toggles held in a ref.** `toggleMic` and friends are recreated on every
+  render, and the room re-renders on every presence and speaking-state change, so depending on them directly would add
+  and remove a window listener many times a second.
+
+**Discoverability.** Tooltips and `aria-keyshortcuts` carry the keys, but a tooltip only exists for someone who hovers
+and the ARIA attribute only for someone using a screen reader — which leaves a sighted person who reaches for the mouse
+with no way to learn the shortcuts exist. A keyboard button in the call bar opens a list of them, dismissed by Escape or
+a click outside.
+
+Both the matcher and that list read from one `shortcutCatalog`, so a key that works but is not listed — or is listed but
+does nothing — cannot happen; a test asserts the two stay in step.
+
+The matcher itself is a pure function so the rules can be tested without a DOM — see
+[`testing.md`](testing.md#web-unit-and-layout-tests).
 
 ## Room workspace: connection lifecycle and reconnection
 

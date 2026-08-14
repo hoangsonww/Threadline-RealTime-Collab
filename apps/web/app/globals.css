@@ -4192,6 +4192,77 @@ textarea:focus-visible {
   color: var(--ink);
 }
 
+/* Call shortcut hint ------------------------------------------------------- */
+
+.call-shortcuts {
+  position: relative;
+  display: inline-flex;
+}
+
+.call-shortcuts-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 5;
+  width: max-content;
+  min-width: 190px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+}
+
+.call-shortcuts-popover strong {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.call-shortcuts-popover ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.call-shortcuts-popover li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.call-shortcuts-popover kbd {
+  display: grid;
+  min-width: 24px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--canvas-deep) 70%, var(--surface));
+  color: var(--ink);
+  font-family: var(--font-geist-mono), "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.call-shortcuts-popover p {
+  margin: 10px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 210px;
+}
+
 /* Recovery codes ---------------------------------------------------------- */
 
 .recovery-codes {
