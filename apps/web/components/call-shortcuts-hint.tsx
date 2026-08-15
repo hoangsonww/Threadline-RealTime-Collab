@@ -3,6 +3,7 @@
 import { KeyboardIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { shortcutCatalog } from "../lib/call-shortcuts";
+import { useCoarsePointer } from "../lib/use-coarse-pointer";
 
 /**
  * The visible affordance for the call keyboard shortcuts.
@@ -18,6 +19,7 @@ import { shortcutCatalog } from "../lib/call-shortcuts";
 export function CallShortcutsHint() {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const coarsePointer = useCoarsePointer();
 
   useEffect(() => {
     if (!open) return;
@@ -34,6 +36,11 @@ export function CallShortcutsHint() {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  // Nothing to advertise without a keyboard to press. Rendering nothing rather
+  // than hiding with CSS also keeps the button out of the tab order and off the
+  // accessibility tree on a phone, where it would be a control that cannot work.
+  if (coarsePointer) return null;
 
   return (
     <div className="call-shortcuts" ref={containerRef}>

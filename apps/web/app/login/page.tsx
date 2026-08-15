@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { AuthShell } from "../../components/auth-shell";
+import { RedirectIfAuthenticated } from "../../components/redirect-if-authenticated";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -8,5 +10,11 @@ export const metadata: Metadata = {
 };
 
 export default function LoginPage() {
-  return <AuthShell mode="login" />;
+  return (
+    <Suspense>
+      <RedirectIfAuthenticated>
+        <AuthShell mode="login" />
+      </RedirectIfAuthenticated>
+    </Suspense>
+  );
 }
