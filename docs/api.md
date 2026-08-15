@@ -119,6 +119,14 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 ## Endpoints
 
+### Service
+
+| Method & path | Auth | Notes                                                                                                          |
+| ------------- | ---- | -------------------------------------------------------------------------------------------------------------- |
+| `GET /health` | none | Liveness only. Reports that the process is serving requests; it does **not** check MongoDB, so a healthy response does not by itself prove an authenticated request would succeed. |
+| `GET /openapi.json` | none | The versioned OpenAPI document these tables describe.                                                     |
+| `GET /api-docs`, `GET /api-docs/redoc` | none | Swagger UI and ReDoc, rendered from that same document.                               |
+
 ### Authentication
 
 | Method & path                              | Auth          | Notes                                                                                                  |
@@ -221,6 +229,7 @@ covered by the existing `{ roomId, createdAt }` index, so it is a range scan rat
 | `GET /v1/rooms/:roomId/events`           | session or PAT | `rooms:read` | A bounded page of the **most recent** durable events, oldest-first. `limit` 1–500 (default 200), `before` cursor for older pages. Returns `hasMore` and `nextBefore`. |
 | `GET /v1/rooms/:roomId/members`          | session or PAT | `rooms:read`  | Explicit `RoomMembership` rows only.                                                                                                                                 |
 | `POST /v1/rooms/:roomId/members`         | session or PAT | `rooms:write` | Requires `canRoom(..., "manage")`. Target must already be an org member. Grantable roles: `host`, `member`, `viewer` (not `owner`).                                  |
+| `DELETE /v1/rooms/:roomId/members/:userId` | session or PAT | `rooms:write` | Revokes explicit room access. Leaves the caller's organization membership untouched, so someone removed from a restricted room keeps their workspace seat.            |
 | `GET /v1/orgs/:orgId/members`            | session or PAT | `orgs:read`   |                                                                                                                                                                      |
 | `POST /v1/orgs/:orgId/members`           | session or PAT | `orgs:write`  | Requires `canOrganization(..., "manage_members")`. Only an existing `owner` may assign the `admin` role.                                                             |
 | `GET /v1/orgs/:orgId/calendar`           | session or PAT | `orgs:read`   | Room-attached events filtered through the same room read policy. Supports `?from=` / `?to=` ISO bounds.                                                              |

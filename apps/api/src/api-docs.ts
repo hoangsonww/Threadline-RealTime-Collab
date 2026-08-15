@@ -64,7 +64,12 @@ function shell(title: string, body: string, extraHead = "") {
       .skip-link:focus { transform: translateY(0); }
       .docs-topbar { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; min-height: 68px; padding: 0 clamp(1rem, 4vw, 4.5rem); border-bottom: 1px solid rgba(143, 162, 188, .2); background: rgba(8, 16, 30, .86); box-shadow: 0 12px 32px rgba(1, 7, 17, .18); backdrop-filter: blur(18px) saturate(130%); }
       .brand { display: inline-flex; align-items: center; gap: .72rem; color: #f7faff; font-weight: 800; letter-spacing: -.04em; text-decoration: none; font-size: 1.05rem; white-space: nowrap; }
-      .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #4772a9; border-radius: 8px; background: #12233b; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); color: var(--docs-accent-strong); font-family: "IBM Plex Mono", monospace; font-size: .86rem; }
+      /* The same three-bar mark the product uses, rather than a lone Unicode arrow:
+         a glyph at .86rem left most of a 30px box empty, and rendered differently
+         depending on which monospace font the reader happened to have. */
+      .brand-mark { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; width: 34px; height: 34px; padding: 6px; border: 1px solid #4772a9; border-radius: 10px; background: #12233b; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }
+      .brand-mark i { display: block; border-radius: 1.5px; background: var(--docs-accent-strong); }
+      .brand-mark i:nth-child(2) { opacity: .45; }
       .brand small { color: var(--docs-text-muted); font-weight: 600; letter-spacing: -.01em; font-size: .76rem; }
       .docs-nav { display: flex; align-items: center; gap: .4rem; }
       .docs-nav a { color: var(--docs-text-secondary); border: 1px solid transparent; border-radius: .5rem; padding: .5rem .72rem; text-decoration: none; font-size: .78rem; font-weight: 700; transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease; }
@@ -82,13 +87,19 @@ function shell(title: string, body: string, extraHead = "") {
 
 export const apiDocsCsp = csp;
 
+const brandMark = '<span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>';
+
+/** Shared so the two documentation pages cannot drift apart; only the current view differs. */
+const topbar = (current: "swagger" | "redoc") =>
+  `<header class="docs-topbar">
+      <a class="brand" href="/api-docs" aria-label="Threadline API documentation home">${brandMark}<span>threadline <small>API reference</small></span></a>
+      <nav class="docs-nav" aria-label="Documentation views"><a href="/api-docs"${current === "swagger" ? ' aria-current="page"' : ""}>Swagger UI</a><a href="/api-docs/redoc"${current === "redoc" ? ' aria-current="page"' : ""}>ReDoc</a><a href="/openapi.json">OpenAPI JSON</a><a href="/health">Health</a></nav>
+    </header>`;
+
 export function renderSwaggerDocs() {
   return shell(
     "Threadline API Reference",
-    `<header class="docs-topbar">
-      <a class="brand" href="/api-docs" aria-label="Threadline API documentation home"><span class="brand-mark">↝</span><span>threadline <small>API reference</small></span></a>
-      <nav class="docs-nav" aria-label="Documentation views"><a href="/api-docs" aria-current="page">Swagger UI</a><a href="/api-docs/redoc">ReDoc</a><a href="/openapi.json">OpenAPI JSON</a><a href="/health">Health</a></nav>
-    </header>
+    `${topbar("swagger")}
     <main id="main-content"><div id="swagger-ui" aria-label="Threadline API reference"></div></main>
     <footer class="docs-footer">Interactive API reference · Browser sessions use secure HttpOnly cookies · Automation uses scoped personal access tokens</footer>
     <script src="${swaggerUiBundle}" defer></script>
@@ -212,10 +223,7 @@ export function renderSwaggerDocs() {
 export function renderRedocDocs() {
   return shell(
     "Threadline API Reference — ReDoc",
-    `<header class="docs-topbar">
-      <a class="brand" href="/api-docs" aria-label="Threadline API documentation home"><span class="brand-mark">↝</span><span>threadline <small>API reference</small></span></a>
-      <nav class="docs-nav" aria-label="Documentation views"><a href="/api-docs">Swagger UI</a><a href="/api-docs/redoc" aria-current="page">ReDoc</a><a href="/openapi.json">OpenAPI JSON</a><a href="/health">Health</a></nav>
-    </header>
+    `${topbar("redoc")}
     <main id="main-content"><redoc spec-url="/openapi.json" hide-download-button="false" expand-responses="200,201,202" theme='{"colors":{"primary":{"main":"#71a7ff"},"text":{"primary":"#edf4ff","secondary":"#b6c5da"},"http":{"get":"#4d96df","post":"#45b88d","put":"#d0a451","delete":"#dd6d78"}},"typography":{"fontFamily":"Manrope, ui-sans-serif, system-ui, sans-serif","headings":{"fontFamily":"Manrope, ui-sans-serif, system-ui, sans-serif","fontWeight":"800"},"code":{"fontFamily":"IBM Plex Mono, ui-monospace, monospace"}},"sidebar":{"backgroundColor":"#0d1829","textColor":"#b6c5da","activeTextColor":"#91bbff"},"rightPanel":{"backgroundColor":"#07111e","textColor":"#edf4ff"}}'></redoc></main>
     <footer class="docs-footer">Reference rendered by ReDoc from the same versioned OpenAPI document.</footer>
     <script src="${redocBundle}" defer></script>`,
