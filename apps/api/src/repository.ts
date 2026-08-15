@@ -106,8 +106,16 @@ export interface Repository {
   createAccountActionToken(token: AccountActionToken): Promise<void>;
   consumeAccountActionToken(hash: string, type: AccountActionToken["type"]): Promise<AccountActionToken | undefined>;
   writeRoomEvent(event: RoomEvent): Promise<void>;
-  listRoomEvents(roomId: string): Promise<RoomEvent[]>;
-  listRoomEventsForRooms(roomIds: string[]): Promise<RoomEvent[]>;
+  /**
+   * Most recent events for a room, returned oldest-first.
+   *
+   * `limit` is applied by the store, not the caller. A room's durable log grows
+   * without bound, so selecting in the database is the difference between reading
+   * one page and reading every event the room has ever recorded.
+   */
+  listRoomEvents(roomId: string, options?: { limit: number; before?: Date }): Promise<RoomEvent[]>;
+  /** Most recent events across several rooms, newest-first, bounded by `limit`. */
+  listRoomEventsForRooms(roomIds: string[], options?: { limit: number }): Promise<RoomEvent[]>;
   replaceRecoveryCodes(userId: string, codes: RecoveryCode[]): Promise<void>;
   listRecoveryCodes(userId: string): Promise<RecoveryCode[]>;
   /** Marks the matching unused code used and returns it, or undefined. Must be atomic. */
@@ -364,16 +372,19 @@ export class MemoryRepository implements Repository {
     if (this.roomEvents.some((existing) => existing.id === event.id)) return;
     this.roomEvents.push(event);
   }
-  async listRoomEvents(roomId: string) {
-    return this.roomEvents
-      .filter((event) => event.roomId === roomId)
+  async listRoomEvents(roomId: string, options?: { limit: number; before?: Date }) {
+    const matching = this.roomEvents
+      .filter((event) => event.roomId === roomId && (!options?.before || event.createdAt < options.before))
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    // Take from the end: the newest page, still handed back oldest-first.
+    return options?.limit === undefined ? matching : matching.slice(-options.limit);
   }
-  async listRoomEventsForRooms(roomIds: string[]) {
+  async listRoomEventsForRooms(roomIds: string[], options?: { limit: number }) {
     const allowed = new Set(roomIds);
-    return this.roomEvents
+    const matching = this.roomEvents
       .filter((event) => allowed.has(event.roomId))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return options?.limit === undefined ? matching : matching.slice(0, options.limit);
   }
   async writeAudit(log: AuditLog) {
     this.audits.push(log);
@@ -640,15 +651,22 @@ export class MongoRepository implements Repository {
   async writeRoomEvent(event: RoomEvent) {
     await this.roomEvents.updateOne({ id: event.id }, { $setOnInsert: event }, { upsert: true });
   }
-  async listRoomEvents(roomId: string) {
-    return this.roomEvents.find({ roomId }).sort({ createdAt: 1 }).toArray();
-  }
-  async listRoomEventsForRooms(roomIds: string[]) {
-    if (!roomIds.length) return [];
-    return this.roomEvents
-      .find({ roomId: { $in: roomIds } })
+  async listRoomEvents(roomId: string, options?: { limit: number; before?: Date }) {
+    if (options?.limit === undefined) return this.roomEvents.find({ roomId }).sort({ createdAt: 1 }).toArray();
+    // Sorted descending so the limit selects the newest page, then reversed back to
+    // the oldest-first order every caller expects. The { roomId, createdAt } index
+    // already covers this, so it is a range scan rather than a full collection read.
+    const newestFirst = await this.roomEvents
+      .find({ roomId, ...(options.before ? { createdAt: { $lt: options.before } } : {}) })
       .sort({ createdAt: -1 })
+      .limit(options.limit)
       .toArray();
+    return newestFirst.reverse();
+  }
+  async listRoomEventsForRooms(roomIds: string[], options?: { limit: number }) {
+    if (!roomIds.length) return [];
+    const cursor = this.roomEvents.find({ roomId: { $in: roomIds } }).sort({ createdAt: -1 });
+    return (options?.limit === undefined ? cursor : cursor.limit(options.limit)).toArray();
   }
   async writeAudit(log: AuditLog) {
     await this.audits.insertOne(log);
