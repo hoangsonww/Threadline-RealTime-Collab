@@ -398,11 +398,28 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
           operationId: "listRoomEvents",
           summary: "Read durable room events",
           description:
-            "High-frequency ephemeral collaboration data lives in the Room Durable Object; this endpoint returns the durable timeline only.",
+            "High-frequency ephemeral collaboration data lives in the Room Durable Object; this endpoint returns the durable timeline only.\n\n" +
+            "The response is a bounded page of the **most recent** events, returned oldest-first. A room's durable log grows without limit, so the page is selected in the database rather than trimmed after the fact. Page backwards through history by passing the returned `nextBefore` as `before`; `hasMore` says whether anything older exists.",
           security: identitySecurity,
-          parameters: [pathParameter("roomId", "Room identifier.")],
+          parameters: [
+            pathParameter("roomId", "Room identifier."),
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              description: "Events per page, 1–500. Defaults to 200.",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 200 },
+            },
+            {
+              name: "before",
+              in: "query",
+              required: false,
+              description: "Return only events older than this timestamp. Use `nextBefore` from the previous page.",
+              schema: { type: "string", format: "date-time" },
+            },
+          ],
           responses: {
-            "200": response("Room event timeline.", schema("RoomEventsResponse")),
+            "200": response("A page of the room event timeline.", schema("RoomEventsResponse")),
             "401": errors.Unauthorized,
             "403": errors.Forbidden,
             "404": errors.NotFound,
@@ -1291,8 +1308,20 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
         },
         RoomEventsResponse: {
           type: "object",
-          required: ["events"],
-          properties: { events: { type: "array", items: schema("RoomEvent") } },
+          required: ["events", "hasMore"],
+          properties: {
+            events: {
+              type: "array",
+              description: "A page of the most recent events, oldest-first.",
+              items: schema("RoomEvent"),
+            },
+            hasMore: { type: "boolean", description: "Whether older events exist beyond this page." },
+            nextBefore: {
+              type: "string",
+              format: "date-time",
+              description: "Pass as `before` to fetch the page immediately older than this one.",
+            },
+          },
         },
         OrganizationMembersResponse: {
           type: "object",

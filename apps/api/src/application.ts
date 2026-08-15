@@ -43,6 +43,20 @@ const usernameSchema = z
   .regex(/^[a-z0-9-]+$/i)
   .transform((value) => value.toLowerCase());
 const displayNameSchema = z.string().trim().min(2).max(80);
+/**
+ * How much room history one request returns.
+ *
+ * 200 matches what the web client keeps in memory (`addEvent` slices to the last
+ * 200), so the default page is exactly what the UI can actually display rather
+ * than everything the room has ever recorded and then discarded on arrival.
+ */
+const defaultRoomEventLimit = 200;
+const maximumRoomEventLimit = 500;
+const activityFeedLimit = 100;
+const roomEventQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(maximumRoomEventLimit).default(defaultRoomEventLimit),
+  before: z.coerce.date().optional(),
+});
 const recoveryCodeSchema = z.string().trim().min(8).max(64);
 const recoveryCodeCount = 8;
 const scopeSchema = z.array(z.enum(scopes)).min(1).max(scopes.length);
@@ -1016,7 +1030,16 @@ export function createApp(options: AppOptions, app = express()) {
       if (!access) return clientError(response, 404, "not_found", "Room was not found.");
       if (!canRoom(access.membership, access.room, access.roomMembership, "read"))
         return clientError(response, 403, "forbidden", "You do not have access to this room.");
-      response.json({ events: await options.repository.listRoomEvents(access.room.id) });
+      const { limit, before } = roomEventQuerySchema.parse(request.query);
+      // One extra row answers "is there more?" without a second count query.
+      const page = await options.repository.listRoomEvents(access.room.id, { limit: limit + 1, before });
+      const events = page.length > limit ? page.slice(page.length - limit) : page;
+      response.json({
+        events,
+        // Callers page backwards through history by passing this back as `before`.
+        hasMore: page.length > limit,
+        nextBefore: events.length ? events[0].createdAt : undefined,
+      });
     } catch (error) {
       next(error);
     }
@@ -1438,9 +1461,11 @@ export function createApp(options: AppOptions, app = express()) {
           }),
         )
       ).filter((room): room is NonNullable<typeof room> => Boolean(room));
-      const events = (await options.repository.listRoomEventsForRooms(visibleRooms.map((room) => room.id))).slice(
-        0,
-        100,
+      // Bounded in the database rather than sliced here: this previously read every
+      // event in every visible room into memory to return a hundred of them.
+      const events = await options.repository.listRoomEventsForRooms(
+        visibleRooms.map((room) => room.id),
+        { limit: activityFeedLimit },
       );
       response.json({ events, rooms: visibleRooms.map((room) => ({ id: room.id, name: room.name })) });
     } catch (error) {

@@ -380,6 +380,59 @@ describe("Threadline identity API", () => {
     expect((await request(app).patch("/v1/auth/me").send({ displayName: "Anonymous" })).status).toBe(401);
   });
 
+  it("bounds room history and pages backwards through it with a cursor", async () => {
+    const { app } = await createTestApp();
+    const { agent } = await registerWithOrg(
+      app,
+      { email: "history@example.com", username: "history-user", displayName: "History User" },
+      "History Org",
+    );
+    const organizations = (await agent.get("/v1/auth/me")).body.organizations;
+    const room = await agent.post(`/v1/orgs/${organizations[0].id}/rooms`).send({ name: "long-lived" });
+    const roomId = room.body.room.id;
+
+    // More events than a single page, so the bound is actually exercised.
+    for (let index = 0; index < 12; index += 1) {
+      const ingested = await request(app)
+        .post("/v1/internal/room-events")
+        .set("x-threadline-ingest", "test-ingest-secret")
+        .send({
+          deliveryId: crypto.randomUUID(),
+          roomId,
+          event: {
+            type: "chat",
+            payload: { text: `message ${index}`, username: "History User" },
+            from: (await agent.get("/v1/auth/me")).body.user.id,
+            at: new Date(Date.now() + index * 1000).toISOString(),
+          },
+        });
+      expect(ingested.status).toBe(202);
+    }
+
+    const firstPage = await agent.get(`/v1/rooms/${roomId}/events`).query({ limit: 5 });
+    expect(firstPage.status).toBe(200);
+    expect(firstPage.body.events).toHaveLength(5);
+    expect(firstPage.body.hasMore).toBe(true);
+    // Oldest-first within the page, and the page is the newest slice of history.
+    const times = firstPage.body.events.map((event: { createdAt: string }) => Date.parse(event.createdAt));
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+
+    const older = await agent.get(`/v1/rooms/${roomId}/events`).query({ limit: 5, before: firstPage.body.nextBefore });
+    expect(older.body.events).toHaveLength(5);
+    // A cursor page must not repeat anything the caller already has.
+    const firstIds = new Set(firstPage.body.events.map((event: { id: string }) => event.id));
+    expect(older.body.events.some((event: { id: string }) => firstIds.has(event.id))).toBe(false);
+    expect(Date.parse(older.body.events.at(-1)!.createdAt)).toBeLessThan(Date.parse(firstPage.body.nextBefore));
+
+    // Walking far enough back reaches the start and says so.
+    const oldest = await agent.get(`/v1/rooms/${roomId}/events`).query({ limit: 50 });
+    expect(oldest.body.events.length).toBeGreaterThanOrEqual(13);
+    expect(oldest.body.hasMore).toBe(false);
+
+    expect((await agent.get(`/v1/rooms/${roomId}/events`).query({ limit: 0 })).status).toBe(422);
+    expect((await agent.get(`/v1/rooms/${roomId}/events`).query({ limit: 5000 })).status).toBe(422);
+  });
+
   it("derives a free username when the client does not supply one", async () => {
     const { app } = await createTestApp();
     // Same local part, different domains — the case a client-side "email prefix +
