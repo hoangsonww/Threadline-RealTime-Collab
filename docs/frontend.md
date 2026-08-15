@@ -12,6 +12,7 @@ Next.js App Router, no global state library, no server-side data fetching for au
 - [Theme](#theme)
 - [Loading states](#loading-states)
 - [Component inventory](#component-inventory)
+- [Session-aware public pages](#session-aware-public-pages)
 - [Call control shortcuts](#call-control-shortcuts)
 - [Room workspace: connection lifecycle and reconnection](#room-workspace-connection-lifecycle-and-reconnection)
 - [Client-side ABAC is UX only](#client-side-abac-is-ux-only)
@@ -203,6 +204,29 @@ This class of bug is invisible in code review — it only manifests during an ac
 | `lib/sound.ts`                                                      | Web Audio cue synthesis and the persisted sound preference — see [Interface sound](../README.md#interface-sound)                                                                                                                                                   |
 | `lib/call-shortcuts.ts`                                             | Pure keyboard-shortcut matcher for the call controls — testable without a DOM, and the place the "don't fire while typing" rule lives                                                                                                                              |
 | `call-shortcuts-hint.tsx`                                           | The keyboard button in the call bar and its shortcut list. Rendered from the same catalog the matcher binds from, so a shortcut cannot exist without being listed                                                                                                   |
+| `landing-actions.tsx`                                               | The landing page's calls to action, resolved against the visitor's session — signed in they open the workspace rather than offering a sign-up that only bounces back                                                                                              |
+| `redirect-if-authenticated.tsx`                                     | Sends an already-signed-in visitor away from `/login`, `/register`, `/forgot-password`, and `/reset-password`                                                                                                                                                      |
+| `lib/use-viewer.ts`                                                 | One session lookup shared by both of the above. Every failure resolves to signed-out                                                                                                                                                                               |
+| `lib/use-coarse-pointer.ts`                                         | `(pointer: coarse)` as a hook — asks what the person is holding rather than how wide the window is                                                                                                                                                                 |
+
+## Session-aware public pages
+
+The landing page and the four authentication pages both change shape once a visitor already has a session, because
+offering "Sign in" or "Create workspace" to someone who is signed in leads to a page that only bounces them back.
+
+- `landing-actions.tsx` swaps each call to action: nav → **Open workspace**, the record link → **Go to your rooms**, the
+  closing action → **Open your workspace**, or **Finish setting up** when the account has no workspace yet.
+- `redirect-if-authenticated.tsx` wraps `/login`, `/register`, `/forgot-password`, and `/reset-password`. It honours
+  `?returnTo` when it points inside `/app`, which is the parameter `WorkspaceGate` uses to send people to login in the
+  first place, so a deep link survives the round trip.
+
+Both read `lib/use-viewer.ts`. Two timing choices are deliberate and worth not "fixing" by accident:
+
+- **Neither blocks its render on the session check.** The landing page shows signed-out copy while the answer is still
+  `unknown`, and the auth pages render their form immediately. In both cases the overwhelming majority of visitors are
+  signed out, so blocking would slow everyone to spare a few a single swap or a brief glimpse of a form they are leaving.
+- **Every failure resolves to signed-out**, including a transport error. Not being able to confirm a session is not
+  evidence of one, and guessing "signed in" would send someone to a workspace that immediately bounces them to `/login`.
 
 ## Call control shortcuts
 
@@ -218,6 +242,12 @@ Two details are worth knowing before changing this:
 - **It binds once per connection, with the toggles held in a ref.** `toggleMic` and friends are recreated on every
   render, and the room re-renders on every presence and speaking-state change, so depending on them directly would add
   and remove a window listener many times a second.
+
+**Touch devices see none of this.** The hint button, the `(M)` tooltip suffixes, and the `aria-keyshortcuts` attributes
+are all suppressed on `(pointer: coarse)` — a phone has no key to press, so every one of them advertises something
+unusable. The keydown listener itself stays: it costs nothing when no key is ever pressed, and a tablet with a keyboard
+attached still works. The hint button returns `null` rather than hiding with CSS, keeping it out of the tab order and
+off the accessibility tree instead of leaving a focusable control that does nothing.
 
 **Discoverability.** Tooltips and `aria-keyshortcuts` carry the keys, but a tooltip only exists for someone who hovers
 and the ARIA attribute only for someone using a screen reader — which leaves a sighted person who reaches for the mouse
