@@ -28,6 +28,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, apiOrigin, type Room, type WorkspaceUser } from "../lib/api";
 import { PeerMesh, type RemoteMedia, type SignalPayload } from "../lib/peer-mesh";
 import { callShortcutFor, shortcutKey } from "../lib/call-shortcuts";
+import { useCoarsePointer } from "../lib/use-coarse-pointer";
 import { playSound } from "../lib/sound";
 import { CallShortcutsHint } from "./call-shortcuts-hint";
 import { Skeleton } from "./skeletons";
@@ -255,6 +256,13 @@ function ParticipantTile({
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
   const router = useRouter();
+  // Touch devices get no key hints: a "(M)" in a tooltip nobody can hover, and an
+  // aria-keyshortcuts announcing a key with no keyboard to press it, are both
+  // noise rather than help.
+  const coarsePointer = useCoarsePointer();
+  const keyHint = (action: keyof typeof shortcutKey) => (coarsePointer ? undefined : shortcutKey[action]);
+  const withKey = (label: string, action: keyof typeof shortcutKey) =>
+    coarsePointer ? label : `${label} (${shortcutKey[action]})`;
   const [panel, setPanel] = useState<Panel>("chat");
   const [mode, setMode] = useState<"call" | "editor">("call");
   const [showPanel, setShowPanel] = useState(true);
@@ -1034,8 +1042,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${mic ? "active" : ""}`}
                 onClick={toggleMic}
                 aria-label={mic ? "Mute microphone" : "Unmute microphone"}
-                aria-keyshortcuts={shortcutKey.toggleMic}
-                title={`${mic ? "Mute microphone" : "Unmute microphone"} (${shortcutKey.toggleMic})`}
+                aria-keyshortcuts={keyHint("toggleMic")}
+                title={withKey(mic ? "Mute microphone" : "Unmute microphone", "toggleMic")}
               >
                 {mic ? <MicrophoneIcon size={18} /> : <MicrophoneSlashIcon size={18} />}
               </button>
@@ -1043,8 +1051,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${camera ? "active" : ""}`}
                 onClick={toggleCamera}
                 aria-label={camera ? "Turn off camera" : "Turn on camera"}
-                aria-keyshortcuts={shortcutKey.toggleCamera}
-                title={`${camera ? "Turn off camera" : "Turn on camera"} (${shortcutKey.toggleCamera})`}
+                aria-keyshortcuts={keyHint("toggleCamera")}
+                title={withKey(camera ? "Turn off camera" : "Turn on camera", "toggleCamera")}
               >
                 {camera ? <VideoCameraIcon size={18} /> : <VideoCameraSlashIcon size={18} />}
               </button>
@@ -1052,8 +1060,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 className={`control ${sharing ? "active" : ""}`}
                 onClick={() => void toggleScreenShare()}
                 aria-label={sharing ? "Stop sharing screen" : "Share screen"}
-                aria-keyshortcuts={shortcutKey.toggleScreenShare}
-                title={`${sharing ? "Stop sharing screen" : "Share screen"} (${shortcutKey.toggleScreenShare})`}
+                aria-keyshortcuts={keyHint("toggleScreenShare")}
+                title={withKey(sharing ? "Stop sharing screen" : "Share screen", "toggleScreenShare")}
               >
                 <MonitorArrowUpIcon size={18} />
               </button>
