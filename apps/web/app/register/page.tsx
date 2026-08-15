@@ -1,5 +1,7 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { AuthShell } from "../../components/auth-shell";
+import { RedirectIfAuthenticated } from "../../components/redirect-if-authenticated";
 
 export const metadata: Metadata = {
   title: "Create your account",
@@ -9,5 +11,11 @@ export const metadata: Metadata = {
 };
 
 export default function RegisterPage() {
-  return <AuthShell mode="register" />;
+  return (
+    <Suspense>
+      <RedirectIfAuthenticated>
+        <AuthShell mode="register" />
+      </RedirectIfAuthenticated>
+    </Suspense>
+  );
 }

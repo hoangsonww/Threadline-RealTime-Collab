@@ -1,16 +1,9 @@
-import Link from "next/link";
 import Image from "next/image";
-import {
-  ArrowRightIcon,
-  ArrowUpRightIcon,
-  FingerprintIcon,
-  FolderOpenIcon,
-  ShieldCheckIcon,
-  VideoConferenceIcon,
-} from "@phosphor-icons/react/dist/ssr";
+import { FingerprintIcon, FolderOpenIcon, ShieldCheckIcon, VideoConferenceIcon } from "@phosphor-icons/react/dist/ssr";
 import { Brand } from "../components/brand";
 import { LandingAtmosphere } from "../components/landing-atmosphere";
-import { LandingHeroCopy, LandingReveal, MagneticLink, RoomStory } from "../components/landing-motion";
+import { LandingHeroCopy, LandingReveal, RoomStory } from "../components/landing-motion";
+import { LandingNavAction, LandingPrimaryAction, LandingRecordAction } from "../components/landing-actions";
 import { LandingScene } from "../components/landing-scene";
 
 const structuredData = {
@@ -35,9 +28,7 @@ export default function Home() {
         <div className="landing-nav-links">
           <a href="#record">The record</a>
           <a href="#identity">Identity</a>
-          <Link className="button button-secondary" href="/login">
-            Sign in
-          </Link>
+          <LandingNavAction />
         </div>
       </nav>
       <section className="landing-hero">
@@ -70,9 +61,7 @@ export default function Home() {
             A room should not disappear when the call ends. Threadline keeps the important turns in one durable,
             searchable thread.
           </p>
-          <Link className="inline-link" href="/register">
-            Start a room that lasts <ArrowUpRightIcon size={16} weight="bold" />
-          </Link>
+          <LandingRecordAction />
         </LandingReveal>
         <RoomStory />
       </section>
@@ -137,9 +126,7 @@ export default function Home() {
         <section className="landing-cta">
           <p className="eyebrow">Start with a room</p>
           <h2>Give the work somewhere to continue.</h2>
-          <MagneticLink className="button button-primary" href="/register">
-            Create workspace <ArrowRightIcon size={17} weight="bold" />
-          </MagneticLink>
+          <LandingPrimaryAction />
         </section>
       </LandingReveal>
     </main>
