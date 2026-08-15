@@ -46,6 +46,11 @@ What's covered, concretely:
 - **Recovery is not an account-existence oracle**: a real account with a wrong code and an unregistered email produce byte-identical status and body — asserted by comparing the two responses to each other rather than to a hardcoded string, so the property survives any future rewording.
 - **Regeneration invalidates the previous set**, and a code from before rotation stops working while a new one succeeds.
 - **Recovery codes are never readable after issuance**: the status endpoint's whole serialized body is searched for each plaintext code and for `codeHash`.
+- **Room history is bounded by the store, asserted at the repository rather than over HTTP.** The route fetches
+  `limit + 1` to answer `hasMore` and trims, which means an unbounded store still produces a correct-looking response —
+  removing the bound from `MemoryRepository` left the HTTP test passing. The guarantee is therefore asserted in
+  `repository.test.ts`, where removing it fails three tests. A worthwhile habit: when a handler post-processes what a
+  store returns, the handler's test cannot vouch for the store.
 - **Username uniqueness is enforced by the repository, not just checked by a route**: `repository.test.ts` covers a duplicate create, a rename onto a taken name (asserting the rejected write did not partially apply), keeping your own name across an unrelated update, and reusing a name freed by its previous holder.
 - **Registration derives a free username** when the client sends none, so two people sharing an email local part across domains both get accounts — the collision a client-side "email prefix + suffix" scheme would fail on, with no handle field in the sign-up form to resolve it.
 - **The OpenAPI document is checked for internal consistency**: every `$ref` resolves, no schema is declared that nothing references (the usual residue of deleting an operation and forgetting its request body), and every operation has a unique `operationId`.

@@ -173,6 +173,29 @@ address has an account; it is rate limited 10/15min/IP on top of that.
 The link-based `password-reset/request` / `confirm` pair still exists for deployments that do configure a webhook. With
 no webhook it answers `202` (anything else would leak account existence) and the token expires unused an hour later.
 
+### Reading room history
+
+`GET /v1/rooms/:roomId/events` returns a **bounded page of the most recent** events, oldest-first:
+
+```
+GET /v1/rooms/:roomId/events?limit=200
+  -> { events: [...], hasMore: true, nextBefore: "2026-08-14T21:00:00.000Z" }
+
+GET /v1/rooms/:roomId/events?limit=200&before=2026-08-14T21:00:00.000Z
+  -> the page immediately older than that one
+```
+
+The bound is applied by the database, not by trimming afterwards. A room's durable log grows without limit, and the
+previous behaviour returned all of it — while the web client kept only the last 200 (`addEvent` slices to exactly that)
+and discarded the rest on arrival. The default page is 200 because that is what the client can actually display.
+
+The cross-room activity feed behind `GET /v1/orgs/:orgId/activity` is bounded the same way. It previously read every
+event in every visible room into memory and sliced a hundred rows off the result, so its cost scaled with the whole
+workspace's accumulated history.
+
+Mongo serves both by sorting descending, taking the limit, and reversing back to the oldest-first order callers expect —
+covered by the existing `{ roomId, createdAt }` index, so it is a range scan rather than a collection read.
+
 ### Sessions
 
 | Method & path                    | Auth         | Notes                                              |
@@ -195,7 +218,7 @@ no webhook it answers `202` (anything else would leak account existence) and the
 | `POST /v1/orgs/:orgId/rooms`             | session or PAT | `rooms:write` | Requires `canOrganization(..., "create_room")`. Creator becomes room `owner`.                                                                                        |
 | `GET /v1/rooms/:roomId`                  | session or PAT | `rooms:read`  | Returns the caller's effective role alongside the room.                                                                                                              |
 | `POST /v1/rooms/:roomId/ticket`          | session only   | —             | Issues the 120-second signed WebSocket ticket. Never available to PATs — live sessions are an interactive-browser concept.                                           |
-| `GET /v1/rooms/:roomId/events`           | session or PAT | `rooms:read`  | Durable timeline only (see [`architecture.md`](architecture.md#data-model) for what does/doesn't get persisted).                                                     |
+| `GET /v1/rooms/:roomId/events`           | session or PAT | `rooms:read` | A bounded page of the **most recent** durable events, oldest-first. `limit` 1–500 (default 200), `before` cursor for older pages. Returns `hasMore` and `nextBefore`. |
 | `GET /v1/rooms/:roomId/members`          | session or PAT | `rooms:read`  | Explicit `RoomMembership` rows only.                                                                                                                                 |
 | `POST /v1/rooms/:roomId/members`         | session or PAT | `rooms:write` | Requires `canRoom(..., "manage")`. Target must already be an org member. Grantable roles: `host`, `member`, `viewer` (not `owner`).                                  |
 | `GET /v1/orgs/:orgId/members`            | session or PAT | `orgs:read`   |                                                                                                                                                                      |

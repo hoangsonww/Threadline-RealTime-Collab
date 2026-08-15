@@ -21,6 +21,7 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
   - [Incident: deploying from the wrong branch silently reverted production](#incident-deploying-from-the-wrong-branch-silently-reverted-production)
   - [Near-miss: the username unique index could not build, and this time nothing went down](#near-miss-the-username-unique-index-could-not-build-and-this-time-nothing-went-down)
 - [Runbook: resolving duplicate usernames](#runbook-resolving-duplicate-usernames)
+- [Reads that used to grow without bound](#reads-that-used-to-grow-without-bound)
 - [Known gaps carried here from live testing](#known-gaps-carried-here-from-live-testing)
 
 ## Monitoring and health checks
@@ -211,6 +212,20 @@ duplicates: 0
 Renaming only changes the handle. Email, password hash, and sessions are untouched, and usernames are not used for
 sign-in — so the affected people keep working without noticing. Run the report first regardless; it is the record of
 what changed.
+
+## Reads that used to grow without bound
+
+Two durable-event reads fetched an entire history and discarded most of it, so their cost grew with a room's age rather
+than with the size of the answer:
+
+| Read | Was | Now |
+| ---- | --- | --- |
+| `GET /v1/rooms/:roomId/events` | every event the room ever recorded | most recent `limit` (default 200), selected in the database, with a `before` cursor for older pages |
+| `GET /v1/orgs/:orgId/activity` | every event across every visible room, then `.slice(0, 100)` in JS | most recent 100, selected in the database |
+
+Worth knowing when reading old dashboards or capacity numbers: response sizes and query times for these two endpoints
+are not comparable across that change. If either ever looks slow again, check whether a caller is passing a large
+`limit` before assuming the index regressed.
 
 ## Known gaps carried here from live testing
 
