@@ -2,34 +2,47 @@
 
 ![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat-square&logo=nextdotjs&logoColor=white)
 ![React](https://img.shields.io/badge/React-20232A?style=flat-square&logo=react&logoColor=61DAFB)
+![PWA](https://img.shields.io/badge/PWA-5A0FC8?style=flat-square&logo=pwa&logoColor=white)
+![Web%20Audio%20API](https://img.shields.io/badge/Web_Audio_API-FF4088?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square&logo=nodedotjs&logoColor=white)
 ![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white)
 ![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white)
+![MongoDB%20Atlas](https://img.shields.io/badge/MongoDB_Atlas-023430?style=flat-square&logo=mongodb&logoColor=white)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare_Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)
 ![Durable Objects](https://img.shields.io/badge/Durable_Objects-F38020?style=flat-square&logo=cloudflare&logoColor=white)
+![Wrangler](https://img.shields.io/badge/Wrangler-F38020?style=flat-square&logo=cloudflare&logoColor=white)
 ![Vercel](https://img.shields.io/badge/Vercel-000000?style=flat-square&logo=vercel&logoColor=white)
 ![WebRTC](https://img.shields.io/badge/WebRTC-333333?style=flat-square&logo=webrtc&logoColor=white)
+![STUN%2FTURN](https://img.shields.io/badge/STUN%2FTURN-1A1A1A?style=flat-square)
 ![WebSocket](https://img.shields.io/badge/WebSocket-black?style=flat-square)
 ![OAuth2%20%2F%20OIDC](https://img.shields.io/badge/OAuth2%20%2F%20OIDC-F78C40?style=flat-square&logo=openid&logoColor=white)
 ![JWT](https://img.shields.io/badge/JWT-000000?style=flat-square&logo=jsonwebtokens&logoColor=white)
 ![Zod](https://img.shields.io/badge/Zod-3E67B1?style=flat-square&logo=zod&logoColor=white)
 ![Swagger%20%2F%20OpenAPI](https://img.shields.io/badge/Swagger%20%2F%20OpenAPI-85EA2D?style=flat-square&logo=swagger&logoColor=black)
+![ReDoc](https://img.shields.io/badge/ReDoc-2EC6C6?style=flat-square)
 ![Sentry](https://img.shields.io/badge/Sentry-362D59?style=flat-square&logo=sentry&logoColor=white)
 ![Argon2](https://img.shields.io/badge/Argon2-1E1E1E?style=flat-square)
 ![Helmet](https://img.shields.io/badge/Helmet-0B3D2E?style=flat-square)
 ![Pino](https://img.shields.io/badge/Pino-687634?style=flat-square)
 ![Framer Motion](https://img.shields.io/badge/Framer_Motion-0055FF?style=flat-square&logo=framer&logoColor=white)
 ![GSAP](https://img.shields.io/badge/GSAP-88CE02?style=flat-square&logo=greensock&logoColor=black)
+![Phosphor%20Icons](https://img.shields.io/badge/Phosphor_Icons-1B1B1D?style=flat-square)
+![Google%20Fonts](https://img.shields.io/badge/Google_Fonts-4285F4?style=flat-square&logo=googlefonts&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
+![Kustomize](https://img.shields.io/badge/Kustomize-326CE5?style=flat-square&logo=kubernetes&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white)
 ![GHCR](https://img.shields.io/badge/GHCR-2496ED?style=flat-square&logo=github&logoColor=white)
 ![Trivy](https://img.shields.io/badge/Trivy-1904DA?style=flat-square&logo=trivy&logoColor=white)
 ![Vitest](https://img.shields.io/badge/Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
+![Supertest](https://img.shields.io/badge/Supertest-2C3E50?style=flat-square)
 ![ESLint](https://img.shields.io/badge/ESLint-4B32C3?style=flat-square&logo=eslint&logoColor=white)
 ![Prettier](https://img.shields.io/badge/Prettier-F7B93E?style=flat-square&logo=prettier&logoColor=black)
+![Husky](https://img.shields.io/badge/Husky-0B0B0B?style=flat-square&logo=git&logoColor=white)
+![lint-staged](https://img.shields.io/badge/lint-staged-555555?style=flat-square)
+![npm%20workspaces](https://img.shields.io/badge/npm_workspaces-CB3837?style=flat-square&logo=npm&logoColor=white)
 
 Threadline is a room-centered collaboration workspace for engineering teams. A room is both a live session (video, audio, screen share, whiteboard, chat, shared editor) and a durable record of what happened in it — nothing is thrown away when the call ends. The whole system is three independently deployable services, each with a single job, none of them trusting the others' enforcement — that split, and what it costs and buys, is the actual subject of this repository.
 
@@ -328,37 +341,85 @@ All screenshots below are taken directly against the live deployment. The chat a
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/dashboard.png" alt="Threadline workspace dashboard" width="100%" />
+  <img src="docs/screenshots/home.png" alt="Threadline workspace dashboard" width="100%" />
   <br />
   <sub>Workspace dashboard</sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/room-chat.png" alt="Room chat, two independently connected participants" width="100%" />
+  <img src="docs/screenshots/rooms.png" alt="Threadline rooms directory" width="100%" />
   <br />
-  <sub>Room chat — two participants, live</sub>
+  <sub>Rooms List Page</sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/room-whiteboard.png" alt="Whiteboard stroke synced live between two participants" width="100%" />
+  <img src="docs/screenshots/room-notjoined.png" alt="A Threadline room before joining the call, showing the pre-join screen" width="100%" />
   <br />
-  <sub>Whiteboard — synced live between participants</sub>
+  <sub>Room - Before Joining the Call</sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/settings-general.png" alt="Threadline account settings" width="100%" />
+  <img src="docs/screenshots/room-joined.png" alt="A Threadline room during a live call, with the video stage and call controls" width="100%" />
+  <br />
+  <sub>Room - During the Call</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/calendar.png" alt="Threadline calendar" width="100%" />
+  <br />
+  <sub>Organization Calendar -- Scheduling Page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/activity.png" alt="Threadline organization activity feed" width="100%" />
+  <br />
+  <sub>Activity feed — durable events across every visible room</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/profile.png" alt="Threadline personal profile page" width="100%" />
+  <br />
+  <sub>Personal Profile Page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/members.png" alt="Threadline members" width="100%" />
+  <br />
+  <sub>Workspace Members List Page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Threadline account settings" width="100%" />
   <br />
   <sub>Account settings</sub>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/calendar.png" alt="Threadline organization calendar" width="100%" />
+  <img src="docs/screenshots/login.png" alt="Threadline login" width="100%" />
   <br />
-  <sub>Organization calendar</sub>
+  <sub>Login Page</sub>
 </p>
 
-- Full surface-by-surface set (notes, code editor, file transfer, timeline, membership, every settings page, 404): [`docs/frontend.md`](docs/frontend.md#screens).
-- Swagger UI / ReDoc screenshots: [`docs/api.md`](docs/api.md#interactive-documentation).
+<p align="center">
+  <img src="docs/screenshots/register.png" alt="Threadline register" width="100%" />
+  <br />
+  <sub>Register Page</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/api-swagger.png" alt="Threadline Swagger UI" width="100%" />
+  <br />
+  <sub>API Documentation</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/api-redoc.png" alt="Threadline ReDoc" width="100%" />
+  <br />
+  <sub>API Documentation (ReDoc)</sub>
+</p>
+
+> [!NOTE]
+> Full surface-by-surface set (notes, code editor, file transfer, timeline, membership, every settings page, 404): [`docs/frontend.md`](docs/frontend.md#screens).
 
 ## Project structure
 
