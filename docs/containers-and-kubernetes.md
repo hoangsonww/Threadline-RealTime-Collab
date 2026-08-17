@@ -11,6 +11,7 @@ The latter distinction is intentional. Durable Objects provide single-instance, 
 
 - [Docker Compose](#docker-compose)
 - [Image contracts](#image-contracts)
+  - [Why the realtime image is not Alpine](#why-the-realtime-image-is-not-alpine)
 - [Kubernetes prerequisites](#kubernetes-prerequisites)
 - [Prepare a cluster](#prepare-a-cluster)
 - [Validate and deploy](#validate-and-deploy)
@@ -90,6 +91,20 @@ docker build -f apps/web/Dockerfile \
 
 docker build -f apps/api/Dockerfile -t threadline-api:1.0.0 .
 ```
+
+### Why the realtime image is not Alpine
+
+`apps/api` and `apps/web` build on `node:22-alpine`. `apps/realtime` deliberately does not — it builds on `node:22-bookworm-slim`, and changing that back to save image size will produce a container that cannot start.
+
+The realtime image is the only one that runs a native binary. `wrangler dev --local` spawns **workerd** from `@cloudflare/workerd-linux-<arch>`, and those builds are dynamically linked against glibc. On Alpine, which uses musl, npm installs the package quite happily — the 130 MB binary is present, executable, and at the expected path — but `execve` fails because its ELF interpreter (`/lib/ld-linux-<arch>.so.1`) does not exist. Linux reports a missing interpreter as `ENOENT` **on the binary itself**, so the error names a file that is demonstrably there:
+
+```text
+Error: spawn /app/node_modules/@cloudflare/workerd-linux-arm64/bin/workerd ENOENT
+```
+
+The image still *builds* on Alpine. Nothing fails until a container is started, which is why `docker compose build` on its own cannot catch this class of defect — and why the `containers` CI job now starts the stack, waits for every healthcheck, and smoke-tests each service over HTTP rather than only building.
+
+This only affects the local emulator. Production `apps/realtime` runs on Cloudflare's own infrastructure via `wrangler deploy` and never uses this image.
 
 ## Kubernetes prerequisites
 

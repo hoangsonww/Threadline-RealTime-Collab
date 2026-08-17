@@ -20,6 +20,7 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
   - [Incident: a unique index on a pre-existing collection took down every request](#incident-a-unique-index-on-a-pre-existing-collection-took-down-every-request)
   - [Incident: deploying from the wrong branch silently reverted production](#incident-deploying-from-the-wrong-branch-silently-reverted-production)
   - [Near-miss: the username unique index could not build, and this time nothing went down](#near-miss-the-username-unique-index-could-not-build-and-this-time-nothing-went-down)
+  - [Latent defect: the realtime container could never have started](#latent-defect-the-realtime-container-could-never-have-started)
 - [Runbook: resolving duplicate usernames](#runbook-resolving-duplicate-usernames)
 - [Reads that used to grow without bound](#reads-that-used-to-grow-without-bound)
 - [Known gaps carried here from live testing](#known-gaps-carried-here-from-live-testing)
@@ -188,6 +189,44 @@ unique=true`, 0 duplicates, and a probe insert of a taken username rejected with
 **The transferable lesson:** the joinCode incident's fix was a one-off backfill script; its *durable* fix was making the
 index build non-fatal. The second time the same class of problem occurred, that decision converted an outage into a log
 line. Prefer degrading loudly over failing closed for anything that runs during boot against data you do not control.
+
+### Latent defect: the realtime container could never have started
+
+**Date:** 2026-08-17. **Impact:** none in production — `apps/realtime` runs on Cloudflare, not from this image. The
+damage was confined to `npm run docker:up`, which had never actually worked.
+
+**What happened:** a verification pass ran `docker compose up` for the first time rather than only `docker compose
+build`. `threadline-realtime` crash-looped immediately:
+
+```
+Error: spawn /app/node_modules/@cloudflare/workerd-linux-arm64/bin/workerd ENOENT
+```
+
+The path in that error is not missing. The binary is present, 131 MB, mode `0755`, exactly where the message says.
+
+**Root cause:** `apps/realtime/Dockerfile` built on `node:22-alpine`, matching the other two images. Alpine uses musl;
+the `@cloudflare/workerd-linux-<arch>` builds are dynamically linked against glibc. npm installs the package without
+complaint — its `os`/`cpu` fields match — but `execve` fails because the ELF interpreter it requests,
+`/lib/ld-linux-<arch>.so.1`, does not exist on Alpine. Linux reports a missing *interpreter* as `ENOENT` on the
+*binary*, which is why the error names a file that is plainly there.
+
+**Why it survived every CI run:** the `containers` job ran `docker compose config --quiet` and `docker compose build`.
+Both pass. Nothing fails until a container is started, and nothing ever started one. The image was proven to build and
+was never once proven to run. Because `web` declares `depends_on: realtime: condition: service_healthy`, the entire
+Compose stack was unusable — a documented workflow in the README that could not have worked for anyone.
+
+**Fix:** `apps/realtime/Dockerfile` now builds on `node:22-bookworm-slim`. It is the only image in the repository that
+runs a native binary, so it is the only one that cannot be Alpine; the Dockerfile says so at the top, at length,
+because the next person to notice it is 86 MB larger than its siblings will otherwise "fix" it straight back.
+
+**The durable fix, which matters more:** the `containers` CI job now runs `docker compose up -d --wait`, waits for every
+healthcheck, and smoke-tests each service over HTTP — including `/api/identity/health`, which proves the web tier's
+same-origin proxy genuinely reaches the API container. A build-only check answers "did this image assemble?" when the
+question worth asking is "does this image run?".
+
+**The transferable lesson:** the same shape as the two index incidents above — a step that validates an artifact's
+*construction* was standing in for one that validates its *behavior*. `docker compose build` in CI reads like coverage
+and is not. Any check whose failure mode is "passes right up until someone actually uses it" should be assumed absent.
 
 ## Runbook: resolving duplicate usernames
 
