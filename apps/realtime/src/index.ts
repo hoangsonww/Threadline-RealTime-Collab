@@ -1,5 +1,41 @@
+/**
+ * The realtime tier: a Cloudflare Worker fronting one
+ * {@link RoomDurableObject} per room.
+ *
+ * This service owns WebRTC signalling, presence, and live fan-out. It owns no
+ * durable truth — persistence belongs to `apps/api`, which this Worker reaches
+ * through an authenticated internal ingest webhook with its own retry schedule.
+ *
+ * **The invariant that defines this file:** the Durable Object verifies the
+ * room ticket itself, on every connection, rather than trusting that `apps/api`
+ * authorized the join before issuing one. The two services are separately
+ * deployed and separately reachable, so a check that exists only upstream
+ * protects nothing here. See
+ * [`docs/security.md`](../../../docs/security.md) and
+ * [`docs/realtime.md`](../../../docs/realtime.md).
+ *
+ * Runtime notes for anyone editing this: it runs on workerd, not Node — no
+ * filesystem, no `process`, no Node built-ins. The object hibernates, so
+ * in-memory fields do not survive an idle period and anything that must persist
+ * goes to storage. Tests run under `@cloudflare/vitest-pool-workers` in a real
+ * workerd instance, which is why `apps/realtime` is excluded from the root
+ * vitest config and invoked separately.
+ *
+ * @module
+ */
+
 import { jwtVerify } from "jose";
 
+/**
+ * Bindings and secrets, as declared in `wrangler.toml`.
+ *
+ * `ROOM_TICKET_SECRET` is shared with `apps/api`, which signs the tickets this
+ * Worker verifies. It authorizes exactly that one thing — see the secrets
+ * inventory in [`docs/security.md`](../../../docs/security.md#secrets-inventory).
+ *
+ * The persistence pair is optional: with no webhook configured the room still
+ * works live, it just records nothing.
+ */
 export interface Env {
   ROOM: DurableObjectNamespace;
   ROOM_TICKET_SECRET: string;
@@ -7,12 +43,20 @@ export interface Env {
   PERSISTENCE_SECRET?: string;
 }
 
+/** The claims carried inside a verified room ticket. Never taken from client input. */
 type TicketIdentity = { userId: string; username: string; role: string };
+/** A connected participant: verified identity plus per-connection live state. */
 type Participant = TicketIdentity & {
   connectionId: string;
   joinedAt: string;
   screenSharing: boolean;
 };
+/**
+ * Every message a client may send.
+ *
+ * A closed union rather than an open envelope, so an unrecognised `type` is
+ * rejected by construction instead of falling through to a default branch.
+ */
 type ClientMessage =
   | { type: "heartbeat"; payload?: unknown }
   | { type: "signal"; payload?: unknown; to?: string }
@@ -21,8 +65,17 @@ type ClientMessage =
   | { type: "chat"; payload: { text: string } }
   | { type: "editor"; payload: { document: "code" | "notes"; content: string } }
   | { type: "screen-share"; payload: { active: boolean } };
+/** Every message the room broadcasts back. */
 type ServerMessage = { type: string; payload?: unknown; from?: string; at?: string };
+/** The subset of a room's traffic that is durable enough to send to `apps/api`. */
 type PersistedEvent = { type: string; payload: unknown; from: string; at: string };
+/**
+ * One queued attempt to persist an event upstream.
+ *
+ * Retry state travels with the delivery rather than living in memory, because
+ * the object hibernates between attempts and an in-memory schedule would not
+ * survive that.
+ */
 type Delivery = {
   deliveryId?: string;
   roomId: string;
@@ -32,15 +85,38 @@ type Delivery = {
   queuedAt?: number;
 };
 
+/** Base delay for the exponential persistence retry. */
 const deliveryRetryBaseMs = 30_000;
+/** Retry backoff ceiling — thirty minutes, so a long API outage does not become a hot loop. */
 const deliveryRetryMaxMs = 30 * 60_000;
+/** After this many failures a delivery is dropped rather than retried forever. */
 const deliveryMaxAttempts = 8;
+/**
+ * How long the editor must be idle before its contents are persisted.
+ *
+ * Editor content is a *replace*, not an append: persisting every keystroke
+ * would write thousands of near-identical events for one paragraph.
+ */
 const editorPersistenceQuietMs = 2_000;
+/**
+ * Upper bound on the quiet-period debounce.
+ *
+ * Without it, continuous typing would defer the write indefinitely and a
+ * disconnection mid-paragraph would lose all of it.
+ */
 const editorPersistenceMaxWaitMs = 10_000;
 
+/**
+ * Whether a failed persistence attempt is worth retrying.
+ *
+ * 5xx, plus the 4xx statuses that describe a transient condition rather than a
+ * bad request: 408 timeout, 425 too early, 429 rate limited. A 400 or a 403
+ * will fail identically forever, so retrying it only amplifies the problem.
+ */
 export const isRetryableDeliveryStatus = (status: number) =>
   status >= 500 || status === 408 || status === 425 || status === 429;
 
+/** Exponential backoff for attempt `n`, clamped to `deliveryRetryMaxMs`. */
 export const deliveryRetryDelay = (attemptCount: number) =>
   Math.min(deliveryRetryBaseMs * 2 ** Math.max(0, attemptCount - 1), deliveryRetryMaxMs);
 
@@ -69,6 +145,19 @@ function isClientMessage(value: unknown): value is ClientMessage {
   return false;
 }
 
+/**
+ * One room's live coordinator.
+ *
+ * There is exactly one instance per room, globally — which is what makes
+ * ordering, presence, and fan-out tractable without a consensus protocol. That
+ * choice is recorded in
+ * [ADR 0001](../../../docs/decisions/0001-durable-objects-for-realtime.md), and
+ * the hibernatable SQLite-backed storage it uses in
+ * [ADR 0005](../../../docs/decisions/0005-sqlite-hibernatable-durable-object.md).
+ *
+ * The constructor restores state inside `blockConcurrencyWhile`, so no request
+ * is served against a half-restored object.
+ */
 export class RoomDurableObject implements DurableObject {
   private participants = new Map<string, Participant>();
   private events: Array<{ type: string; payload: unknown; from: string; at: string }> = [];
@@ -88,6 +177,16 @@ export class RoomDurableObject implements DurableObject {
     });
   }
 
+  /**
+   * Entry point for every request routed to this room.
+   *
+   * Verifies the ticket **before** anything else — including before reading the
+   * upgrade header — so an unauthenticated caller cannot reach any other code
+   * path here. A missing ticket is 401, an invalid one is 403.
+   *
+   * Without an `Upgrade: websocket` header this returns a JSON snapshot of the
+   * room instead of opening a socket.
+   */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const roomId = url.pathname.split("/").filter(Boolean).at(-1);
@@ -112,6 +211,18 @@ export class RoomDurableObject implements DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /**
+   * Handles one inbound client message.
+   *
+   * The participant identity comes from the socket's attachment — established
+   * from the verified ticket at accept time — never from the message body. A
+   * socket authorized as one participant therefore cannot emit events
+   * attributed to another, which is the check that a naive implementation
+   * omits.
+   *
+   * Binary frames and anything over 64 KB are rejected outright rather than
+   * parsed.
+   */
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
     const participant = socket.deserializeAttachment() as Participant | null;
     if (!participant || typeof message !== "string" || message.length > 64_000)
@@ -153,6 +264,7 @@ export class RoomDurableObject implements DurableObject {
     if (event.type === "screen-share") this.broadcast({ type: "presence", payload: [...this.participants.values()] });
   }
 
+  /** Removes a departing participant and tells the room. */
   async webSocketClose(socket: WebSocket) {
     const participant = socket.deserializeAttachment() as Participant | null;
     socket.close();
@@ -173,10 +285,18 @@ export class RoomDurableObject implements DurableObject {
       });
   }
 
+  /** Treats a socket error as a departure — the connection is gone either way. */
   async webSocketError(socket: WebSocket) {
     await this.webSocketClose(socket);
   }
 
+  /**
+   * Drains the persistence queue and flushes pending editor writes.
+   *
+   * The alarm is the object's only self-initiated wake-up. It is what makes
+   * retry survive hibernation: a delivery that failed while the room was busy
+   * is retried later even if nobody has reconnected since.
+   */
   async alarm() {
     const queued = await this.state.storage.list<Delivery>({ prefix: "delivery:" });
     const timestamp = Date.now();
@@ -382,6 +502,13 @@ export class RoomDurableObject implements DurableObject {
   }
 }
 
+/**
+ * The Worker entry point.
+ *
+ * Routes a request to the Durable Object for its room. It holds no state and
+ * makes no authorization decision of its own — the ticket check happens inside
+ * {@link RoomDurableObject.fetch}, where the room's identity is unambiguous.
+ */
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);

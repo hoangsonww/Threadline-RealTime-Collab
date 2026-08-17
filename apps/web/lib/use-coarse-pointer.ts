@@ -1,3 +1,10 @@
+/**
+ * Pointer-capability detection, for deciding whether keyboard affordances are
+ * worth showing.
+ *
+ * @module
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";

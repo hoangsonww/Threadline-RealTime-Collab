@@ -99,7 +99,7 @@ const ingestedRoomEventSchema = z
       });
   });
 
-type AppOptions = {
+export type AppOptions = {
   repository: Repository;
   issuer: string;
   webOrigin: string;

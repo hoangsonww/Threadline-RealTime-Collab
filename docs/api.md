@@ -14,7 +14,7 @@ All three are generated from `apps/api/src/openapi.ts`, which is kept in sync wi
 - [Three ways to authenticate](#three-ways-to-authenticate)
 - [Attribute-based access control (ABAC)](#attribute-based-access-control-abac)
 - [Endpoints](#endpoints)
-- [OIDC Authorization Code + PKCE, end to end](#oidc-authorization-code--pkce-end-to-end)
+- [OIDC Authorization Code with PKCE, end to end](#oidc-authorization-code-with-pkce-end-to-end)
 
 ## Interactive documentation
 
@@ -288,7 +288,7 @@ Two things that trip people up: a PAT with `admin:*` still can't call session-on
 | `GET /oauth/userinfo`                   | OIDC access token                                         | Subject claims for the signed-in user.                                                                                           |
 | `GET /v1/oidc/clients`                  | session only                                              | Lists registered first-party clients (never third-party — public client registration is not enabled).                            |
 
-## OIDC Authorization Code + PKCE, end to end
+## OIDC Authorization Code with PKCE, end to end
 
 ```mermaid
 sequenceDiagram

@@ -1,3 +1,25 @@
+/**
+ * The persistence port, and its two implementations.
+ *
+ * `apps/api` needs a database in production but must also be trivially runnable
+ * — for local development and for the test suite — without one. The answer is a
+ * single {@link Repository} interface with an in-memory implementation and a
+ * MongoDB implementation, chosen at startup by whether `MONGODB_URI` is set.
+ * That decision, and the alternatives rejected, are recorded in
+ * [ADR 0003](../../../docs/decisions/0003-repository-interface.md).
+ *
+ * **This is the only file permitted to import the MongoDB driver.** Route
+ * handlers in {@link application} depend on the interface, never on the
+ * engine, which is what lets the same route code run against Atlas in
+ * production and a `Map` under test with no conditional logic anywhere.
+ *
+ * The cost is real and worth stating: every new persistence operation must be
+ * implemented **twice**. TypeScript enforces it — an implementation missing a
+ * method does not compile — but the work is genuine.
+ *
+ * @module
+ */
+
 import { MongoClient, type Collection, type Db } from "mongodb";
 import type {
   AuditLog,
@@ -19,6 +41,14 @@ import type {
   User,
 } from "./domain.js";
 
+/**
+ * The seeded first-party OIDC client.
+ *
+ * There is deliberately no public client registration endpoint, so this is how
+ * the web app comes to be a known client at all. `isFirstParty` is load-bearing
+ * — the authorization flow refuses anything else. See
+ * [ADR 0004](../../../docs/decisions/0004-three-auth-surfaces.md).
+ */
 function firstPartyWebClient(redirectUri = "http://localhost:3000/oidc/callback"): OAuthClient {
   return {
     id: "threadline-web",
@@ -56,12 +86,34 @@ export class UsernameTakenError extends Error {
 /** MongoDB's duplicate-key error code. */
 const duplicateKeyErrorCode = 11000;
 
+/**
+ * Recognises the driver's duplicate-key error *for the username index
+ * specifically*.
+ *
+ * The key pattern is inspected rather than only the error code, so a duplicate
+ * on some other unique index is not misreported as a taken username.
+ */
 const isDuplicateUsernameError = (error: unknown) =>
   typeof error === "object" &&
   error !== null &&
   (error as { code?: unknown }).code === duplicateKeyErrorCode &&
   JSON.stringify((error as { keyPattern?: unknown }).keyPattern ?? {}).includes("username");
 
+/**
+ * Every persistence operation the API performs.
+ *
+ * Implemented by {@link MemoryRepository} and {@link MongoRepository}. Adding a
+ * method here is the first step of any change that touches storage — the two
+ * resulting compile errors then tell you exactly what remains to be written.
+ * Implementing only one is the most common way to break this codebase, and the
+ * failure is asymmetric: miss the in-memory one and every test fails
+ * immediately; miss the Mongo one and everything passes until deployment.
+ *
+ * Methods documented as atomic must genuinely be atomic in
+ * {@link MongoRepository}. A read-then-write in a route handler cannot close
+ * the window, which is precisely why those operations live behind this
+ * interface rather than being composed by callers.
+ */
 export interface Repository {
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserById(id: string): Promise<User | undefined>;
@@ -163,6 +215,24 @@ async function ensureUniqueUsernameIndex(db: Db) {
   }
 }
 
+/**
+ * An in-process implementation backed by plain `Map`s.
+ *
+ * Used by the test suite (`app.test.ts` drives it through `supertest`) and as
+ * the local development default when `MONGODB_URI` is unset.
+ *
+ * Two consequences that regularly surprise people, both expected rather than
+ * broken:
+ *
+ * - **Data does not survive a restart.** `tsx watch` restarts on every source
+ *   edit, discarding every user, session, and room. See
+ *   [`docs/troubleshooting.md`](../../../docs/troubleshooting.md#local-data-users-rooms-sessions-disappears-after-editing-api-code).
+ * - **No indexes exist.** Uniqueness bugs that only a real unique index would
+ *   catch will not reproduce here.
+ *
+ * Falling back to this in production is refused at boot — see
+ * [`docs/security.md`](../../../docs/security.md#boot-time-validation).
+ */
 export class MemoryRepository implements Repository {
   private users = new Map<string, User>();
   private credentials = new Map<string, Credential>();
@@ -403,6 +473,16 @@ export class MemoryRepository implements Repository {
 }
 
 /** Atlas adapter. Its collections mirror the identity-plane collection names in the architecture. */
+/**
+ * The production implementation, backed by MongoDB.
+ *
+ * `connect()` is also where every index is declared — unique email, unique
+ * refresh-token hash, the TTL on account action tokens — so schema management
+ * lives in this one file rather than in a separate migration tool. One index is
+ * built outside the boot-time `Promise.all` and deliberately non-fatally; see
+ * `ensureUniqueUsernameIndex` for why, and `docs/operations.md` for the outage
+ * that taught it.
+ */
 export class MongoRepository implements Repository {
   private constructor(
     private client: MongoClient,

@@ -32,7 +32,7 @@ export const shortcutKey = Object.fromEntries(shortcutCatalog.map((entry) => [en
   string
 >;
 
-type ShortcutEvent = {
+export type ShortcutEvent = {
   key: string;
   ctrlKey?: boolean;
   metaKey?: boolean;

@@ -1,0 +1,117 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "apps/*/typedoc.json"
+      - "apps/*/tsconfig.json"
+      - "typedoc.json"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "apps/*/typedoc.json"
+      - "apps/*/tsconfig.json"
+      - "typedoc.json"
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel an in-flight Pages deployment — a half-published site is worse
+  # than a slightly stale one.
+  group: docs-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  #  Build the reference, and fail on a broken link or a missing export
+  # ──────────────────────────────────────────────────────────────
+  build:
+    name: "📖 Build API reference"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Generate the TypeDoc reference
+        # typedoc.json sets treatValidationWarningsAsErrors, so a `{@link}` to a
+        # symbol that no longer exists, or a public signature referencing an
+        # unexported type, fails here rather than shipping as dead text.
+        run: npm run docs
+
+      - name: Verify the reference is not empty
+        run: |
+          test -f docs/api-reference/index.html || { echo "::error::No index.html was generated."; exit 1; }
+          pages=$(find docs/api-reference -name '*.html' | wc -l)
+          echo "Generated $pages HTML page(s)."
+          if [ "$pages" -lt 10 ]; then
+            echo "::error::Only $pages pages were generated — the entry points are probably misconfigured."
+            exit 1
+          fi
+
+      - name: Export the OpenAPI specification alongside it
+        run: |
+          npm run --silent openapi
+          mkdir -p docs/api-reference/openapi
+          mv openapi.json docs/api-reference/openapi/openapi.json
+          echo "Exported $(node -e "console.log(Object.keys(require('./docs/api-reference/openapi/openapi.json').paths).length)") documented paths."
+
+      - name: Upload the built site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/api-reference
+
+  # ──────────────────────────────────────────────────────────────
+  #  Publish to GitHub Pages (main only)
+  # ──────────────────────────────────────────────────────────────
+  deploy:
+    name: "🚀 Publish to GitHub Pages"
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ──────────────────────────────────────────────────────────────
+  #  Check that documentation links still resolve
+  # ──────────────────────────────────────────────────────────────
+  links:
+    name: "🔗 Check documentation links"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Strict. Only relative in-repository links are checked — external URLs are
+    # deliberately not fetched, so a third-party site being briefly unreachable
+    # cannot turn a pull request red.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify every relative markdown link resolves
+        run: node scripts/check-doc-links.mjs
