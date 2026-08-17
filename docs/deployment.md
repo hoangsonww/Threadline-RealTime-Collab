@@ -103,6 +103,9 @@ Free-provider hostnames do not share a cookie site. The web app includes a Verce
 THREADLINE_API_ORIGIN=https://threadline-api.onrender.com
 NEXT_PUBLIC_API_ORIGIN=/api/identity
 NEXT_PUBLIC_REALTIME_ORIGIN=https://threadline-realtime.<account>.workers.dev
+# Optional — canonical origin for SEO metadata. Defaults to the production
+# host, so set it on preview deployments to stop them claiming production's URL:
+# NEXT_PUBLIC_SITE_URL=https://threadline-web.vercel.app
 # Optional — error/performance monitoring, inert without it:
 # NEXT_PUBLIC_SENTRY_DSN=https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>
 ```
