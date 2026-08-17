@@ -68,7 +68,6 @@ In scope — anything that breaks the guarantees the architecture claims to make
 
 - Denial of service through raw volume, and any load or stress testing against a hosted deployment.
 - Findings from automated scanners with no demonstrated exploit path — an unreviewed tool report is not a vulnerability report.
-- Vulnerabilities in a dependency with no demonstrated reachable path in this codebase. Dependency updates are handled by Dependabot; file a normal issue instead.
 - Missing hardening headers or best-practice deviations with no attacker-observable consequence.
 - Social engineering, physical attacks, or anything targeting the maintainer rather than the software.
 - Self-inflicted configuration: secrets committed by an operator, a deployment run with `COOKIE_SECURE=false` outside local development, or the development placeholder secrets in `compose.yaml`, which are labeled `change-me` precisely because they are not secrets.
