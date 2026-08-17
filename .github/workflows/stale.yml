@@ -1,0 +1,69 @@
+name: Stale
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale:
+    name: "🧹 Sweep stale issues and pull requests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # Issues get a long leash — an unanswered bug report is the
+          # maintainer's debt, not the reporter's.
+          days-before-issue-stale: 90
+          days-before-issue-close: 30
+          stale-issue-label: "status: stale"
+          stale-issue-message: >
+            This issue has had no activity for 90 days. It is not closed and it
+            is not forgotten — this label just marks it as unverified against
+            the current `main`.
+
+
+            If it still reproduces, a comment saying so (ideally with the
+            commit you tested) removes the label and moves it back into triage.
+            Otherwise it will close in 30 days, and reopening it later is
+            always fine.
+          close-issue-message: >
+            Closing after 30 days with no further activity. This is not a
+            judgement about the report's validity — reopen it or file a fresh
+            issue if it still reproduces on current `main`.
+          close-issue-reason: not_planned
+
+          # Pull requests go stale faster: an open PR is a merge conflict
+          # accumulating interest.
+          days-before-pr-stale: 45
+          days-before-pr-close: 21
+          stale-pr-label: "status: stale"
+          stale-pr-message: >
+            This pull request has had no activity for 45 days and is likely
+            drifting from `main`. Rebase and push, or leave a comment about what
+            it is waiting on, and the label comes off.
+
+
+            It will close in 21 days otherwise. The branch is not deleted, so
+            reopening loses nothing.
+          close-pr-message: >
+            Closing after 21 days with no further activity. The branch is
+            untouched — reopen once it is rebased on current `main`.
+          delete-branch: false
+
+          # Anything explicitly parked, or already decided, is exempt.
+          exempt-issue-labels: "status: blocked,status: needs discussion,area: security,type: adr,help wanted,good first issue"
+          exempt-pr-labels: "status: blocked,status: needs discussion,area: security,type: adr"
+          exempt-all-milestones: true
+          exempt-draft-pr: true
+
+          operations-per-run: 100
+          ascending: true

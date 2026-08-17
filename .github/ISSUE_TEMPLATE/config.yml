@@ -1,0 +1,18 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/hoangsonww/Threadline-RealTime-Collab/security/advisories/new
+    about: >-
+      Do not open a public issue for a security vulnerability. Report it
+      privately through a GitHub security advisory — see SECURITY.md for the
+      disclosure process and what is in scope.
+  - name: 💬 Ask a question or discuss an idea
+    url: https://github.com/hoangsonww/Threadline-RealTime-Collab/discussions
+    about: >-
+      For open-ended questions, design discussions, or "is this the right
+      approach" conversations that aren't yet a concrete bug or feature.
+  - name: 📚 Read the documentation first
+    url: https://github.com/hoangsonww/Threadline-RealTime-Collab/tree/main/docs
+    about: >-
+      Architecture, API reference, realtime protocol, security model,
+      operations runbook, and troubleshooting guide.

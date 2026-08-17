@@ -1,0 +1,81 @@
+name: ✨ Feature request
+description: Propose a capability Threadline does not have yet.
+title: "feat: "
+labels: ["type: feature", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Threadline has a deliberately small surface and an explicit
+        [roadmap](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/roadmap.md).
+        The strongest feature requests start from a concrete problem that the
+        current system makes awkward, not from a capability list.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What are you trying to do that Threadline makes hard or impossible
+        today? Describe the situation, not the solution.
+      placeholder: |
+        When an incident room runs past an hour, scrolling back to find the
+        moment someone pasted the failing query means scrolling through
+        hundreds of presence events with no way to filter them out.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to see
+      description: Your proposed solution, if you have one. "I don't know, but here's the problem" is a complete answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: >-
+        Including working around it outside Threadline. If a workaround exists
+        and is merely inconvenient, say so — that's useful prioritization data.
+
+  - type: dropdown
+    id: service
+    attributes:
+      label: Which service would this most likely touch?
+      options:
+        - Not sure
+        - "apps/web — Next.js frontend"
+        - "apps/api — Express identity/persistence tier"
+        - "apps/realtime — Cloudflare Worker + Durable Object"
+        - More than one service
+        - "infra — Docker / Kubernetes / CI"
+        - Documentation
+      default: 0
+
+  - type: dropdown
+    id: architectural
+    attributes:
+      label: Does this look like an architectural decision?
+      description: >-
+        A new dependency, a new data model relationship, or a new trust boundary
+        needs an ADR in `docs/decisions/` before it needs an implementation.
+      options:
+        - "No — it fits inside the existing architecture"
+        - "Yes — new dependency"
+        - "Yes — new data model relationship"
+        - "Yes — new trust boundary between services"
+        - Not sure
+      default: 4
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the [roadmap](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/roadmap.md), and this is not already tracked
+          required: true
+        - label: I read the [ADRs](https://github.com/hoangsonww/Threadline-RealTime-Collab/tree/main/docs/decisions) and this does not contradict a decision already made and recorded
+          required: false

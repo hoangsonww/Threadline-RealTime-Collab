@@ -1,0 +1,114 @@
+# Path-based pull request labels, applied by .github/workflows/labeler.yml.
+#
+# Syntax is actions/labeler v5+ — each label maps to a list of match rules.
+# Every label used here must exist in the repository; .github/labels.yml is the
+# source of truth for that set and is synced by the same workflow.
+
+"area: api":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/api/**"
+
+"area: realtime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/realtime/**"
+
+"area: web":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/web/**"
+
+"area: infra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "infra/**"
+          - "compose.yaml"
+          - "apps/*/Dockerfile"
+          - ".dockerignore"
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/labeler.yml"
+          - ".github/labels.yml"
+
+"area: build":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"
+          - "apps/*/package.json"
+          - "tsconfig*.json"
+          - "apps/*/tsconfig.json"
+          - "eslint.config.mjs"
+          - "prettier.config.mjs"
+          - "vitest.config.ts"
+          - "playwright.config.ts"
+          - "typedoc.json"
+          - "Makefile"
+          - "scripts/**"
+
+"area: dx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".devcontainer/**"
+          - ".husky/**"
+          - ".editorconfig"
+          - ".claude/**"
+          - "AGENTS.md"
+          - "CLAUDE.md"
+          - ".github/copilot-instructions.md"
+
+"area: security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/api/src/policy.ts"
+          - "apps/api/src/security.ts"
+          - "apps/api/src/turn.ts"
+          - "apps/realtime/src/index.ts"
+          - "docs/security.md"
+          - "SECURITY.md"
+
+"type: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+          - "apps/web/app/llms.txt/**"
+          - "apps/web/app/llms-full.txt/**"
+
+"type: adr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/decisions/**"
+
+"type: tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.test.ts"
+          - "**/*.test.tsx"
+          - "**/*.spec.ts"
+          - "**/*.spec.tsx"
+          - "docs/testing.md"
+
+"area: seo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/web/app/robots.ts"
+          - "apps/web/app/sitemap.ts"
+          - "apps/web/app/manifest.ts"
+          - "apps/web/app/opengraph-image.tsx"
+          - "apps/web/app/icon.tsx"
+          - "apps/web/app/apple-icon.tsx"
+          - "apps/web/lib/site.ts"
+          - "apps/web/lib/structured-data.ts"
+
+"area: openapi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/api/src/openapi.ts"
+          - "apps/api/src/api-docs.ts"
+          - "docs/api.md"
