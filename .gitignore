@@ -27,5 +27,9 @@ docs/api-reference
 # Generated OpenAPI export — rebuilt by `npm run openapi`
 /openapi.json
 
+# Per-developer Claude Code overrides. `.claude/settings.json` is shared and
+# committed; this one is local-only and otherwise fails `npm run format:check`.
+.claude/settings.local.json
+
 # macOS Finder metadata
 .DS_Store
