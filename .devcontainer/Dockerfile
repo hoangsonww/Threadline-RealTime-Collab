@@ -35,9 +35,18 @@ RUN set -eux; \
 # Playwright's browsers and their system libraries. `npm run test:browser` only
 # uses Chromium (see the CI workflow), so only Chromium is installed — the full
 # browser set roughly triples the image size for no benefit here.
+#
+# Pinned rather than `@latest`: Playwright refuses to drive a browser revision
+# that its own version did not ship with, so a floating installer means the
+# image silently stops matching the `@playwright/test` in the lockfile on some
+# future rebuild. Keep this in step with that dependency — and note that
+# post-create.sh re-runs `playwright install` against the workspace's own
+# resolved version after `npm ci`, so a drift here self-corrects at container
+# start rather than surfacing as a confusing runtime error.
+ARG PLAYWRIGHT_VERSION=1.62.1
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 RUN set -eux; \
-    npx --yes playwright@latest install --with-deps chromium; \
+    npx --yes "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium; \
     chown -R node:node /home/node/.cache
 
 # Wrangler writes its login and local state under the user's home directory,

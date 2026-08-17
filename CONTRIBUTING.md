@@ -50,11 +50,9 @@ flowchart LR
     CI --> Pipeline["CI / CD Pipeline:<br/>lint, typecheck, audit →<br/>tests → build →<br/>containers + Kubernetes"]
     CI --> Hygiene["PR Hygiene:<br/>title, commits,<br/>description"]
     CI --> Docs["Documentation:<br/>TypeDoc build +<br/>markdown links"]
-    CI --> Scan["CodeQL:<br/>security-extended"]
     Pipeline --> Gate{"every required<br/>job green?"}
     Hygiene --> Gate
     Docs --> Gate
-    Scan --> Gate
     Gate -- yes --> Merge["Ready to merge"]
     Gate -- no --> Fail["Fix and push again —<br/>same PR, not a new one"]
 ```

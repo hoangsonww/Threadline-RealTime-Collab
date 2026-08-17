@@ -84,7 +84,11 @@ jobs:
   deploy:
     name: "🚀 Publish to GitHub Pages"
     needs: [build]
-    if: github.event_name != 'pull_request'
+    # `workflow_dispatch` lets a caller pick any ref, and `github.ref` reflects
+    # whatever they picked — so excluding pull requests alone would still allow
+    # publishing the site from an arbitrary branch or tag. Pages is only ever
+    # published from `main`.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

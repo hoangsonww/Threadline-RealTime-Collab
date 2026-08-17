@@ -43,7 +43,6 @@
 ![Husky](https://img.shields.io/badge/Husky-0B0B0B?style=flat-square&logo=git&logoColor=white)
 ![lint-staged](https://img.shields.io/badge/lint-staged-555555?style=flat-square)
 ![ShellCheck](https://img.shields.io/badge/ShellCheck-89E051?style=flat-square&logo=gnubash&logoColor=black)
-![CodeQL](https://img.shields.io/badge/CodeQL-2088FF?style=flat-square&logo=github&logoColor=white)
 ![Dependabot](https://img.shields.io/badge/Dependabot-025E8C?style=flat-square&logo=dependabot&logoColor=white)
 ![Conventional%20Commits](https://img.shields.io/badge/Conventional_Commits-FE5196?style=flat-square&logo=conventionalcommits&logoColor=white)
 ![TypeDoc](https://img.shields.io/badge/TypeDoc-3178C6?style=flat-square&logo=typescript&logoColor=white)
@@ -327,7 +326,7 @@ This deployment has broken for real, more than once. Every incident — what bro
 - **`apps/web` still has no component or page-level test suite.** What exists there is unit and layout coverage, not rendering coverage: no page is mounted, no fetch-driven state is asserted. Every UI bug found in this project — the WebRTC mesh initiator bug, the stale-presence-after-disconnect race, the whiteboard off-tab stroke loss — was found through live manual testing against the running app, including genuine two-independent-browser-context sessions (two separate cookie jars, two separately registered real users). This remains the largest testing gap in the repository, written down honestly rather than glossed over: [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover).
 - **Layout regressions are asserted numerically, not by screenshot.** `control-centering.spec.ts` measures how far a control's contents sit from the centre of its own content box and fails past half a pixel — the check that would have caught the off-centre tab labels and icon buttons, and one verified to fail when the old CSS is restored rather than merely passing against the new.
 - **Documentation is verified mechanically, not by review alone.** The TypeDoc build treats validation warnings as errors, so a `{@link}` to a symbol that no longer exists or a public signature referencing an unexported type fails CI rather than shipping as dead text. `npm run docs:links` separately checks all 482 relative markdown links and their anchors — including that a heading actually produces the anchor a link claims. External URLs are deliberately not fetched, so a third-party site being briefly down cannot turn a pull request red.
-- **Four gates run on every pull request, not one.** The CI/CD pipeline (lint, typecheck, audit, tests, build, container and Kubernetes validation), PR Hygiene (the title, every commit message, a non-empty description), Documentation (TypeDoc plus link checking), and CodeQL with the `security-extended` query suite over both TypeScript and the workflow files themselves.
+- **Three gates run on every pull request, not one.** The CI/CD pipeline (lint, typecheck, dependency audit, tests, build, container and Kubernetes validation), PR Hygiene (the title, every commit message, a non-empty description), and Documentation (TypeDoc built with strict validation, plus link checking).
 - **Container images are proven to _run_, not merely to build.** The `containers` job starts the full Compose stack, waits for every healthcheck, and smoke-tests each service over HTTP — including the web tier's same-origin proxy actually reaching the API container. A build-only check answers "did this assemble?" when the question worth asking is "does this start?"; the difference was one latent defect that made `npm run docker:up` impossible while CI stayed green ([operations.md](docs/operations.md#latent-defect-the-realtime-container-could-never-have-started)).
 - **Three git hooks, tiered by cost.** `pre-commit` is fast — `lint-staged` plus a guard for committed secrets, `.env` files, merge conflict markers, `debugger`, and focused tests. `commit-msg` validates the conventional-commit format with the same script CI uses, so local and remote enforcement cannot drift. `pre-push` runs typecheck and tests. All three are bypassable on purpose; a bypass belongs in the PR description.
 - **The full local check, mirroring what gates a merge in CI:**
@@ -472,7 +471,7 @@ Threadline/
 ├── .husky/                    Git hooks — pre-commit, commit-msg, pre-push
 ├── .claude/skills/            Task-specific workflows for coding agents
 ├── .github/
-│   ├── workflows/               CI: pipeline, PR hygiene, docs, CodeQL, labels, stale
+│   ├── workflows/               CI: pipeline, PR hygiene, docs, labels, stale
 │   ├── ISSUE_TEMPLATE/          Bug, feature, and documentation issue forms
 │   ├── PULL_REQUEST_TEMPLATE.md
 │   ├── CODEOWNERS               Security-sensitive paths get an explicit owner

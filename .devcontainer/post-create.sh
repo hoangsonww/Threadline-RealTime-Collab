@@ -42,6 +42,15 @@ seed() {
 seed apps/web/.env.example apps/web/.env.local
 seed apps/realtime/.dev.vars.example apps/realtime/.dev.vars
 
+# ── Browser binaries ──────────────────────────────────────────────────────────
+# The image ships Chromium and its system libraries already; this only reconciles
+# the browser revision with whatever @playwright/test `npm ci` just resolved.
+# It is a fast no-op when they already agree, and it is what keeps the pinned
+# ARG in the Dockerfile from becoming a silent mismatch.
+printf '· reconciling the Playwright browser with the locked version\n'
+npx --no-install playwright install chromium 2>/dev/null || \
+  printf '  (skipped — Playwright not resolvable yet)\n'
+
 # ── Verify ────────────────────────────────────────────────────────────────────
 printf '\n· verifying\n'
 if npm run --silent typecheck; then

@@ -49,7 +49,7 @@
       "eslint --fix",
       "prettier --write"
     ],
-    "*.{json,jsonc,md,yml,yaml,css}": "prettier --write",
+    "*.{json,jsonc,yml,yaml,css}": "prettier --write",
     "*.{sh,bash}": "node scripts/lint-shell.mjs"
   },
   "devDependencies": {

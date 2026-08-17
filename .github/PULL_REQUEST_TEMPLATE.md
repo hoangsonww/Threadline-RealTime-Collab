@@ -31,12 +31,12 @@ tests, and what they now assert that they didn't before.
 -->
 
 ```bash
-npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
+npm run check   # or: make check
 ```
 
 - [ ] The full local check above passes
 - [ ] New behavior is covered by a test, or I've explained below why it isn't testable
-- [ ] I verified the UI change by hand against a locally-running app (`apps/web` has no automated suite — see [`docs/testing.md`](../docs/testing.md#everything-the-automated-suites-dont-cover))
+- [ ] I verified the UI change by hand against a locally-running app (`apps/web` has unit and layout coverage but no component- or page-level suite — see [`docs/testing.md`](../docs/testing.md#everything-the-automated-suites-dont-cover))
 
 ## Trust boundaries
 

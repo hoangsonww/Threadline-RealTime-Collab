@@ -99,7 +99,10 @@ jobs:
   # ──────────────────────────────────────────────────────────────
   sync-label-set:
     name: "🔄 Sync label set"
-    if: github.event_name != 'pull_request_target'
+    # Same reasoning as the Pages deployment: a manually dispatched run can name
+    # any ref, and this job writes repository-wide state from a manifest checked
+    # out of that ref. Only `main`'s manifest is authoritative.
+    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

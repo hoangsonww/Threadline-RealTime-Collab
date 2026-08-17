@@ -67,7 +67,6 @@ What it needs:
 | CI / CD Pipeline | ✅ | preflight → lint/format, typecheck, security audit → tests → build → container and Kubernetes validation |
 | PR Hygiene | ✅ | pull request title, every commit message, non-empty description |
 | Documentation | ✅ | TypeDoc builds with strict validation; every relative markdown link resolves |
-| CodeQL | ✅ | `security-extended` queries over TypeScript and the workflows themselves |
 | Labels | — | path labels and a size label |
 
 The container and Kubernetes jobs run on every pull request. `docker compose build` and `npm run k8s:validate` reproduce them locally.
