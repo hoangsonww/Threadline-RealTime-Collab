@@ -9,7 +9,7 @@
     "typecheck": "wrangler types && prettier --write worker-configuration.d.ts && tsc --noEmit"
   },
   "dependencies": {
-    "jose": "^6.0.10"
+    "jose": "^6.2.8"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.12.21",
