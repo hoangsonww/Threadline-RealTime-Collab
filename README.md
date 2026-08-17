@@ -43,7 +43,6 @@
 ![Husky](https://img.shields.io/badge/Husky-0B0B0B?style=flat-square&logo=git&logoColor=white)
 ![lint-staged](https://img.shields.io/badge/lint-staged-555555?style=flat-square)
 ![ShellCheck](https://img.shields.io/badge/ShellCheck-89E051?style=flat-square&logo=gnubash&logoColor=black)
-![Dependabot](https://img.shields.io/badge/Dependabot-025E8C?style=flat-square&logo=dependabot&logoColor=white)
 ![Conventional%20Commits](https://img.shields.io/badge/Conventional_Commits-FE5196?style=flat-square&logo=conventionalcommits&logoColor=white)
 ![TypeDoc](https://img.shields.io/badge/TypeDoc-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![Dev%20Containers](https://img.shields.io/badge/Dev_Containers-2496ED?style=flat-square&logo=docker&logoColor=white)
@@ -475,7 +474,6 @@ Threadline/
 │   ├── ISSUE_TEMPLATE/          Bug, feature, and documentation issue forms
 │   ├── PULL_REQUEST_TEMPLATE.md
 │   ├── CODEOWNERS               Security-sensitive paths get an explicit owner
-│   └── dependabot.yml           Grouped npm, Actions, Docker, and devcontainer updates
 ├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB)
 ├── Makefile                   Task runner — `make help` lists everything
 ├── typedoc.json               Generated API reference configuration
