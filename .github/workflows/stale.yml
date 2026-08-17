@@ -18,7 +18,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/stale@v9
+      - uses: actions/stale@v11
         with:
           # Issues get a long leash — an unanswered bug report is the
           # maintainer's debt, not the reporter's.
