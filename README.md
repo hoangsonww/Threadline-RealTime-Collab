@@ -42,6 +42,15 @@
 ![Prettier](https://img.shields.io/badge/Prettier-F7B93E?style=flat-square&logo=prettier&logoColor=black)
 ![Husky](https://img.shields.io/badge/Husky-0B0B0B?style=flat-square&logo=git&logoColor=white)
 ![lint-staged](https://img.shields.io/badge/lint-staged-555555?style=flat-square)
+![ShellCheck](https://img.shields.io/badge/ShellCheck-89E051?style=flat-square&logo=gnubash&logoColor=black)
+![Dependabot](https://img.shields.io/badge/Dependabot-025E8C?style=flat-square&logo=dependabot&logoColor=white)
+![Conventional%20Commits](https://img.shields.io/badge/Conventional_Commits-FE5196?style=flat-square&logo=conventionalcommits&logoColor=white)
+![TypeDoc](https://img.shields.io/badge/TypeDoc-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![Dev%20Containers](https://img.shields.io/badge/Dev_Containers-2496ED?style=flat-square&logo=docker&logoColor=white)
+![GNU%20Make](https://img.shields.io/badge/GNU_Make-A42E2B?style=flat-square&logo=gnu&logoColor=white)
+![GitHub%20Pages](https://img.shields.io/badge/GitHub_Pages-222222?style=flat-square&logo=githubpages&logoColor=white)
+![Schema.org%20JSON-LD](https://img.shields.io/badge/Schema.org_JSON--LD-2B7BB9?style=flat-square)
+![llms.txt](https://img.shields.io/badge/llms.txt-1A1A1A?style=flat-square)
 ![npm%20workspaces](https://img.shields.io/badge/npm_workspaces-CB3837?style=flat-square&logo=npm&logoColor=white)
 
 Threadline is a room-centered collaboration workspace for engineering teams. A room is both a live session (video, audio, screen share, whiteboard, chat, shared editor) and a durable record of what happened in it — nothing is thrown away when the call ends. The whole system is three independently deployable services, each with a single job, none of them trusting the others' enforcement — that split, and what it costs and buys, is the actual subject of this repository.
@@ -316,10 +325,15 @@ This deployment has broken for real, more than once. Every incident — what bro
 - **Every automated suite runs against the actual runtime it targets rather than a mock of it:** `apps/api`'s HTTP-level integration suite (`supertest` against a real `createApp()` and a real `MemoryRepository`, zero mocking of Express or the repository), `apps/realtime`'s Durable Object suite (real hibernatable WebSocket handlers and SQLite storage inside an actual Workers runtime via `@cloudflare/vitest-pool-workers`), and a small `apps/web` layer covering the WebRTC mesh, the sound engine, and CSS-level layout guards run in real Chromium via Playwright (`npm run test:browser`, also gated in CI).
 - **`apps/web` still has no component or page-level test suite.** What exists there is unit and layout coverage, not rendering coverage: no page is mounted, no fetch-driven state is asserted. Every UI bug found in this project — the WebRTC mesh initiator bug, the stale-presence-after-disconnect race, the whiteboard off-tab stroke loss — was found through live manual testing against the running app, including genuine two-independent-browser-context sessions (two separate cookie jars, two separately registered real users). This remains the largest testing gap in the repository, written down honestly rather than glossed over: [`docs/testing.md`](docs/testing.md#everything-the-automated-suites-dont-cover).
 - **Layout regressions are asserted numerically, not by screenshot.** `control-centering.spec.ts` measures how far a control's contents sit from the centre of its own content box and fails past half a pixel — the check that would have caught the off-centre tab labels and icon buttons, and one verified to fail when the old CSS is restored rather than merely passing against the new.
+- **Documentation is verified mechanically, not by review alone.** The TypeDoc build treats validation warnings as errors, so a `{@link}` to a symbol that no longer exists or a public signature referencing an unexported type fails CI rather than shipping as dead text. `npm run docs:links` separately checks all 482 relative markdown links and their anchors — including that a heading actually produces the anchor a link claims. External URLs are deliberately not fetched, so a third-party site being briefly down cannot turn a pull request red.
+- **Three gates run on every pull request, not one.** The CI/CD pipeline (lint, typecheck, dependency audit, tests, build, container and Kubernetes validation), PR Hygiene (the title, every commit message, a non-empty description), and Documentation (TypeDoc built with strict validation, plus link checking).
+- **Container images are proven to _run_, not merely to build.** The `containers` job starts the full Compose stack, waits for every healthcheck, and smoke-tests each service over HTTP — including the web tier's same-origin proxy actually reaching the API container. A build-only check answers "did this assemble?" when the question worth asking is "does this start?"; the difference was one latent defect that made `npm run docker:up` impossible while CI stayed green ([operations.md](docs/operations.md#latent-defect-the-realtime-container-could-never-have-started)).
+- **Three git hooks, tiered by cost.** `pre-commit` is fast — `lint-staged` plus a guard for committed secrets, `.env` files, merge conflict markers, `debugger`, and focused tests. `commit-msg` validates the conventional-commit format with the same script CI uses, so local and remote enforcement cannot drift. `pre-push` runs typecheck and tests. All three are bypassable on purpose; a bypass belongs in the PR description.
 - **The full local check, mirroring what gates a merge in CI:**
   ```bash
-  npm run format:check && npm run lint && npm run typecheck && npm test && npm run build
+  make check    # or: npm run check
   ```
+  `make check` runs every step even after one fails, then prints a summary — so "your formatting is wrong" never hides "your tests are broken".
 - Full test-suite structure, exactly what's covered, and every known coverage gap: [`docs/testing.md`](docs/testing.md).
 
 ## Observability
@@ -446,13 +460,29 @@ Threadline/
 │       └── src/index.ts        RoomDurableObject
 ├── docs/                      Deep-dive documentation
 │   ├── decisions/               Architecture Decision Records
-│   └── screenshots/             Curated UI screenshots used across the docs
+│   ├── screenshots/             Curated UI screenshots used across the docs
+│   └── api-reference/           Generated TypeDoc symbol reference (gitignored)
 ├── infra/
 │   ├── docker/                  Fixtures consumed by apps/realtime/Dockerfile (dev-only secrets)
 │   └── kubernetes/               Kustomize base + overlays
+├── scripts/                   Repository tooling — bootstrap, check, doctor, clean, guards
+│   └── lib/common.sh            Shared bash helpers
+├── .devcontainer/             Dev container: full toolchain + a MongoDB sidecar
+├── .husky/                    Git hooks — pre-commit, commit-msg, pre-push
+├── .claude/skills/            Task-specific workflows for coding agents
+├── .github/
+│   ├── workflows/               CI: pipeline, PR hygiene, docs, labels, stale
+│   ├── ISSUE_TEMPLATE/          Bug, feature, and documentation issue forms
+│   ├── PULL_REQUEST_TEMPLATE.md
+│   ├── CODEOWNERS               Security-sensitive paths get an explicit owner
+│   └── dependabot.yml           Grouped npm, Actions, Docker, and devcontainer updates
 ├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB)
-├── ARCHITECTURE.md            Root-level architecture reference (this repo's single-file overview)
-└── .github/workflows/         CI pipeline (format, lint, typecheck, test, build)
+├── Makefile                   Task runner — `make help` lists everything
+├── typedoc.json               Generated API reference configuration
+├── AGENTS.md                  Conventions for coding agents (authoritative)
+├── CLAUDE.md                  Claude Code specifics; defers to AGENTS.md
+├── SECURITY.md                Private disclosure process, scope, safe harbor
+└── ARCHITECTURE.md            Root-level architecture reference (this repo's single-file overview)
 ```
 
 - Full monorepo layout, one level deeper, with what each file is responsible for: [`docs/architecture.md`](docs/architecture.md#monorepo-layout).
@@ -462,10 +492,11 @@ Threadline/
 **Prerequisites:** Node.js 22 or newer, and `npm` (this is an npm-workspaces monorepo — one `npm install` at the root installs all three workspaces).
 
 ```bash
-npm install
-cp apps/realtime/.dev.vars.example apps/realtime/.dev.vars
+make setup    # checks your toolchain, installs, wires hooks, seeds env files
 npm run dev
 ```
+
+`make setup` is idempotent and never overwrites an existing env file. The manual equivalent is `npm install` plus copying `apps/web/.env.example` and `apps/realtime/.dev.vars.example` into place. If anything misbehaves, `npm run doctor` diagnoses the environment — Node version, dependency consistency, git hooks, env files, and whether the four ports are free — and prints the remedy for each finding.
 
 Open `http://localhost:3000`. `npm run dev` starts all three services, wired to talk to each other correctly:
 
@@ -508,9 +539,18 @@ The three services need different configuration, summarized here — the full ta
 | `npm run build`                     | Production build (`apps/web` only — API and Worker have no separate build step) |
 | `npm run docker:up` / `docker:down` | Full Docker Compose stack, including a real local MongoDB                       |
 | `npm run k8s:validate`              | Renders both Kustomize overlays without a live cluster                          |
+| `npm run check`                     | The full merge gate: format, lint, typecheck, test, build                       |
+| `npm run doctor`                    | Diagnoses the local environment and prints the fix for anything wrong           |
+| `npm run docs`                      | Generates the TypeDoc symbol reference into `docs/api-reference/`               |
+| `npm run docs:links`                | Verifies every relative markdown link and anchor still resolves                 |
+| `npm run openapi`                   | Writes `openapi.json` from the same builder the live service serves             |
+| `npm run clean`                     | Removes build output and caches, reporting what it reclaimed                    |
 
-- Before opening a PR: `npm run format:check && npm run lint && npm run typecheck && npm test && npm run build` — the same chain CI runs. Details: [`docs/testing.md`](docs/testing.md).
+`make help` prints every task grouped by purpose — the Makefile is a discoverable front door to the npm scripts above plus the multi-step workflows (`make setup`, `make check`, `make ports`, `make ci`).
+
+- Before opening a PR: `make check` — the same chain CI runs, with every step executed even after a failure so one broken step doesn't hide another. Details: [`docs/testing.md`](docs/testing.md).
 - Contributing a change? Start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Working with a coding agent? [`AGENTS.md`](AGENTS.md) holds the conventions they follow.
 
 ## Deploying it yourself
 
@@ -567,6 +607,11 @@ There is some `apps/web` coverage — the WebRTC mesh, the sound engine, and CSS
 | [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md) | Docker Compose local stack and Kubernetes production deployment                                           |
 | [`docs/operations.md`](docs/operations.md)                               | Runbook: health checks, incident triage, full record of every real incident                               |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                     | PR process, coding conventions, what gates a merge                                                        |
+| [`SECURITY.md`](SECURITY.md)                                             | Private vulnerability disclosure, scope, response timeline, safe harbor                                   |
+| [`AGENTS.md`](AGENTS.md)                                                 | Conventions and invariants for coding agents — the authoritative version                                  |
+| [`scripts/README.md`](scripts/README.md)                                 | What each repository script does, and the rules for adding one                                            |
+| [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)                               | Community standards, and where candid technical disagreement sits inside them                             |
+| Generated API reference                                                  | Symbol-level TypeDoc for all three services — `npm run docs`, published to GitHub Pages from `main`       |
 
 ## License
 

@@ -130,6 +130,47 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose build
 
+      # A build that succeeds proves almost nothing about these images. The
+      # realtime image spawns workerd, a native binary, and an image can build
+      # perfectly while that binary is unable to execute — which is exactly what
+      # happened on an Alpine base, where workerd's glibc interpreter is absent
+      # and `execve` fails with a misleading ENOENT. Starting the stack and
+      # waiting for every healthcheck is the cheapest check that would have
+      # caught it.
+      - name: Start the stack and wait for every service to report healthy
+        run: |
+          set -euo pipefail
+          docker compose up -d --wait --wait-timeout 180
+          docker compose ps
+
+      - name: Smoke-test each service over HTTP
+        run: |
+          set -euo pipefail
+          check() {
+            printf '  %-34s' "$1"
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 20 "$1")
+            echo "$code"
+          }
+          check http://localhost:4000/health
+          check http://localhost:8787/health
+          check http://localhost:3000/
+          check http://localhost:3000/llms.txt
+          check http://localhost:3000/robots.txt
+          check http://localhost:3000/sitemap.xml
+          check http://localhost:4000/openapi.json
+          check http://localhost:4000/.well-known/openid-configuration
+          # Proves the web tier's same-origin proxy actually reaches the API
+          # container, which no unit test covers.
+          check http://localhost:3000/api/identity/health
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
   kubernetes:
     name: "☸️ Validate Kubernetes Overlays"
     needs: [build]

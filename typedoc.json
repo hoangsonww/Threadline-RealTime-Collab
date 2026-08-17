@@ -1,0 +1,89 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+
+  // Threadline is an npm-workspaces monorepo whose three services do not share
+  // a compiler configuration: `apps/api` targets Node, `apps/realtime` targets
+  // workerd, and `apps/web` targets the browser through Next.js. The `packages`
+  // strategy is what lets each of them be documented under its own tsconfig
+  // while still producing one navigable site.
+  "entryPointStrategy": "packages",
+  "entryPoints": ["apps/api", "apps/realtime", "apps/web"],
+
+  "out": "docs/api-reference",
+  "name": "Threadline API Reference",
+  "includeVersion": false,
+  "hideGenerator": true,
+
+  "readme": "docs/typedoc-readme.md",
+  "projectDocuments": ["docs/architecture.md", "docs/security.md", "docs/realtime.md", "docs/api.md"],
+
+  "navigationLinks": {
+    "Repository": "https://github.com/hoangsonww/Threadline-RealTime-Collab",
+    "Documentation": "https://github.com/hoangsonww/Threadline-RealTime-Collab/tree/main/docs",
+    "Live app": "https://threadline-rtc.vercel.app"
+  },
+
+  "sourceLinkTemplate": "https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/{gitRevision}/{path}#L{line}",
+
+  // The docs in `projectDocuments` lean on Mermaid for the diagrams that carry
+  // most of their explanatory weight. TypeDoc will not render them as diagrams,
+  // but listing the language here at least highlights the source instead of
+  // warning about every block.
+  "highlightLanguages": [
+    "bash",
+    "console",
+    "css",
+    "diff",
+    "dockerfile",
+    "http",
+    "ini",
+    "javascript",
+    "json",
+    "jsonc",
+    "makefile",
+    "mermaid",
+    "shell",
+    "sql",
+    "text",
+    "toml",
+    "tsx",
+    "typescript",
+    "yaml"
+  ],
+
+  "categorizeByGroup": true,
+  "searchInComments": true,
+  "searchInDocuments": true,
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true,
+    "includeFolders": true
+  },
+
+  "visibilityFilters": {
+    "protected": false,
+    "private": false,
+    "inherited": true,
+    "external": false
+  },
+
+  // Documentation that lies is worse than documentation that is missing, so a
+  // broken `{@link}` or a reference to a symbol that no longer exists fails the
+  // build rather than rendering as dead text.
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "rewrittenLink": true,
+    "notDocumented": false,
+    "unusedMergeModuleWith": true
+  },
+  "treatWarningsAsErrors": false,
+  "treatValidationWarningsAsErrors": true,
+
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+
+  "githubPages": true,
+  "gitRevision": "main"
+}

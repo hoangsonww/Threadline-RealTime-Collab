@@ -7,6 +7,9 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "clean": "node scripts/clean.mjs",
+    "clean:all": "node scripts/clean.mjs --all",
     "dev": "npm run dev:local",
     "dev:api": "npm run dev --workspace=@threadline/api",
     "dev:api:local": "cross-env NODE_ENV=development PORT=4000 WEB_ORIGIN=http://localhost:3000 MONGODB_URI= npm run dev --workspace=@threadline/api",
@@ -17,24 +20,37 @@
     "dev:web:local": "cross-env NEXT_PUBLIC_API_ORIGIN=http://localhost:4000 NEXT_PUBLIC_REALTIME_ORIGIN=http://localhost:8787 npm run dev --workspace=@threadline/web",
     "docker:build": "docker compose build",
     "docker:down": "docker compose down --remove-orphans",
+    "docker:logs": "docker compose logs --follow --tail=100",
     "docker:up": "docker compose up --build",
+    "docs": "typedoc",
+    "docs:check": "typedoc --emit none",
+    "docs:links": "node scripts/check-doc-links.mjs",
+    "docs:serve": "typedoc && node scripts/serve-docs.mjs",
+    "docs:watch": "typedoc --watch",
+    "doctor": "node scripts/doctor.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "k8s:validate": "kubectl kustomize infra/kubernetes/overlays/development > /dev/null && kubectl kustomize infra/kubernetes/overlays/production > /dev/null",
-    "lint": "eslint apps --max-warnings=0",
-    "lint:fix": "eslint apps --fix",
+    "lint": "eslint apps scripts *.mjs --max-warnings=0",
+    "lint:fix": "eslint apps scripts *.mjs --fix",
+    "lint:shell": "node scripts/lint-shell.mjs",
+    "openapi": "npm run openapi --workspace=@threadline/api -- --out openapi.json",
     "prepare": "husky",
     "test": "vitest run --passWithNoTests && npm run test --workspace=@threadline/realtime",
     "test:browser": "playwright test --config=playwright.config.ts",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "verify:commit": "node scripts/verify-commit-message.mjs",
+    "verify:staged": "node scripts/guard-staged.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs,cjs}": [
       "eslint --fix",
       "prettier --write"
     ],
-    "*.{json,md,yml,yaml,css}": "prettier --write"
+    "*.{json,jsonc,yml,yaml,css}": "prettier --write",
+    "*.{sh,bash}": "node scripts/lint-shell.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
@@ -53,6 +69,7 @@
     "prettier": "^3.5.3",
     "prettier-plugin-packagejson": "^2.5.10",
     "supertest": "^7.1.1",
+    "typedoc": "^0.28.20",
     "typescript-eslint": "^8.32.0",
     "vitest": "^3.1.4"
   },

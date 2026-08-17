@@ -1,0 +1,56 @@
+name: 📚 Documentation issue
+description: Something in the docs is wrong, stale, missing, or misleading.
+title: "docs: "
+labels: ["type: docs", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository treats an undocumented behavior change as an incomplete
+        change, so documentation bugs are real bugs. Stale docs are the most
+        valuable kind to report — they're the ones that actively mislead.
+
+  - type: input
+    id: location
+    attributes:
+      label: Where
+      description: Path and heading, or a permalink to the exact lines.
+      placeholder: "docs/security.md#secrets-inventory"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem is it?
+      options:
+        - "Stale — it describes behavior the code no longer has"
+        - "Wrong — it was never accurate"
+        - "Missing — the behavior exists but nothing documents it"
+        - "Unclear — accurate but I couldn't follow it"
+        - "Broken link or broken example"
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What it says vs. what is actually true
+      description: >-
+        For stale or wrong docs, quote the current text and describe the actual
+        behavior. Linking the code that proves it is ideal.
+      placeholder: |
+        `docs/testing.md` says `apps/web` has no automated suite, but
+        `apps/web/lib/sound.test.ts` and two component specs now exist and run
+        under the root vitest config.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true

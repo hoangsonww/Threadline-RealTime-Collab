@@ -1,1 +1,16 @@
+#!/usr/bin/env sh
+# Fast checks only. Anything that takes longer than a couple of seconds belongs
+# in pre-push or in CI — a slow pre-commit hook trains people to use
+# `--no-verify`, and a hook that is routinely bypassed protects nothing.
+
+# husky's shim already invokes this with `sh -e`, so a failing step aborts the
+# hook when git runs it. Setting it here too is not redundant: it makes the file
+# correct when executed directly (`./.husky/pre-commit`, which is how you test
+# one), rather than depending on how the caller happens to invoke it.
+set -e
+
+# eslint --fix + prettier --write, on staged files only.
 npm exec lint-staged
+
+# Secrets, forbidden paths, conflict markers, and debugging leftovers.
+node scripts/guard-staged.mjs

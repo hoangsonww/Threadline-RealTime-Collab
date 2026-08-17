@@ -1,3 +1,25 @@
+/**
+ * The shared vocabulary of the API tier.
+ *
+ * Every entity the system persists is declared here, and nowhere else. The
+ * types are deliberately plain — no classes, no decorators, no ORM annotations
+ * — because they are the contract between four things that must not diverge:
+ * the route handlers in {@link application}, both implementations of
+ * {@link repository.Repository}, the OpenAPI document, and the client.
+ *
+ * When a term here disagrees with [`docs/glossary.md`](../../../docs/glossary.md),
+ * the type is correct and the glossary is stale.
+ *
+ * @module
+ */
+
+/**
+ * Every scope a personal access token or an OAuth grant can carry.
+ *
+ * Declared `as const` so {@link Scope} derives from it — adding a scope to this
+ * array is the only edit required, and a scope invented inline anywhere else
+ * will not typecheck.
+ */
 export const scopes = [
   "rooms:read",
   "rooms:write",
@@ -10,9 +32,27 @@ export const scopes = [
   "admin:*",
 ] as const;
 
+/** A single authorization scope. Derived from {@link scopes}. */
 export type Scope = (typeof scopes)[number];
+
+/**
+ * A user's role within one room, in descending order of authority.
+ *
+ * Distinct from the organization role on {@link Membership}: a user can be a
+ * plain organization `member` and still be the `owner` of a room within it.
+ * The two are combined by `effectiveRoomRole` in {@link policy}, which
+ * is the only place that resolution should happen.
+ */
 export type RoomRole = "owner" | "host" | "member" | "viewer";
 
+/**
+ * A person.
+ *
+ * Note that `email`, `username`, and `displayName` are all disclosed to other
+ * members of the same workspace by the `publicUser` projection — which is why
+ * account recovery cannot be built on knowledge of them. See
+ * {@link RecoveryCode}.
+ */
 export interface User {
   id: string;
   email: string;
@@ -23,13 +63,29 @@ export interface User {
   updatedAt: Date;
 }
 
+/**
+ * A user's password material, kept in a separate record from {@link User} so
+ * that reading a profile never loads a hash into memory alongside it.
+ */
 export interface Credential {
   userId: string;
   passwordHash: string;
   passwordUpdatedAt: Date;
+  /**
+   * Retained for records predating the removal of email verification. Nothing
+   * sets it now — see [ADR 0007](../../../docs/decisions/0007-no-email-verification-without-a-mail-provider.md).
+   */
   emailVerifiedAt?: Date;
 }
 
+/**
+ * A browser session.
+ *
+ * Only the refresh token's hash is stored, so a database disclosure does not
+ * yield usable sessions. `ipHash` is likewise a hash rather than an address:
+ * enough to notice a session moving between networks, not enough to constitute
+ * a location log.
+ */
 export interface Session {
   id: string;
   userId: string;
@@ -39,9 +95,14 @@ export interface Session {
   createdAt: Date;
   expiresAt: Date;
   lastUsedAt: Date;
+  /** Set when the session is signed out or revoked. A revoked session is never deleted. */
   revokedAt?: Date;
 }
 
+/**
+ * A workspace. The top-level tenancy boundary: rooms, memberships, calendar
+ * events, and activity all belong to exactly one.
+ */
 export interface Organization {
   id: string;
   name: string;
@@ -53,6 +114,13 @@ export interface Organization {
   createdAt: Date;
 }
 
+/**
+ * A user's membership of an organization, and the authority it carries.
+ *
+ * The `role` is the base grant; `attributes` are explicit additions on top of
+ * it. Both are read by `canOrganization` in {@link policy} — never
+ * compared directly in a route handler.
+ */
 export interface Membership {
   id: string;
   orgId: string;
@@ -67,9 +135,32 @@ export interface Membership {
   createdAt: Date;
 }
 
+/**
+ * Who can reach a room at all.
+ *
+ * `organization` — any member of the owning organization. `restricted` —
+ * only users with an explicit {@link RoomMembership}.
+ */
 export type RoomVisibility = "organization" | "restricted";
+
+/**
+ * How sensitive a room's contents are.
+ *
+ * `confidential` requires an explicit {@link RoomMembership} even when
+ * {@link RoomVisibility} would otherwise admit the whole organization.
+ * Organization owners and admins can still intervene — see `effectiveRoomRole`.
+ */
 export type RoomClassification = "internal" | "confidential";
 
+/**
+ * A room: simultaneously a live session and the durable record of what
+ * happened in it.
+ *
+ * `visibility` and `classification` were both introduced after the first rooms
+ * existed, so `effectiveRoomRole` in {@link policy} treats their absence
+ * as `organization` / `internal` to keep historical rooms reachable. Changing
+ * that default silently changes who can read old rooms.
+ */
 export interface Room {
   id: string;
   orgId: string;
@@ -82,6 +173,7 @@ export interface Room {
   updatedAt: Date;
 }
 
+/** A scheduled session, optionally bound to a specific {@link Room}. */
 export interface CalendarEvent {
   id: string;
   orgId: string;
@@ -95,6 +187,12 @@ export interface CalendarEvent {
   updatedAt: Date;
 }
 
+/**
+ * Explicit membership of a single room.
+ *
+ * Its presence overrides whatever {@link RoomVisibility} would otherwise grant
+ * — which is how a `restricted` or `confidential` room admits anyone at all.
+ */
 export interface RoomMembership {
   id: string;
   roomId: string;
@@ -103,11 +201,19 @@ export interface RoomMembership {
   joinedAt: Date;
 }
 
+/**
+ * A long-lived bearer token for automation, presented as
+ * `Authorization: Bearer tl_pat_…`.
+ *
+ * Only the hash is stored. `tokenPrefix` holds the leading characters so the
+ * token can be identified in a list without being reconstructible from it.
+ */
 export interface PersonalAccessToken {
   id: string;
   userId: string;
   label: string;
   tokenHash: string;
+  /** Leading characters of the token, for display only. Not sufficient to authenticate. */
   tokenPrefix: string;
   scopes: Scope[];
   expiresAt?: Date;
@@ -116,6 +222,13 @@ export interface PersonalAccessToken {
   createdAt: Date;
 }
 
+/**
+ * A registered OIDC/OAuth client.
+ *
+ * `isFirstParty` is not decoration: there is deliberately no public client
+ * registration, and the authorization flow refuses anything else. See
+ * [ADR 0004](../../../docs/decisions/0004-three-auth-surfaces.md).
+ */
 export interface OAuthClient {
   id: string;
   name: string;
@@ -125,6 +238,14 @@ export interface OAuthClient {
   createdAt: Date;
 }
 
+/**
+ * A pending Authorization Code grant.
+ *
+ * Single-use — `consumeAuthorizationCode` on {@link repository.Repository} both reads and
+ * invalidates it, so replay is prevented by the storage layer rather than by a
+ * check a caller could forget. `codeChallenge` makes PKCE mandatory; there is
+ * no implicit grant.
+ */
 export interface AuthorizationCode {
   codeHash: string;
   clientId: string;
@@ -136,6 +257,7 @@ export interface AuthorizationCode {
   expiresAt: Date;
 }
 
+/** An OAuth refresh token. Single-use in the same sense as {@link AuthorizationCode}. */
 export interface RefreshToken {
   tokenHash: string;
   clientId: string;
@@ -146,6 +268,14 @@ export interface RefreshToken {
   createdAt: Date;
 }
 
+/**
+ * A single-use token for an out-of-band account action.
+ *
+ * Only reaches a user where an operator has configured
+ * `AUTH_DELIVERY_WEBHOOK`; with no mail provider the link-based reset path
+ * simply never completes, which is why {@link RecoveryCode} exists alongside
+ * it. Expiry is enforced by a TTL index created in `MongoRepository.connect`.
+ */
 export interface AccountActionToken {
   tokenHash: string;
   userId: string;
@@ -174,6 +304,7 @@ export interface RecoveryCode {
   usedAt?: Date;
 }
 
+/** An append-only record of a security-relevant action. Never updated or deleted. */
 export interface AuditLog {
   id: string;
   actorId?: string;
@@ -184,6 +315,19 @@ export interface AuditLog {
   createdAt: Date;
 }
 
+/**
+ * One durable event in a room's history — a whiteboard stroke, a message, a
+ * note edit.
+ *
+ * Written by the realtime tier through the authenticated internal ingest path,
+ * never directly by a client. History is bounded in the database rather than in
+ * memory, so a long-lived room cannot grow a Durable Object's heap without
+ * limit; see [`docs/realtime.md`](../../../docs/realtime.md).
+ *
+ * `payload` is `unknown` on purpose: the shape is the realtime protocol's
+ * concern, and narrowing it here would put the protocol's version story in the
+ * wrong tier.
+ */
 export interface RoomEvent {
   id: string;
   roomId: string;
@@ -193,6 +337,13 @@ export interface RoomEvent {
   createdAt: Date;
 }
 
+/**
+ * One fixed-window rate limit bucket.
+ *
+ * Incremented through `incrementRateLimit` on {@link repository.Repository}, which is
+ * atomic in `MongoRepository` — a read-then-write in the route would race under
+ * exactly the concurrent load the limiter exists to handle.
+ */
 export interface RateLimitEntry {
   key: string;
   count: number;

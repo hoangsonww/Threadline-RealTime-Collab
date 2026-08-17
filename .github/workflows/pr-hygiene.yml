@@ -1,0 +1,105 @@
+name: PR Hygiene
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: "✍️ Pull request title"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the title against the commit convention
+        # A squash merge takes its subject from the pull request title, so the
+        # title *is* a commit message on `main`. Same script, same rules as the
+        # commit-msg hook — see scripts/verify-commit-message.mjs.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: node scripts/verify-commit-message.mjs --message "$PR_TITLE"
+
+  commits:
+    name: "📜 Commit messages"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needs the full range between the base and the head to enumerate the
+          # commits this pull request actually introduces.
+          fetch-depth: 0
+
+      - name: Validate every commit introduced by this pull request
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          status=0
+          count=0
+
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            count=$((count + 1))
+            subject=$(git log -1 --pretty=%s "$sha")
+            if ! git log -1 --pretty=%B "$sha" | node scripts/verify-commit-message.mjs -; then
+              echo "::error title=Commit ${sha:0:8}::${subject}"
+              status=1
+            fi
+          done < <(git rev-list "$BASE_SHA..$HEAD_SHA")
+
+          echo "Checked $count commit(s)."
+
+          if [ "$status" -ne 0 ]; then
+            echo ""
+            echo "Rewrite the offending messages with 'git rebase -i $BASE_SHA' and force-push,"
+            echo "or squash-merge this pull request — the title is validated separately."
+          fi
+
+          exit "$status"
+
+  description:
+    name: "📝 Description"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = (pr.body ?? '').trim();
+
+            if (pr.draft) {
+              core.notice('Draft pull request — description check skipped.');
+              return;
+            }
+
+            // Strip the template's HTML comments before measuring, so that an
+            // untouched template does not read as a filled-in description.
+            const written = body
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/^\s*[-*]\s*\[[ xX]\]\s.*$/gm, '')
+              .replace(/^#{1,6}\s.*$/gm, '')
+              .replace(/^```[\s\S]*?```$/gm, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+
+            if (written.length < 40) {
+              core.setFailed(
+                'The pull request description is effectively empty.\n\n' +
+                  'CONTRIBUTING.md asks for *why* the change exists and a short test plan — ' +
+                  'what you ran and what you observed. The diff already shows what changed.',
+              );
+              return;
+            }
+
+            core.notice(`Description looks filled in (${written.length} characters of prose).`);

@@ -1,14 +1,41 @@
+/**
+ * The WebRTC peer mesh.
+ *
+ * Threadline connects every participant to every other participant directly
+ * rather than routing media through a selective forwarding unit. That decision,
+ * and the participant count at which it stops being the right one, is recorded
+ * in [ADR 0002](../../../docs/decisions/0002-webrtc-mesh-not-sfu.md).
+ *
+ * Media never touches Threadline's infrastructure on this path — the realtime
+ * tier carries signalling only, and the only server involvement in media at all
+ * is TURN relay for participants whose networks refuse a direct connection.
+ *
+ * @module
+ */
+
+/**
+ * One signalling message between two peers.
+ *
+ * Relayed verbatim by the realtime tier, which does not interpret it. The
+ * `mediaSources` map travels alongside the SDP because a track's identity says
+ * nothing about which slot it belongs to — a camera track and a screen track
+ * are indistinguishable to the receiver without it.
+ */
 export type SignalPayload = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit | null;
   mediaSources?: Partial<Record<MediaSlot, string>>;
 };
 
+/** The three media roles a participant can publish. Each is independently toggleable. */
 export type MediaSlot = "microphone" | "camera" | "screen";
+/** The local tracks currently being published, by slot. */
 export type LocalMediaTracks = Partial<Record<MediaSlot, MediaStreamTrack>>;
+/** A remote participant's incoming streams, by slot. */
 export type RemoteMedia = Partial<Record<MediaSlot, MediaStream>>;
 
-type PeerMeshOptions = {
+/** Everything the mesh needs from its host component. */
+export type PeerMeshOptions = {
   sendSignal: (peerId: string, payload: SignalPayload) => void;
   onRemoteMedia: (peerId: string, media: RemoteMedia) => void;
   onFile: (peerId: string, file: File) => void;

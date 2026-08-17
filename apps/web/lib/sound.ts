@@ -14,6 +14,7 @@
  * something on falls to turn it back off.
  */
 
+/** Every cue in the palette. Each one has a paired opposite — see the module note above. */
 export type SoundName =
   | "join"
   | "leave"

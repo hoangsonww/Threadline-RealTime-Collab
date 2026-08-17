@@ -165,7 +165,7 @@ A room ticket is a purpose-built, short-lived credential — not a general beare
 - Access tokens: RS256, 15-minute expiry, audience-bound to one client, signed with a stable RSA key (`OIDC_PRIVATE_JWK`, generated once via `npm run generate:oidc-key --workspace=@threadline/api` and never rotated casually — rotating it invalidates every token issued under the old key).
 - Refresh tokens: 30-day expiry, rotated on every use (presenting one invalidates it; only the newly-returned token works), stored as a hash only.
 - Authorization codes: 5-minute expiry, single-use, bound to a PKCE `code_challenge` verified with SHA-256 at exchange time. No implicit grant, no password grant — Authorization Code + PKCE only.
-- Full flow diagram: [`api.md`](api.md#oidc-authorization-code--pkce-end-to-end).
+- Full flow diagram: [`api.md`](api.md#oidc-authorization-code-with-pkce-end-to-end).
 
 ## Password reset tokens
 

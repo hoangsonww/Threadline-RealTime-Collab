@@ -1,0 +1,37 @@
+# Code owners for Threadline.
+#
+# Every path here resolves to a reviewer that GitHub requests automatically on a
+# pull request. The last matching pattern wins, so the specific entries at the
+# bottom of this file override the catch-all at the top.
+#
+# See https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ── Default owner for everything not matched below ────────────────────────────
+*                               @hoangsonww
+
+# ── Services ──────────────────────────────────────────────────────────────────
+/apps/api/                      @hoangsonww
+/apps/realtime/                 @hoangsonww
+/apps/web/                      @hoangsonww
+
+# ── Security-sensitive surfaces ───────────────────────────────────────────────
+# These files define trust boundaries. A change here is never "just a refactor".
+/apps/api/src/policy.ts         @hoangsonww
+/apps/api/src/security.ts       @hoangsonww
+/apps/api/src/turn.ts           @hoangsonww
+/apps/realtime/src/index.ts     @hoangsonww
+/docs/security.md               @hoangsonww
+/SECURITY.md                    @hoangsonww
+
+# ── Build, deploy, and infrastructure ─────────────────────────────────────────
+/.github/                       @hoangsonww
+/.devcontainer/                 @hoangsonww
+/infra/                         @hoangsonww
+/compose.yaml                   @hoangsonww
+/Makefile                       @hoangsonww
+/scripts/                       @hoangsonww
+/apps/*/Dockerfile              @hoangsonww
+
+# ── Architecture decision records ─────────────────────────────────────────────
+# ADRs are immutable once accepted; edits to an existing one need a second look.
+/docs/decisions/                @hoangsonww

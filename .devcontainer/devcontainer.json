@@ -1,0 +1,127 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "Threadline",
+
+  // Compose rather than a bare image, because a useful Threadline environment
+  // is not one container: `apps/api` needs MongoDB, and running it as a
+  // sidecar means `npm run dev` works on first boot without Docker-in-Docker.
+  "dockerComposeFile": "compose.yaml",
+  "service": "workspace",
+  "workspaceFolder": "/workspaces/threadline",
+
+  "features": {
+    // Lets `npm run docker:up`, `docker compose build`, and the container CI
+    // job be reproduced from inside the dev container.
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "dockerDashComposeVersion": "v2"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    },
+    // `npm run k8s:validate` renders both kustomize overlays and needs kubectl.
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
+      "version": "latest",
+      "helm": "none",
+      "minikube": "none"
+    }
+  },
+
+  "forwardPorts": [3000, 4000, 8787, 27017],
+  "portsAttributes": {
+    "3000": { "label": "web — Next.js", "onAutoForward": "notify" },
+    "4000": { "label": "api — Express", "onAutoForward": "silent" },
+    "8787": { "label": "realtime — Wrangler", "onAutoForward": "silent" },
+    "27017": { "label": "MongoDB", "onAutoForward": "silent" },
+    "8080": { "label": "docs — TypeDoc preview", "onAutoForward": "silent" }
+  },
+
+  "onCreateCommand": "bash .devcontainer/post-create.sh",
+  "postAttachCommand": {
+    "greeting": "bash -lc 'make info || true'"
+  },
+
+  "remoteEnv": {
+    // The API talks to the Mongo sidecar by service name. Anything sensitive
+    // stays out of here — this file is committed. See docs/security.md.
+    "MONGODB_URI": "mongodb://mongo:27017/threadline",
+    "NODE_ENV": "development",
+    "PORT": "4000",
+    "WEB_ORIGIN": "http://localhost:3000",
+    "OIDC_ISSUER": "http://localhost:4000",
+    "COOKIE_SECURE": "false",
+    "NEXT_PUBLIC_API_ORIGIN": "http://localhost:4000",
+    "NEXT_PUBLIC_REALTIME_ORIGIN": "http://localhost:8787",
+    "NEXT_TELEMETRY_DISABLED": "1"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-typescript-next",
+        "bradlc.vscode-tailwindcss",
+        "editorconfig.editorconfig",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker",
+        "github.vscode-github-actions",
+        "eamodio.gitlens",
+        "timonwong.shellcheck",
+        "bierner.markdown-mermaid",
+        "yzhang.markdown-all-in-one",
+        "42crunch.vscode-openapi",
+        "vitest.explorer",
+        "ms-playwright.playwright",
+        "streetsidesoftware.code-spell-checker"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.codeActionsOnSave": {
+          "source.fixAll.eslint": "explicit"
+        },
+        "editor.rulers": [120],
+        "files.eol": "\n",
+        "files.insertFinalNewline": true,
+        "files.trimTrailingWhitespace": true,
+        "files.exclude": {
+          "**/.next": true,
+          "**/.wrangler": true,
+          "**/node_modules": true,
+          "docs/api-reference": true
+        },
+        "search.exclude": {
+          "**/package-lock.json": true,
+          "docs/api-reference": true
+        },
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "typescript.enablePromptUseWorkspaceTsdk": true,
+        "eslint.workingDirectories": [{ "mode": "auto" }],
+        "eslint.useFlatConfig": true,
+        "[markdown]": {
+          // Prettier deliberately does not own markdown here — see
+          // .prettierignore, which excludes *.md.
+          "editor.defaultFormatter": null,
+          "editor.formatOnSave": false
+        },
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  // `node` is the non-root user the base image ships with. Running as root
+  // inside a dev container makes every file it creates root-owned on the host
+  // bind mount, which is a recurring and avoidable annoyance.
+  "remoteUser": "node",
+  "containerUser": "node",
+
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb",
+    "storage": "32gb"
+  },
+
+  "waitFor": "onCreateCommand",
+  "shutdownAction": "stopCompose"
+}

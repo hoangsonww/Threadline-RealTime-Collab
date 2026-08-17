@@ -1,0 +1,122 @@
+name: 🐛 Bug report
+description: Something behaves differently from how it is documented or intended.
+title: "bug: "
+labels: ["type: bug", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. Threadline is three independently deployable
+        services that deliberately don't trust each other's enforcement, so the
+        single most useful thing you can tell us is **which service** you saw the
+        problem in and **what the other two were doing at the time**.
+
+        If this is a security vulnerability, **stop** and report it privately
+        instead — see [SECURITY.md](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Symptom
+      description: What did you observe? Describe it the way you'd describe it to someone who cannot see your screen.
+      placeholder: |
+        After the second participant joins a room, the whiteboard strokes drawn
+        by the first participant disappear for everyone until a page reload.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+      description: If the documented behavior differs from what you expected, link the doc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: >-
+        Numbered, from a clean start. A reproduction we can run is worth more
+        than a perfect description of one we can't.
+      placeholder: |
+        1. `npm run dev` with a clean Mongo volume
+        2. Register two accounts, A and B
+        3. As A, create a room and draw one stroke on the whiteboard
+        4. As B, join the same room
+        5. Observe: A's stroke is gone from both clients
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: service
+    attributes:
+      label: Which service does the bug appear to be in?
+      description: A best guess is fine — "not sure" is a legitimate answer and does not slow triage.
+      options:
+        - Not sure
+        - "apps/web — Next.js frontend"
+        - "apps/api — Express identity/persistence tier"
+        - "apps/realtime — Cloudflare Worker + Durable Object"
+        - "infra — Docker / Kubernetes / CI"
+        - Documentation
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: How were you running Threadline?
+      options:
+        - "Local dev (`npm run dev`)"
+        - "Docker Compose (`npm run docker:up`)"
+        - "Dev container"
+        - "Kubernetes"
+        - "The hosted deployment"
+        - Other
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs, errors, or console output
+      description: >-
+        Paste the actual text rather than a screenshot where possible — it is
+        searchable. **Redact any token, cookie value, or connection string.**
+      render: shell
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Output of `node -v && npm -v`, plus browser and OS if this is a frontend bug.
+      placeholder: "node v22.11.0, npm 10.8.2, Chrome 131, macOS 15.1"
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+      placeholder: a9cafa3
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true
+        - label: I checked [`docs/troubleshooting.md`](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/troubleshooting.md)
+          required: true
+        - label: This is not a security vulnerability (those go through a private advisory)
+          required: true

@@ -46,7 +46,7 @@ Terms as this codebase actually uses them — not always the industry-general de
 
 ## O
 
-- **OIDC (OpenID Connect)** — Threadline's first-party identity provider (`/oauth/*`, `/.well-known/openid-configuration`). Authorization Code + PKCE only; no implicit or password grant; first-party clients only (no public third-party registration). See [`api.md`](api.md#oidc-authorization-code--pkce-end-to-end).
+- **OIDC (OpenID Connect)** — Threadline's first-party identity provider (`/oauth/*`, `/.well-known/openid-configuration`). Authorization Code + PKCE only; no implicit or password grant; first-party clients only (no public third-party registration). See [`api.md`](api.md#oidc-authorization-code-with-pkce-end-to-end).
 - **Organization** — The top-level tenant. Registration no longer creates one — a new account joins or creates its first organization on `/onboarding`, via `POST /v1/orgs` (become owner) or `POST /v1/join` (redeem an invite code). A user can belong to more than one.
 
 ## P

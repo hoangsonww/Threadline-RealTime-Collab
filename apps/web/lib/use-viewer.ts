@@ -3,8 +3,16 @@
 import { useEffect, useState } from "react";
 import { apiFetch, type IdentityResponse } from "./api";
 
+/**
+ * Whether the visitor has a session.
+ *
+ * `unknown` is a real state, not a placeholder: the session cookie is HttpOnly,
+ * so the answer requires a round trip and the UI has to render something
+ * honest in the meantime.
+ */
 export type ViewerStatus = "unknown" | "signed-in" | "signed-out";
 
+/** The resolved session state, plus where a signed-in visitor should be sent. */
 export type Viewer = {
   status: ViewerStatus;
   /**

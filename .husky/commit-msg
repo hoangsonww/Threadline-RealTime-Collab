@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Enforces the conventional-commit convention this repository follows.
+# See CONTRIBUTING.md § Commit messages and branches, and
+# scripts/verify-commit-message.mjs for the exact rules and their reasoning.
+
+node scripts/verify-commit-message.mjs "$1"

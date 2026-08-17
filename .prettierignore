@@ -1,5 +1,6 @@
 **/.next/**
 **/.vercel/**
+docs/api-reference/**
 **/.wrangler/**
 **/dist/**
 **/node_modules/**

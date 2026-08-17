@@ -1,0 +1,25 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "@threadline/web",
+  "tsconfig": "./tsconfig.json",
+
+  // Only `lib/` is documented. The App Router directory and the component tree
+  // are a page and view hierarchy rather than a module API — their contract is
+  // the rendered UI, which a symbol reference cannot usefully describe, and
+  // which docs/frontend.md covers instead.
+  "entryPoints": ["lib"],
+  "entryPointStrategy": "expand",
+
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/.vercel/**",
+    "scripts/**"
+  ],
+  "excludeInternal": true,
+  "excludePrivate": true
+}

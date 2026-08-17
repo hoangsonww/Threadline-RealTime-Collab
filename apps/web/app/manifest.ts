@@ -1,17 +1,23 @@
 import type { MetadataRoute } from "next";
+import { siteColors, siteDescription, siteName, siteTagline } from "../lib/site";
 
+/**
+ * The web app manifest. Colors and copy come from `lib/site.ts` so the
+ * installed app, the theme-color meta tag, and the share card cannot disagree
+ * about what this product is called or what color its chrome is.
+ */
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/app",
-    name: "Threadline — persistent engineering collaboration",
-    short_name: "Threadline",
-    description: "A room-centered workspace for live engineering collaboration and durable session records.",
+    name: `${siteName} — ${siteTagline.toLowerCase()}`,
+    short_name: siteName,
+    description: siteDescription,
     start_url: "/app",
     scope: "/",
     display: "standalone",
     orientation: "any",
-    background_color: "#101216",
-    theme_color: "#101216",
+    background_color: siteColors.dark,
+    theme_color: siteColors.dark,
     categories: ["productivity", "business"],
     icons: [
       { src: "/icon", sizes: "32x32", type: "image/png" },

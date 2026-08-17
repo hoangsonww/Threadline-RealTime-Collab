@@ -1,0 +1,57 @@
+# Dev container topology: a workspace container with the toolchain, and the one
+# stateful dependency the API cannot run without.
+#
+# This is deliberately *not* the root compose.yaml. That file builds and runs
+# all three services as production-shaped images, which is the wrong thing for
+# development — inside the dev container you want to run them from source with
+# `npm run dev` and get hot reload. The only thing worth sharing is MongoDB.
+
+name: threadline-devcontainer
+
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # The repository itself, mounted at a fixed path rather than one derived
+      # from the host directory name — `workspaceFolder` in devcontainer.json
+      # has to match this exactly, and host clones are not all named the same.
+      - ..:/workspaces/threadline:cached
+      # Docker-outside-of-docker: the `docker` CLI in here drives the host's
+      # daemon, so `npm run docker:up` builds on the host rather than nesting.
+      - /var/run/docker.sock:/var/run/docker-host.sock
+    command: sleep infinity
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/threadline
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - threadline
+
+  mongo:
+    image: mongo:8.0
+    restart: unless-stopped
+    command: ["mongod", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_DATABASE: threadline
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok", "localhost:27017/admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - threadline
+
+networks:
+  threadline:
+    driver: bridge
+
+volumes:
+  mongo-data:

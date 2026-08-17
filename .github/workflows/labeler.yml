@@ -1,0 +1,176 @@
+name: Labels
+
+on:
+  # `pull_request_target` so that pull requests opened from a fork still get
+  # labelled — the default `GITHUB_TOKEN` on a `pull_request` event from a fork
+  # is read-only. Nothing in this workflow checks out or executes code from the
+  # pull request head, which is what makes that safe.
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+    paths:
+      - ".github/labels.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: labels-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  #  Apply path-based labels from .github/labeler.yml
+  # ──────────────────────────────────────────────────────────────
+  path-labels:
+    name: "🏷️ Path labels"
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          configuration-path: .github/labeler.yml
+          # Labels a contributor added by hand are theirs to keep; this
+          # workflow only ever adds the ones the diff justifies.
+          sync-labels: false
+
+  # ──────────────────────────────────────────────────────────────
+  #  Apply a size label derived from the diff
+  # ──────────────────────────────────────────────────────────────
+  size-label:
+    name: "📏 Size label"
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const number = context.payload.pull_request.number;
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+
+            // Lockfiles and generated type declarations dominate the raw line
+            // count without costing a reviewer anything, so they are excluded
+            // from the size the label reports.
+            const generated = /(^|\/)(package-lock\.json|worker-configuration\.d\.ts|next-env\.d\.ts)$/;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: number,
+              per_page: 100,
+            });
+
+            const changed = files
+              .filter((file) => !generated.test(file.filename))
+              .reduce((total, file) => total + file.additions + file.deletions, 0);
+
+            const bucket =
+              changed < 20 ? 'XS' : changed < 100 ? 'S' : changed < 500 ? 'M' : changed < 1000 ? 'L' : 'XL';
+            const wanted = `size: ${bucket}`;
+
+            const stale = pr.labels
+              .map((label) => label.name)
+              .filter((name) => name.startsWith('size: ') && name !== wanted);
+
+            for (const name of stale) {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name })
+                .catch(() => {});
+            }
+
+            if (!pr.labels.some((label) => label.name === wanted)) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [wanted] });
+            }
+
+            core.notice(`${changed} reviewable changed lines → ${wanted}`);
+
+  # ──────────────────────────────────────────────────────────────
+  #  Reconcile the repository's label set with .github/labels.yml
+  # ──────────────────────────────────────────────────────────────
+  sync-label-set:
+    name: "🔄 Sync label set"
+    # Same reasoning as the Pages deployment: a manually dispatched run can name
+    # any ref, and this job writes repository-wide state from a manifest checked
+    # out of that ref. Only `main`'s manifest is authoritative.
+    if: github.event_name != 'pull_request_target' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Convert the label manifest to JSON
+        # `js-yaml` ships a CLI that emits JSON, which github-script can read
+        # without this repository taking on a YAML parser as a dependency.
+        run: npx --yes js-yaml@4 .github/labels.yml > "$RUNNER_TEMP/labels.json"
+
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { owner, repo } = context.repo;
+
+            const wanted = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/labels.json`, 'utf8'));
+            const existing = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const byName = new Map(existing.map((label) => [label.name, label]));
+
+            let created = 0;
+            let updated = 0;
+
+            for (const label of wanted) {
+              const current = byName.get(label.name);
+              if (!current) {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description ?? '',
+                });
+                created += 1;
+                continue;
+              }
+
+              const drifted =
+                current.color.toLowerCase() !== label.color.toLowerCase() ||
+                (current.description ?? '') !== (label.description ?? '');
+
+              if (drifted) {
+                await github.rest.issues.updateLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description ?? '',
+                });
+                updated += 1;
+              }
+            }
+
+            // Deliberately additive: labels present on GitHub but absent from
+            // the manifest are left alone rather than deleted, so a label
+            // created ad hoc during triage does not vanish on the next push.
+            const unmanaged = existing
+              .map((label) => label.name)
+              .filter((name) => !wanted.some((label) => label.name === name));
+
+            core.notice(`${created} created, ${updated} updated, ${unmanaged.length} left unmanaged`);
+            if (unmanaged.length > 0) {
+              core.notice(`Unmanaged labels: ${unmanaged.join(', ')}`);
+            }
