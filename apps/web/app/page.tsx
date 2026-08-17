@@ -6,22 +6,9 @@ import { LandingHeroCopy, LandingReveal, RoomStory } from "../components/landing
 import { LandingNavAction, LandingPrimaryAction, LandingRecordAction } from "../components/landing-actions";
 import { LandingScene } from "../components/landing-scene";
 
-const structuredData = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "Threadline",
-  applicationCategory: "BusinessApplication",
-  operatingSystem: "Web",
-  description:
-    "A room-centered workspace for live engineering collaboration and durable session records. Meet now, keep the thread, and return to a room that remembers.",
-  url: "https://threadline-rtc.vercel.app",
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-};
-
 export default function Home() {
   return (
     <main id="main-content" className="landing shell">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       <LandingAtmosphere />
       <nav className="landing-nav" aria-label="Primary navigation">
         <Brand />
