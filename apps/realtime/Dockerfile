@@ -15,13 +15,13 @@
 # container is started — which is why `docker compose build` alone cannot catch
 # this. The CI containers job starts the stack and waits for health for exactly
 # that reason.
-FROM node:22-bookworm-slim AS dependencies
+FROM node:26-bookworm-slim AS dependencies
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/realtime/package.json apps/realtime/package.json
 RUN npm ci --workspace=@threadline/realtime --include-workspace-root
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=development
 COPY --chown=node:node --from=dependencies /app/node_modules ./node_modules
