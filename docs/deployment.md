@@ -4,7 +4,7 @@ Threadline uses three production runtimes by design.
 
 | Component       | Target                     | Required configuration                                                                                                                                          | Optional                                                                  |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (source maps) |
+| `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         | `NEXT_PUBLIC_SITE_URL` (canonical origin), `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (source maps) |
 | `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET` | `AUTH_DELIVERY_WEBHOOK` + `AUTH_DELIVERY_SECRET` (both, or neither — without them no mail is sent, which affects only the mailed reset link; account recovery runs on recovery codes), `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`                         |
 | `apps/realtime` | Cloudflare Workers         | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK=<api>/v1/internal/room-events`, `PERSISTENCE_SECRET`                                                                 | —                                                                         |
 
@@ -103,6 +103,9 @@ Free-provider hostnames do not share a cookie site. The web app includes a Verce
 THREADLINE_API_ORIGIN=https://threadline-api.onrender.com
 NEXT_PUBLIC_API_ORIGIN=/api/identity
 NEXT_PUBLIC_REALTIME_ORIGIN=https://threadline-realtime.<account>.workers.dev
+# Optional — canonical origin for SEO metadata. Defaults to the production
+# host, so set it on preview deployments to stop them claiming production's URL:
+# NEXT_PUBLIC_SITE_URL=https://threadline-web.vercel.app
 # Optional — error/performance monitoring, inert without it:
 # NEXT_PUBLIC_SENTRY_DSN=https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>
 ```

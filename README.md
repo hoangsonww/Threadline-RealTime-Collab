@@ -516,7 +516,7 @@ The three services need different configuration, summarized here — the full ta
 
 | Service         | Needs                                                                                                                                                                                                 |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
+| `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SITE_URL` (canonical origin; defaults to the production host), `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
 | `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN` |
 | `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                                                                     |
 
