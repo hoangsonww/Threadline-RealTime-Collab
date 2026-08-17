@@ -12,3 +12,20 @@ coverage
 .playwright-cli
 output/playwright
 .playwright-mcp
+
+# Playwright's own output directories. `npm run test:browser` writes
+# test-results/.last-run.json, which is otherwise both untracked clutter and a
+# spurious `npm run format:check` failure — Prettier reads .gitignore, so
+# listing them here is what keeps the local check honest after a browser run.
+/test-results
+/playwright-report
+/blob-report
+
+# Generated TypeDoc output — rebuilt by `npm run docs`, published by CI
+docs/api-reference
+
+# Generated OpenAPI export — rebuilt by `npm run openapi`
+/openapi.json
+
+# macOS Finder metadata
+.DS_Store

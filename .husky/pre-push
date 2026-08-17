@@ -1,0 +1,38 @@
+#!/usr/bin/env sh
+# The checks that are too slow for pre-commit but cheaper to fail here than in
+# CI five minutes after you've moved on to something else. This is the same
+# `typecheck` + `test` pair that CI gates a merge on; the build and the
+# container/Kubernetes validation stay in CI, where they belong.
+#
+# Skip it deliberately when you mean to:
+#   THREADLINE_SKIP_PREPUSH=1 git push
+#   git push --no-verify
+
+if [ "$THREADLINE_SKIP_PREPUSH" = "1" ]; then
+  echo "pre-push: skipped (THREADLINE_SKIP_PREPUSH=1)"
+  exit 0
+fi
+
+# A branch deletion has nothing to verify.
+if [ "$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then
+  echo "pre-push: detached HEAD, skipping"
+  exit 0
+fi
+
+echo "pre-push: typecheck"
+npm run --silent typecheck || {
+  echo ""
+  echo "  ✖ Typecheck failed. Fix it, or push with THREADLINE_SKIP_PREPUSH=1 if you"
+  echo "    intend CI to be the one that catches it."
+  exit 1
+}
+
+echo "pre-push: tests"
+npm run --silent test || {
+  echo ""
+  echo "  ✖ Tests failed. Fix it, or push with THREADLINE_SKIP_PREPUSH=1 if you"
+  echo "    intend CI to be the one that catches it."
+  exit 1
+}
+
+echo "pre-push: ok"

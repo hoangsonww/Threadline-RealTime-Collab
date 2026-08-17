@@ -1,1 +1,10 @@
+#!/usr/bin/env sh
+# Fast checks only. Anything that takes longer than a couple of seconds belongs
+# in pre-push or in CI — a slow pre-commit hook trains people to use
+# `--no-verify`, and a hook that is routinely bypassed protects nothing.
+
+# eslint --fix + prettier --write, on staged files only.
 npm exec lint-staged
+
+# Secrets, forbidden paths, conflict markers, and debugging leftovers.
+node scripts/guard-staged.mjs

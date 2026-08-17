@@ -40,4 +40,18 @@ export default tseslint.config(
     settings: { next: { rootDir: "apps/web/" } },
     rules: nextPlugin.configs.recommended.rules,
   },
+  {
+    // Plain ESM JavaScript: the repository tooling in scripts/, the workspace
+    // scripts, and the root config files themselves. Without an explicit
+    // globals set these fall through to js.configs.recommended with no
+    // environment declared, so `no-undef` fires on `process`, `console`, and
+    // `URL` — which is what happens when a file is linted by path (lint-staged
+    // does this) but was never covered by the lint script's own targets.
+    files: ["**/*.{mjs,cjs,js}"],
+    languageOptions: {
+      globals: { ...globals.node },
+      sourceType: "module",
+      ecmaVersion: "latest",
+    },
+  },
 );
