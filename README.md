@@ -539,7 +539,7 @@ The three services need different configuration, summarized here — the full ta
 | `npm run k8s:validate`              | Renders both Kustomize overlays without a live cluster                          |
 | `npm run check`                     | The full merge gate: format, lint, typecheck, test, build                       |
 | `npm run doctor`                    | Diagnoses the local environment and prints the fix for anything wrong           |
-| `npm run docs`                      | Generates the TypeDoc symbol reference into `docs/api-reference/`               |
+| `npm run docs`                      | Generates the TypeDoc symbol reference into `docs/api-reference/` — the published copy is [here](https://hoangsonww.github.io/Threadline-RealTime-Collab/) |
 | `npm run docs:links`                | Verifies every relative markdown link and anchor still resolves                 |
 | `npm run openapi`                   | Writes `openapi.json` from the same builder the live service serves             |
 | `npm run clean`                     | Removes build output and caches, reporting what it reclaimed                    |
@@ -609,7 +609,7 @@ There is some `apps/web` coverage — the WebRTC mesh, the sound engine, and CSS
 | [`AGENTS.md`](AGENTS.md)                                                 | Conventions and invariants for coding agents — the authoritative version                                  |
 | [`scripts/README.md`](scripts/README.md)                                 | What each repository script does, and the rules for adding one                                            |
 | [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)                               | Community standards, and where candid technical disagreement sits inside them                             |
-| Generated API reference                                                  | Symbol-level TypeDoc for all three services — `npm run docs`, published to GitHub Pages from `main`       |
+| [**Generated API reference**](https://hoangsonww.github.io/Threadline-RealTime-Collab/)                                     | Symbol-level TypeDoc for all three services, published from `main`. Rebuild locally with `npm run docs`  |
 
 ## License
 

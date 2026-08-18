@@ -76,7 +76,7 @@ npm test                 # api (vitest/node) + realtime (vitest-pool-workers)
 npm run test:browser     # Playwright
 npm run build            # production build for every workspace
 
-npm run docs             # TypeDoc → docs/api-reference/
+npm run docs             # TypeDoc → docs/api-reference/ (published: https://hoangsonww.github.io/Threadline-RealTime-Collab/)
 npm run docs:links       # verify every relative markdown link still resolves
 npm run openapi          # write openapi.json from the live spec builder
 

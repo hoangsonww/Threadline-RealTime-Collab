@@ -43,4 +43,8 @@ npm run docs:serve  # build, then serve it on http://localhost:8080
 npm run docs:watch  # rebuild on change
 ```
 
+This site is published from `main` at **<https://hoangsonww.github.io/Threadline-RealTime-Collab/>** by the `Documentation` workflow, which rebuilds it on every push that touches the sources or `docs/`.
+
+The same workflow exports the OpenAPI specification alongside this reference, at [`openapi/openapi.json`](https://hoangsonww.github.io/Threadline-RealTime-Collab/openapi/openapi.json) — the same document the running API serves, so it can be pointed at a client generator or an API explorer without cloning anything.
+
 `docs/api-reference/` is generated output and is not committed. CI rebuilds it on every push to `main` and publishes it to GitHub Pages.
