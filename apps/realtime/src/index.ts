@@ -61,12 +61,18 @@ type ClientMessage =
   | { type: "heartbeat"; payload?: unknown }
   | { type: "signal"; payload?: unknown; to?: string }
   | { type: "cursor"; payload?: unknown }
-  | { type: "whiteboard"; payload?: unknown }
+  | { type: "whiteboard"; payload: WhiteboardStroke | { clear: true } }
   | { type: "chat"; payload: { text: string } }
   | { type: "editor"; payload: { document: "code" | "notes"; content: string } }
   | { type: "screen-share"; payload: { active: boolean } };
 /** Every message the room broadcasts back. */
 type ServerMessage = { type: string; payload?: unknown; from?: string; at?: string };
+/** A point on the whiteboard, in the canvas's own coordinate space. */
+type Point = { x: number; y: number };
+
+/** One drawn segment. The board is the ordered list of these. */
+type WhiteboardStroke = { from: Point; to: Point };
+
 /** The subset of a room's traffic that is durable enough to send to `apps/api`. */
 type PersistedEvent = { type: string; payload: unknown; from: string; at: string };
 /**
@@ -97,6 +103,17 @@ const deliveryMaxAttempts = 8;
  * Editor content is a *replace*, not an append: persisting every keystroke
  * would write thousands of near-identical events for one paragraph.
  */
+/**
+ * Ceiling on retained whiteboard segments.
+ *
+ * At roughly 50 bytes of JSON per segment this caps the board near 200 KB,
+ * which is comfortable for both Durable Object storage and a single persisted
+ * snapshot. A continuous drag emits a segment per pointermove, so this is
+ * minutes of uninterrupted drawing rather than a limit anyone meets by
+ * sketching a diagram.
+ */
+const maxWhiteboardStrokes = 4_000;
+
 const editorPersistenceQuietMs = 2_000;
 /**
  * Upper bound on the quiet-period debounce.
@@ -124,9 +141,21 @@ const encoder = new TextEncoder();
 const send = (socket: WebSocket, message: ServerMessage) => socket.send(JSON.stringify(message));
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
+/** A finite coordinate. Rejects NaN and Infinity, which survive `typeof === "number"`. */
+const isPoint = (value: unknown): value is Point =>
+  isObject(value) && Number.isFinite(value.x) && Number.isFinite(value.y);
+
 function isClientMessage(value: unknown): value is ClientMessage {
   if (!isObject(value) || typeof value.type !== "string") return false;
-  if (["heartbeat", "cursor", "whiteboard"].includes(value.type)) return true;
+  if (["heartbeat", "cursor"].includes(value.type)) return true;
+  // Whiteboard payloads are now validated rather than accepted as `unknown`,
+  // because they are persisted: an unchecked payload used to be discarded after
+  // fan-out, and is now written to storage and replayed to every future joiner.
+  if (value.type === "whiteboard")
+    return (
+      isObject(value.payload) &&
+      (value.payload.clear === true || (isPoint(value.payload.from) && isPoint(value.payload.to)))
+    );
   if (value.type === "signal") return typeof value.to === "string" && value.to.length > 0 && value.to.length <= 128;
   if (!isObject(value.payload)) return false;
   if (value.type === "chat")
@@ -162,6 +191,14 @@ export class RoomDurableObject implements DurableObject {
   private participants = new Map<string, Participant>();
   private events: Array<{ type: string; payload: unknown; from: string; at: string }> = [];
   private roomId = "";
+  /**
+   * The whiteboard, as the ordered list of segments drawn on it.
+   *
+   * Held in storage rather than only in memory because the object hibernates,
+   * and because this is now the board's authoritative state — it is what a
+   * joining client is sent and what a reconnecting one is restored from.
+   */
+  private strokes: WhiteboardStroke[] = [];
 
   constructor(
     private readonly state: DurableObjectState,
@@ -173,6 +210,7 @@ export class RoomDurableObject implements DurableObject {
           "recent_events",
         )) ?? [];
       this.roomId = (await this.state.storage.get<string>("room_id")) ?? "";
+      this.strokes = (await this.state.storage.get<WhiteboardStroke[]>("whiteboard_strokes")) ?? [];
       this.restoreParticipants();
     });
   }
@@ -202,6 +240,7 @@ export class RoomDurableObject implements DurableObject {
         roomId,
         participants: [...this.participants.values()],
         recentEvents: this.events.slice(-100),
+        whiteboardStrokes: this.strokes,
       });
     }
 
@@ -260,7 +299,19 @@ export class RoomDurableObject implements DurableObject {
       at: new Date().toISOString(),
     };
     this.broadcast(envelope, event.type === "signal" ? event.to : undefined);
-    if (event.type !== "cursor" && event.type !== "signal" && event.type !== "whiteboard") await this.record(envelope);
+
+    // The whiteboard is applied to accumulated state rather than recorded as one
+    // event per segment. `draw()` publishes on every pointermove, so recording
+    // each one would push hundreds of events per second through `record()`,
+    // whose history is capped at 250 — a few seconds of drawing would evict
+    // every chat message in the room. The board is therefore persisted the way
+    // the editor is: as a snapshot that replaces its predecessor.
+    if (event.type === "whiteboard") {
+      await this.applyWhiteboard(event.payload, participant.userId);
+      return;
+    }
+
+    if (event.type !== "cursor" && event.type !== "signal") await this.record(envelope);
     if (event.type === "screen-share") this.broadcast({ type: "presence", payload: [...this.participants.values()] });
   }
 
@@ -321,7 +372,16 @@ export class RoomDurableObject implements DurableObject {
     this.participants.set(participant.connectionId, participant);
     send(socket, {
       type: "room.ready",
-      payload: { participant, participants: [...this.participants.values()], recentEvents: this.events.slice(-100) },
+      // The board travels as its own field rather than being reconstructed from
+      // `recentEvents`. That list is sliced to the last 100, so in a chatty room
+      // the newest whiteboard snapshot would scroll out of the window and a
+      // joiner would be handed an empty canvas for a board that is not empty.
+      payload: {
+        participant,
+        participants: [...this.participants.values()],
+        recentEvents: this.events.slice(-100),
+        whiteboardStrokes: this.strokes,
+      },
     });
     this.broadcast({ type: "presence", payload: [...this.participants.values()] });
     if (!alreadyPresent)
@@ -362,6 +422,55 @@ export class RoomDurableObject implements DurableObject {
       const participant = socket.deserializeAttachment() as Participant | null;
       if (participant) this.participants.set(participant.connectionId, participant);
     }
+  }
+
+  /**
+   * Applies one whiteboard message to the board and persists the result.
+   *
+   * A segment appends; `{ clear: true }` empties the board, which is the only
+   * thing that does — that is the entire point of the change, since previously
+   * every disconnect cleared it implicitly.
+   *
+   * The snapshot written to `apps/api` always carries the *complete* board, not
+   * a delta. That matters because room history is bounded at both ends: an
+   * older snapshot being evicted is harmless when the newest one is whole,
+   * whereas evicting one delta out of a chain would leave a silently corrupted
+   * drawing. Same reasoning as the editor, which persists whole documents.
+   */
+  private async applyWhiteboard(payload: WhiteboardStroke | { clear: true }, actorId: string) {
+    if ("clear" in payload) {
+      this.strokes = [];
+    } else {
+      this.strokes.push({ from: payload.from, to: payload.to });
+      // Bounded for the same reason `events` is: a room left open with someone
+      // leaning on a stylus must not grow this object's storage without limit.
+      // Dropping the oldest segments degrades an over-long drawing gracefully
+      // rather than refusing new strokes, which would look like a broken pen.
+      if (this.strokes.length > maxWhiteboardStrokes) this.strokes = this.strokes.slice(-maxWhiteboardStrokes);
+    }
+    await this.state.storage.put("whiteboard_strokes", this.strokes);
+
+    if (!this.env.PERSISTENCE_WEBHOOK || !this.env.PERSISTENCE_SECRET) return;
+
+    // Coalesced exactly like the editor: broadcast is immediate, but only the
+    // latest board needs to reach Mongo, and only after the pen stops moving.
+    const delivery = {
+      deliveryId: crypto.randomUUID(),
+      roomId: this.roomId,
+      event: {
+        type: "whiteboard",
+        payload: { strokes: this.strokes },
+        from: actorId,
+        at: new Date().toISOString(),
+      },
+    };
+    const key = "delivery:whiteboard";
+    const current = await this.state.storage.get<Delivery>(key);
+    const timestamp = Date.now();
+    const queuedAt = current?.queuedAt ?? timestamp;
+    const nextAttemptAt = Math.min(timestamp + editorPersistenceQuietMs, queuedAt + editorPersistenceMaxWaitMs);
+    await this.state.storage.put(key, { ...delivery, queuedAt, nextAttemptAt });
+    await this.scheduleAlarmAt(nextAttemptAt);
   }
 
   private async record(event: PersistedEvent) {

@@ -433,6 +433,27 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     context.stroke();
   }, []);
 
+  /** Wipes the canvas without publishing. Used by both an explicit clear and a replay. */
+  const clearBoardCanvas = useCallback(() => {
+    const canvas = boardRef.current;
+    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  /**
+   * Repaints the board from the room's stored strokes.
+   *
+   * The canvas is cleared first so this is idempotent — a reconnect replays the
+   * whole board rather than drawing a second copy over the first.
+   */
+  const hydrateWhiteboard = useCallback(
+    (strokes: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }> | undefined) => {
+      if (!strokes) return;
+      clearBoardCanvas();
+      for (const stroke of strokes) drawLine(stroke.from, stroke.to);
+    },
+    [clearBoardCanvas, drawLine],
+  );
+
   const publishLocalTracks = useCallback(() => {
     meshRef.current?.setLocalTracks({
       camera: cameraStreamRef.current?.getVideoTracks()[0],
@@ -595,6 +616,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 participants?: Participant[];
                 recentEvents?: RoomEvent[];
                 participant?: Participant;
+                whiteboardStrokes?: Array<{ from: { x: number; y: number }; to: { x: number; y: number } }>;
               };
               // Both taken from room.ready rather than waiting on /v1/auth/me: that
               // fetch can still be in flight when the first chat message arrives, and
@@ -608,6 +630,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               setParticipants(payload.participants ?? []);
               payload.recentEvents?.forEach(addEvent);
               hydrateEditorState(payload.recentEvents ?? []);
+              // Sent as its own field, not derived from recentEvents — see the
+              // room.ready payload in apps/realtime for why the event window is
+              // not a reliable place to find the newest board.
+              hydrateWhiteboard(payload.whiteboardStrokes);
               syncPeers(payload.participants ?? []);
               syncOtherDevices(payload.participants ?? []);
               if (reconnectResetTimerRef.current) clearTimeout(reconnectResetTimerRef.current);
@@ -636,8 +662,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 to?: { x: number; y: number };
                 clear?: boolean;
               };
-              if (payload.clear)
-                boardRef.current?.getContext("2d")?.clearRect(0, 0, boardRef.current.width, boardRef.current.height);
+              if (payload.clear) clearBoardCanvas();
               else if (payload.from && payload.to) drawLine(payload.from, payload.to);
             }
             // Announced here rather than in addEvent: addEvent also replays the
@@ -660,7 +685,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     const result = await attempt;
     if (connectPromiseRef.current === attempt) connectPromiseRef.current = null;
     return result;
-  }, [addEvent, announcePresence, drawLine, hydrateEditorState, roomId]);
+  }, [addEvent, announcePresence, clearBoardCanvas, drawLine, hydrateEditorState, hydrateWhiteboard, roomId]);
 
   const retryRoomConnection = useCallback(() => {
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
@@ -834,9 +859,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     lastPoint.current = point;
   };
   const clearBoard = () => {
-    const canvas = boardRef.current;
-    if (!canvas) return;
-    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    if (!boardRef.current) return;
+    clearBoardCanvas();
     publish("whiteboard", { clear: true });
   };
   const uploadFiles = (event: React.ChangeEvent<HTMLInputElement>) => {

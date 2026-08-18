@@ -33,7 +33,7 @@ graph TB
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Queued: record() called<br/>(chat, editor, screen-share, join/leave —<br/>never cursor/signal/whiteboard)
+    [*] --> Queued: record() called<br/>(chat, editor, screen-share, join/leave —<br/>never cursor/signal)<br/>whiteboard persists as a<br/>coalesced snapshot, not per stroke
     Queued --> Delivering: waitUntil(deliver(key, delivery))<br/>fires immediately, doesn't block the caller
     Delivering --> Delivered: POST /v1/internal/room-events<br/>returns 2xx
     Delivered --> [*]: storage.delete("delivery:UUID")
@@ -137,7 +137,7 @@ Client → server (`ClientMessage.type`):
 | `cursor`       | anyone                         | Broadcast to everyone, never persisted                                                                                              |
 | `chat`         | member/host/owner (not viewer) | Broadcast + persisted                                                                                                               |
 | `editor`       | member/host/owner              | Broadcast + persisted (shared notes/code document sync)                                                                             |
-| `whiteboard`   | member/host/owner              | Broadcast, never persisted (too high-frequency)                                                                                     |
+| `whiteboard`   | member/host/owner              | Broadcast per segment, then applied to the room's stored board and persisted as a coalesced whole-board snapshot (see below)         |
 | `screen-share` | member/host/owner              | Broadcast + persisted; also flips `participant.screenSharing`                                                                       |
 | `heartbeat`    | anyone                         | Server replies `{ type: "heartbeat", at }`. Protocol-level keepalive support — not currently sent on an interval by the web client. |
 | `timeline`     | member/host/owner              | Accepted and would broadcast + persist like `chat`/`editor`; not currently emitted by the web client. Reserved.                     |
@@ -152,6 +152,23 @@ Server → client:
 | any of `chat` / `editor` / `whiteboard` / `screen-share` / `timeline` | Relayed verbatim from another client, `from`/`at` stamped by the server                       |
 
 A `viewer` role can read and receive everything but is server-side blocked from sending any write-type message — the check (`role === "viewer" && [...].includes(event.type)`) lives in the Durable Object itself, not just the UI, so a viewer can't bypass it by talking to the WebSocket directly.
+
+
+## The whiteboard
+
+The board is the ordered list of segments drawn on it. Each `whiteboard` message is either one segment (`{ from, to }`) or the clear sentinel (`{ clear: true }`).
+
+**Fan-out is per segment; persistence is per board.** `draw()` on the client publishes on every `pointermove`, so recording each segment through `record()` would push hundreds of events per second into a history capped at 250 — a few seconds of drawing would evict every chat message in the room. Instead the Durable Object applies each segment to `whiteboard_strokes` in its own storage and queues a *snapshot* of the whole board for `apps/api`, coalesced on the same debounce the editor uses (`delivery:whiteboard`, quiet period 2s, forced flush at 10s).
+
+The snapshot always carries the complete board rather than a delta. Room history is bounded at both ends, and an evicted snapshot is harmless when the newest one is whole — whereas losing one delta out of a chain would leave a silently corrupted drawing.
+
+**The board survives disconnection.** It is cleared only by an explicit `{ clear: true }`, never by the last participant leaving. Before this, strokes existed purely as fan-out and vanished the moment everyone dropped, which was inconsistent with chat, the editor, and the activity log — all of which persist.
+
+**Joining clients receive it as its own field.** `room.ready` (and the non-upgrade JSON snapshot) carry `whiteboardStrokes` alongside `recentEvents`. It is deliberately not reconstructed from `recentEvents`, which is sliced to the last 100: in a chatty room the newest snapshot would scroll out of that window and a joiner would be handed a blank canvas for a board that is not blank.
+
+**Bounded at 4,000 segments.** Roughly 200 KB of JSON. Beyond that the oldest segments are dropped, which degrades an over-long drawing gracefully rather than refusing new strokes — a pen that stops working reads as a bug, a very old stroke fading does not.
+
+**Payloads are validated.** Coordinates must be finite: `NaN` and `Infinity` both satisfy `typeof === "number"` and would poison every future replay of the board if stored. This mattered less when the payload was discarded after fan-out; it is now written to storage and replayed to every future joiner.
 
 ## Joining a room
 

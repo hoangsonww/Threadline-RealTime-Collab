@@ -51,6 +51,13 @@ async function recentEventTypes(roomId: string, userId: string, username: string
   return body.recentEvents.map((event) => event.type);
 }
 
+async function whiteboardOf(roomId: string, userId: string, username: string) {
+  const ticket = await ticketFor(roomId, userId, username);
+  const response = await SELF.fetch(`https://example.com/rooms/${roomId}?ticket=${encodeURIComponent(ticket)}`);
+  const body = await response.json<{ whiteboardStrokes?: Array<{ from: unknown; to: unknown }> }>();
+  return body.whiteboardStrokes ?? [];
+}
+
 describe("RoomDurableObject", () => {
   it("does not retry permanent webhook rejections", () => {
     expect(isRetryableDeliveryStatus(400)).toBe(false);
@@ -105,6 +112,88 @@ describe("RoomDurableObject", () => {
     await new Promise((resolve) => setTimeout(resolve, 25));
 
     expect(await recentEventTypes(roomId, userId, "Writer")).not.toContain("chat");
+  });
+
+  it("keeps whiteboard strokes after every participant disconnects", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Artist");
+    await nextMessage(socket);
+
+    socket.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: 1, y: 2 }, to: { x: 3, y: 4 } } }));
+    socket.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: 3, y: 4 }, to: { x: 5, y: 6 } } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    // The disconnect is the whole point: this is what used to wipe the board.
+    socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const strokes = await whiteboardOf(roomId, userId, "Artist");
+    expect(strokes).toEqual([
+      { from: { x: 1, y: 2 }, to: { x: 3, y: 4 } },
+      { from: { x: 3, y: 4 }, to: { x: 5, y: 6 } },
+    ]);
+  });
+
+  it("clears the board only when a participant explicitly clears it", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Artist");
+    await nextMessage(socket);
+
+    socket.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: 1, y: 1 }, to: { x: 2, y: 2 } } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await whiteboardOf(roomId, userId, "Artist")).toHaveLength(1);
+
+    socket.send(JSON.stringify({ type: "whiteboard", payload: { clear: true } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await whiteboardOf(roomId, userId, "Artist")).toHaveLength(0);
+  });
+
+  it("rejects malformed whiteboard payloads instead of storing them", async () => {
+    const roomId = crypto.randomUUID();
+    const userId = crypto.randomUUID();
+    const socket = await connect(roomId, userId, "Artist");
+    await nextMessage(socket);
+
+    // Non-finite coordinates pass `typeof === "number"` and would poison every
+    // future replay of this board if they were stored.
+    socket.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: Number.NaN, y: 0 }, to: { x: 1, y: 1 } } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(await whiteboardOf(roomId, userId, "Artist")).toHaveLength(0);
+  });
+
+  it("does not let a viewer draw on the board", async () => {
+    const roomId = crypto.randomUUID();
+    const owner = crypto.randomUUID();
+    const author = await connect(roomId, owner, "Author");
+    await nextMessage(author);
+    author.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: 0, y: 0 }, to: { x: 1, y: 1 } } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    const viewerId = crypto.randomUUID();
+    const viewerTicket = await new SignJWT({ room_id: roomId, role: "viewer", username: "Viewer" })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer("https://threadline.test")
+      .setSubject(viewerId)
+      .setIssuedAt()
+      .setExpirationTime("2m")
+      .sign(ticketSecret);
+    const viewerResponse = await SELF.fetch(
+      `https://example.com/rooms/${roomId}?ticket=${encodeURIComponent(viewerTicket)}`,
+      { headers: { Upgrade: "websocket" } },
+    );
+    const viewer = viewerResponse.webSocket;
+    if (!viewer) throw new Error("Expected a WebSocket upgrade response.");
+    viewer.accept();
+    await nextMessage(viewer);
+
+    viewer.send(JSON.stringify({ type: "whiteboard", payload: { from: { x: 9, y: 9 }, to: { x: 10, y: 10 } } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    // The author's single stroke survives; the viewer's is not added.
+    expect(await whiteboardOf(roomId, owner, "Author")).toHaveLength(1);
   });
 
   it("rejects a WebSocket upgrade without a valid room ticket", async () => {
