@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you reference Threadline in academic or published work, please cite it as below."
+title: "Threadline: a real-time collaboration platform built across three independently deployable services"
+abstract: >-
+  Threadline is a room-centered collaboration workspace in which a room is
+  simultaneously a live session (WebRTC video, audio, screen share, whiteboard,
+  chat, shared editor) and the durable record of what happened in it. It is
+  built as three independently deployable services that deliberately do not
+  trust each other's enforcement: a Next.js web tier, an Express API tier
+  owning identity and attribute-based access control, and a Cloudflare Durable
+  Object per room owning presence and WebRTC signalling. Every trust boundary
+  re-performs its own authorization check rather than inheriting an upstream
+  one.
+type: software
+authors:
+  - family-names: Nguyen
+    given-names: Son
+    alias: hoangsonww
+    orcid: "https://orcid.org/0009-0002-7806-068X"
+repository-code: "https://github.com/hoangsonww/Threadline-RealTime-Collab"
+url: "https://threadline-rtc.vercel.app"
+license: MIT
+version: 1.0.0
+date-released: "2026-08-15"
+keywords:
+  - real-time collaboration
+  - WebRTC
+  - Cloudflare Durable Objects
+  - Next.js
+  - Express
+  - MongoDB
+  - TypeScript
+  - OpenID Connect
+  - attribute-based access control
+  - monorepo
