@@ -122,6 +122,8 @@ Every org-scoped page (`dashboard`, `rooms-directory`, `calendar-view`, `activit
 const selectedOrgId = searchParams.get("org") ?? getPreferredOrgId();
 ```
 
+Both halves of that read are allowed to fail quietly. A browser configured to refuse site data — Safari's "Block all cookies", Chromium with site data blocked for the origin — throws on the `window.localStorage` property access itself rather than returning an empty store, and because `getPreferredOrgId()` runs during render on all six pages, an uncaught throw there is a blank authenticated app rather than a forgotten preference. Both functions therefore swallow the refusal: an unrememberable workspace falls through to the account's first organization, which is the same place a first-ever visit lands. `lib/workspace-preference.test.ts` covers both refusal shapes.
+
 ...and then resolves the actual `Organization` object with the same helper every page shares:
 
 ```ts

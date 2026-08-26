@@ -7,6 +7,12 @@
  * authoritative — the stored id is validated against actual memberships by
  * `selectedOrganization` in {@link api} before it is used.
  *
+ * Neither function can throw. That matters because both are called during
+ * render by six org-scoped pages, and a browser configured to refuse site data
+ * does not hand back an empty store — it throws on the property access itself.
+ * An unremembered workspace has to degrade to the first-organization fallback,
+ * not take the authenticated app down with it.
+ *
  * @module
  */
 
@@ -21,11 +27,25 @@ const KEY = "threadline-last-org";
  */
 export function getPreferredOrgId(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(KEY);
+  try {
+    return window.localStorage.getItem(KEY);
+  } catch {
+    // Safari with "Block all cookies", and Chromium with site data blocked for
+    // the origin, throw a SecurityError from `window.localStorage` before
+    // `getItem` is ever reached. Callers treat null as "nothing remembered",
+    // which is exactly what a browser that refuses to remember should produce.
+    return null;
+  }
 }
 
-/** Records the active workspace. A no-op during server rendering. */
+/** Records the active workspace. A no-op during server rendering, and when the browser refuses to store it. */
 export function setPreferredOrgId(orgId: string) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(KEY, orgId);
+  try {
+    window.localStorage.setItem(KEY, orgId);
+  } catch {
+    // Same refusal as above, plus QuotaExceededError on a full store. Losing the
+    // preference costs one fallback on the next visit; throwing here would break
+    // the workspace switch that is in progress.
+  }
 }
