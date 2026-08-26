@@ -98,6 +98,10 @@ two narrower kinds of coverage do exist:
   switched (a bare `setValueAtTime` to the peak is what puts a click on the front of a cue), that a burst of one cue
   collapses to a single play while a different cue still gets through, and that a context the browser suspended is
   resumed rather than replaced.
+- `lib/workspace-preference.test.ts` — the last-used-workspace memory, including the two ways a browser refuses it:
+  a `localStorage` property access that throws outright (site data blocked) and a `setItem` that throws on a full store.
+  Neither may propagate, because every org-scoped page calls this during render — restoring the unguarded version fails
+  the last two of its four tests.
 
 **Layout (`Playwright`, real Chromium):** the real `globals.css` is loaded against minimal markup, and geometry is
 measured rather than screenshotted — no image baselines to churn.
