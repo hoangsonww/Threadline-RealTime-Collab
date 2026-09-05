@@ -227,7 +227,14 @@ export function createApp(options: AppOptions, app = express()) {
         const key = `${request.baseUrl}:${ipHash(request)}`;
         const bucket = await rateLimitBucket(key, windowMs);
         if (bucket.count > limit) {
-          response.set("Retry-After", String(Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000)));
+          // Clamped because the window can elapse between reading the bucket and
+          // writing this header — the store returns a resetAt computed at read
+          // time, and a slow reply or a bucket on the edge of expiry then makes
+          // the difference zero or negative. RFC 9110 delta-seconds must be a
+          // non-negative integer, so the unclamped value emitted "Retry-After: -1",
+          // which a client is entitled to reject or treat as "never retry".
+          const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000));
+          response.set("Retry-After", String(retryAfterSeconds));
           return clientError(response, 429, "rate_limited", "Too many attempts. Please try again shortly.");
         }
         next();

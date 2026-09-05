@@ -763,6 +763,27 @@ describe("Threadline identity API", () => {
     expect((await agent.get("/v1/auth/me")).status).toBe(401);
   });
 
+  it("never emits a negative or zero Retry-After when the window has already elapsed", async () => {
+    // A store returns a resetAt computed when it was read, so a slow reply — or a
+    // bucket sitting on the edge of expiry — leaves it in the past by the time the
+    // header is written. Unclamped that produced "Retry-After: -1", which is not a
+    // valid RFC 9110 delta-seconds and which a client may reject outright.
+    const elapsedWindowCache: Cache = {
+      incrementWindow: async (key) => ({ key, count: 999, resetAt: new Date(Date.now() - 1_500) }),
+      claim: async () => true,
+      status: () => "ready",
+      close: async () => {},
+    };
+    const { app } = await createTestApp(undefined, false, undefined, elapsedWindowCache);
+
+    const blocked = await request(app).post("/v1/auth/login").send({ email: "a@example.com", password: "whatever-x" });
+
+    expect(blocked.status).toBe(429);
+    const retryAfter = Number(blocked.headers["retry-after"]);
+    expect(Number.isInteger(retryAfter)).toBe(true);
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+  });
+
   it("reports cache state on /health without requiring one to be configured", async () => {
     const { app: withoutCache } = await createTestApp();
     expect((await request(withoutCache).get("/health")).body).toEqual({

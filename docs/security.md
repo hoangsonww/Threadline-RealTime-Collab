@@ -143,6 +143,8 @@ When `REDIS_URL` is configured, `rateLimitBucket()` in `application.ts` counts i
 
 `/health` reports `cache: "ready" | "unavailable" | "disabled"` so which of the two is currently enforcing the limit is observable without reading logs.
 
+The `429` carries a `Retry-After` clamped to at least 1 second. Both stores return a `resetAt` computed when the bucket was read, so a slow reply or a bucket already on the edge of expiry can leave that timestamp in the past by the time the header is written — unclamped, that emitted `Retry-After: -1`, which is not a valid RFC 9110 delta-seconds and which a client may reject or read as "do not retry".
+
 ### Session and token bookkeeping
 
 `lastUsedAt` on a session or personal access token used to be written to MongoDB on every authenticated request. With a cache configured it is written at most once per 60 seconds per credential, gated by `Cache.claim`.
