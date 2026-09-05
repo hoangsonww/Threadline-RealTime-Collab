@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./application.js";
+import { MemoryCache, type Cache } from "./cache.js";
 import { MemoryRepository } from "./repository.js";
 import { OidcSigner } from "./security.js";
 
@@ -27,11 +28,14 @@ async function createTestApp(
   getIceServers?: (
     userId: string,
   ) => Promise<Array<{ urls: string | string[]; username?: string; credential?: string }>>,
+  cache?: Cache,
 ) {
   const signer = await OidcSigner.create();
   const delivered: Array<{ type: string; actionUrl: string }> = [];
+  const repository = new MemoryRepository();
   const app = createApp({
-    repository: new MemoryRepository(),
+    repository,
+    cache,
     issuer: "https://id.threadline.test",
     webOrigin: "https://app.threadline.test",
     additionalWebOrigins,
@@ -46,7 +50,7 @@ async function createTestApp(
     },
     enableHttpLogs: false,
   });
-  return { app, delivered };
+  return { app, delivered, repository };
 }
 
 describe("Threadline identity API", () => {
@@ -687,6 +691,88 @@ describe("Threadline identity API", () => {
     }
     const blocked = await agent.post("/v1/join").send({ code: "WRONGCOD" });
     expect(blocked.status).toBe(429);
+  });
+
+  it("counts rate limits in the cache when one is configured, without touching the repository", async () => {
+    const { app, repository } = await createTestApp(undefined, false, undefined, new MemoryCache());
+    const repositoryCounter = vi.spyOn(repository, "incrementRateLimit");
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await request(app)
+        .post("/v1/auth/login")
+        .send({ email: "nobody@example.com", password: "wrong-password" });
+      expect(response.status).toBe(401);
+    }
+    expect((await request(app).post("/v1/auth/login").send({ email: "n@example.com", password: "x" })).status).toBe(
+      429,
+    );
+    // The whole point of the cache path is that the database never sees these.
+    expect(repositoryCounter).not.toHaveBeenCalled();
+  });
+
+  it("still enforces the rate limit when the cache is unreachable", async () => {
+    const brokenCache: Cache = {
+      incrementWindow: async () => {
+        throw new Error("Redis is not connected.");
+      },
+      claim: async () => {
+        throw new Error("Redis is not connected.");
+      },
+      status: () => "unavailable",
+      close: async () => {},
+    };
+    const { app, repository } = await createTestApp(undefined, false, undefined, brokenCache);
+    const repositoryCounter = vi.spyOn(repository, "incrementRateLimit");
+
+    for (let attempt = 0; attempt < 12; attempt += 1)
+      await request(app).post("/v1/auth/login").send({ email: "nobody@example.com", password: "wrong-password" });
+
+    // A cache failure must degrade to the repository, never to an unlimited endpoint.
+    const blocked = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "nobody@example.com", password: "wrong-password" });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers["retry-after"]).toBeDefined();
+    expect(repositoryCounter).toHaveBeenCalled();
+  });
+
+  it("collapses repeated lastUsedAt writes without letting a revoked session survive", async () => {
+    const { app, repository } = await createTestApp(undefined, false, undefined, new MemoryCache());
+    const agent = request.agent(app);
+    await agent.post("/v1/auth/register").send({
+      email: "coalesced@example.com",
+      username: "coalesced",
+      displayName: "Coalesced User",
+      password: "correct-horse-battery",
+    });
+
+    const sessionWrites = vi.spyOn(repository, "updateSession");
+    expect((await agent.get("/v1/auth/me")).status).toBe(200);
+    expect((await agent.get("/v1/auth/me")).status).toBe(200);
+    expect((await agent.get("/v1/auth/me")).status).toBe(200);
+    // Three authenticated requests, one bookkeeping write — the claim held for the
+    // other two. Without a cache each request writes, which is the cost being removed.
+    expect(sessionWrites).toHaveBeenCalledTimes(1);
+
+    // Revocation must still be immediate. The session row is read from the
+    // repository on every request; only the write is collapsed, so a live claim
+    // cannot keep a revoked credential working.
+    const sessions = await agent.get("/v1/sessions");
+    const current = sessions.body.sessions.find((session: { isCurrent: boolean }) => session.isCurrent);
+    expect((await agent.delete(`/v1/sessions/${current.id}`)).status).toBe(204);
+    expect((await agent.get("/v1/auth/me")).status).toBe(401);
+  });
+
+  it("reports cache state on /health without requiring one to be configured", async () => {
+    const { app: withoutCache } = await createTestApp();
+    expect((await request(withoutCache).get("/health")).body).toEqual({
+      status: "ok",
+      service: "threadline-api",
+      cache: "disabled",
+    });
+
+    const { app: withCache } = await createTestApp(undefined, false, undefined, new MemoryCache());
+    expect((await request(withCache).get("/health")).body.cache).toBe("ready");
   });
 
   it("enforces organization and restricted-room ABAC for reads, writes, tickets, and activity", async () => {

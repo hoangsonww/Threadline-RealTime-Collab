@@ -16,6 +16,23 @@ services:
       retries: 10
       start_period: 10s
 
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # Configured to mirror the shape of a small managed instance rather than an
+    # unbounded local one, so eviction under `allkeys-lru` — the one way this
+    # cache can weaken a rate limit (docs/security.md#rate-limits) — is
+    # reproducible here instead of only in production. Persistence is off
+    # because nothing in here survives a restart by design.
+    command:
+      ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   api:
     build:
       context: .
@@ -28,6 +45,7 @@ services:
       OIDC_ISSUER: http://localhost:4000
       COOKIE_SECURE: "false"
       MONGODB_URI: mongodb://mongo:27017/threadline
+      REDIS_URL: redis://redis:6379
       ROOM_TICKET_SECRET: development-ticket-secret-change-me
       INTERNAL_INGEST_SECRET: development-ingest-secret-change-me
       # Optional — unset means Sentry stays inactive. Only picked up from the
@@ -37,6 +55,8 @@ services:
       - "4000:4000"
     depends_on:
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test:

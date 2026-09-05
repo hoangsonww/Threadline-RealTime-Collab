@@ -9,6 +9,7 @@
 ![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white)
 ![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white)
 ![MongoDB%20Atlas](https://img.shields.io/badge/MongoDB_Atlas-023430?style=flat-square&logo=mongodb&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat-square&logo=redis&logoColor=white)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare_Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)
 ![Durable Objects](https://img.shields.io/badge/Durable_Objects-F38020?style=flat-square&logo=cloudflare&logoColor=white)
 ![Wrangler](https://img.shields.io/badge/Wrangler-F38020?style=flat-square&logo=cloudflare&logoColor=white)
@@ -508,7 +509,7 @@ Open `http://localhost:3000`. `npm run dev` starts all three services, wired to 
 - Without `MONGODB_URI` set, `apps/api` uses an in-memory repository — zero database setup needed to run locally, but every restart of the API process (including `tsx watch` restarts on save) clears it.
 - Stop everything with `Ctrl+C`.
 - Run one service alone: `npm run dev:api:local`, `npm run dev:realtime:local`, or `npm run dev:web:local`.
-- Prefer containers? `npm run docker:up` starts web + API + a real local MongoDB + the local Durable Object runtime together, so state survives restarts. Full guide: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
+- Prefer containers? `npm run docker:up` starts web + API + a real local MongoDB + a local Redis + the local Durable Object runtime together, so state survives restarts. Full guide: [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md).
 
 ## Environment variables
 
@@ -517,12 +518,12 @@ The three services need different configuration, summarized here — the full ta
 | Service         | Needs                                                                                                                                                                                                 |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/web`      | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN` (public, baked in at build time); optionally `NEXT_PUBLIC_SITE_URL` (canonical origin; defaults to the production host), `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (build-time only, source-map upload) |
-| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN` |
+| `apps/api`      | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`, `AUTH_DELIVERY_WEBHOOK`, `AUTH_DELIVERY_SECRET`; optionally `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`, `REDIS_URL`, `REDIS_KEY_PREFIX` |
 | `apps/realtime` | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK`, `PERSISTENCE_SECRET`                                                                                                                                     |
 
 - `ROOM_TICKET_SECRET` must be identical on `apps/api` and `apps/realtime`. `PERSISTENCE_SECRET` (Worker) must be identical to `INTERNAL_INGEST_SECRET` (API) — different names, same value. Nothing in the code enforces either match; getting one wrong is exactly what caused two of the [real incidents](#real-incidents-found-operating-this) above.
 - Every Sentry variable is optional and additive — omitting all of them leaves both SDKs inert (no-op), never a startup or build failure. See [Observability](#observability).
-- Never put MongoDB, OIDC, room-ticket, email-delivery, or TURN credentials in `NEXT_PUBLIC_*` variables — those are shipped to every browser that loads the page.
+- Never put MongoDB, Redis, OIDC, room-ticket, email-delivery, or TURN credentials in `NEXT_PUBLIC_*` variables — those are shipped to every browser that loads the page.
 - Local defaults exist for everything except `MONGODB_URI`, so local dev needs no secrets configured at all beyond copying `.dev.vars.example`. Production has no such fallback — see [Boot-time validation](docs/security.md#boot-time-validation).
 
 ## Commands
@@ -573,6 +574,8 @@ Partly to build the actual flow (Authorization Code + PKCE, JWKS, token rotation
 
 **Why Cloudflare Durable Objects instead of Redis/Ably/Pusher for presence?**
 Those solve "many stateless servers agree on shared state" by adding a coordination service Threadline would have to run, operate, and pay for. A Durable Object gives one authoritative, in-memory instance per room natively, with no separate service and no consistency protocol to write by hand. [ADR-0001](docs/decisions/0001-durable-objects-for-realtime.md) has the full tradeoff against that alternative.
+
+That answer is unchanged by `apps/api` optionally using Redis for rate-limit counters ([ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md)) — a counter has no owner to elect, which is the entire reason presence and a counter get different answers. `apps/realtime` has no Redis dependency and cannot have one: workerd has no Node TCP socket.
 
 **Can I run this without Vercel or Cloudflare?**
 `apps/web` and `apps/api` can run anywhere Node 22 runs — Docker, Kubernetes, bare metal — see [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). `apps/realtime` genuinely cannot: it's written against the Durable Objects API, which is Cloudflare-specific, and there's no portable equivalent without rewriting the presence/signaling layer against a different coordination primitive entirely.

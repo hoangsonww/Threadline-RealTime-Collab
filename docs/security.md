@@ -32,6 +32,7 @@ flowchart LR
         INTERNAL_INGEST_SECRET["INTERNAL_INGEST_SECRET<br/>(verifies inbound)"]
         OIDC_PRIVATE_JWK["OIDC_PRIVATE_JWK<br/>(RS256, never shared)"]
         AUTH_DELIVERY_SECRET["AUTH_DELIVERY_SECRET<br/>(never shared)"]
+        REDIS_URL["REDIS_URL<br/>(optional, never shared)"]
     end
     subgraph rt["apps/realtime (Cloudflare)"]
         ROOM_TICKET_SECRET_B["ROOM_TICKET_SECRET<br/>(verifies)"]
@@ -50,6 +51,8 @@ flowchart LR
     style PERSISTENCE_SECRET fill:#123524,stroke:#52e0a2,color:#fff
     style INTERNAL_INGEST_SECRET fill:#123524,stroke:#52e0a2,color:#fff
 ```
+
+`REDIS_URL` is optional — unset, the API behaves exactly as it did before [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) — and it embeds its own password, so it is a secret in the same sense as the rest. It authorizes exactly one narrow thing: the ephemeral counters described under [Rate limits](#rate-limits). It cannot be substituted for any other secret, and what it protects is deliberately worthless on its own — rate-limit windows keyed by a **hashed** IP (`sha256(request.ip)`, truncated; the raw address never reaches Redis) and opaque "was this credential used in the last 60 seconds" flags. No session token, no password hash, no room ticket, and nothing that grants access to anything ever goes into it. A leak lets someone reset their own rate-limit counters; it does not authenticate them as anyone. `apps/api/src/cache.ts` never logs the URL, including on the connection-failure path where it would be most tempting.
 
 Both shared secrets are **independently configured on two different platforms**, with nothing in the code enforcing they match — a value entered wrong on either side fails closed (every ticket rejected, or every ingest webhook rejected) rather than open, but it also fails _silently_: nothing crashes, the symptom is just "realtime doesn't work" or "events never persist," with no error visible unless someone specifically diagnoses it. This exact class of mismatch happened for real, twice, in this project's own deployment — see [`operations.md`](operations.md#incidents) for both.
 
@@ -122,6 +125,22 @@ flowchart TB
 ```
 
 Four independent, correctly-isolated buckets, consistent no matter which of Vercel's serverless instances happens to serve a given request. See [`operations.md`](operations.md#incident-rate-limiter-shared-one-bucket-across-every-endpoint) for how this was actually found.
+
+### Where the counters actually live
+
+When `REDIS_URL` is configured, `rateLimitBucket()` in `application.ts` counts in Redis (an atomic `INCR` + `PEXPIRE` Lua script — see [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md)) instead of MongoDB. Both stores are shared across every instance, so the property that matters above is unchanged. Three things about that are worth stating plainly rather than leaving to be discovered:
+
+- **Redis is weaker than MongoDB here, on purpose.** A Redis instance under memory pressure with `maxmemory-policy allkeys-lru` can evict a *live* counter mid-window, which hands the affected caller a fresh budget. MongoDB's TTL index cannot do that — it only deletes buckets whose window has already closed. The exposure is bounded to one window per evicted key, and it is the price of not writing to the database on the unauthenticated surface. Provision Redis with enough headroom that eviction is not routine, and prefer an instance Threadline does not share with another application: a shared `allkeys-lru` budget means someone else's traffic can evict these counters.
+- **A Redis outage mid-window also resets counters**, because MongoDB has no record of the attempts Redis counted. Same bound, same reasoning. The alternative — writing to both — would remove the entire benefit.
+- **There is no path that skips the count.** If Redis is unset, unreachable, disconnected, or slower than 250ms, `rateLimitBucket()` falls back to `Repository.incrementRateLimit` and the limit is enforced by MongoDB. The fallback direction is toward the *stricter* store, never toward an unlimited endpoint, and `app.test.ts` asserts a 429 still happens with a cache that throws on every call.
+
+`/health` reports `cache: "ready" | "unavailable" | "disabled"` so which of the two is currently enforcing the limit is observable without reading logs.
+
+### Session and token bookkeeping
+
+`lastUsedAt` on a session or personal access token used to be written to MongoDB on every authenticated request. With a cache configured it is written at most once per 60 seconds per credential, gated by `Cache.claim`.
+
+This is a **write** optimization only, and the distinction is the security-relevant part: the session or token row is still read from the repository on every single request, and still checked for `revokedAt` and expiry there. Nothing about authentication or authorization is cached, so revocation remains immediate — a revoked session's very next request is a 401 even while its touch-claim is still live. `app.test.ts` asserts exactly that, because it is the assumption the whole optimization rests on. If the cache is unreachable, `shouldRecordUse()` returns `true` and the write happens unconditionally, which is the pre-existing behaviour.
 
 ## Workspace invite codes and role changes
 
@@ -226,6 +245,8 @@ flow gates its continue button behind an explicit acknowledgement rather than le
 ## Boot-time validation
 
 `apps/api/src/index.ts` refuses to start in production with an insecure or incomplete configuration. Every secret (`ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET`) must be at least 32 characters; `OIDC_ISSUER` and `WEB_ORIGIN` must be HTTPS; `OIDC_PRIVATE_JWK` and `MONGODB_URI` must be present. There is no "start anyway with defaults" path in production — every one of these has a development-only fallback that's explicitly disabled once `NODE_ENV=production` (Vercel Preview deployments are treated as pre-production for this check, since they still need to exercise Atlas and real secrets).
+
+`REDIS_URL` is the one deliberate exception, and it is not a weakening: the API starts normally whether or not Redis is reachable. `createRedisCache()` never awaits the connection — it returns a cache that reports itself `unavailable` until the socket is ready, so every call falls back to MongoDB in the meantime and the connection is retried in the background. That is the correct direction because Redis holds nothing this service cannot recompute, so letting a cache outage take down authentication would trade a small cost for a total one. It is also not merely a policy choice: `connect()` does not reject on an unreachable server, it retries, so awaiting it would have meant an unreachable Redis blocking the boot indefinitely. The only case that disables the cache outright is a `REDIS_URL` that cannot be parsed, which no amount of retrying would fix.
 
 ## Audit log
 

@@ -39,6 +39,7 @@ apps/api/src/
   policy.ts          EVERY authorization decision. canOrganization / canRoom / effectiveRoomRole
   security.ts        sessions, hashing, token and room-ticket primitives
   repository.ts      the Repository interface + MemoryRepository and MongoRepository
+  cache.ts           the Cache port + MemoryCache and RedisCache — ephemeral, evictable, optional
   application.ts     createApp(options) — all routes. The largest file; read the region you need
   openapi.ts         createOpenApiDocument() — the OpenAPI 3.1 spec
   api-docs.ts        Swagger UI and ReDoc rendering
@@ -91,7 +92,7 @@ Violating any of these will be caught in review, and most are caught by CI first
 
 1. **Authorization goes through `apps/api/src/policy.ts`.** If a route reads or writes a room or organization resource, it calls `canRoom` / `canOrganization` / `canInviteToOrganization`. A handler that decides for itself is a bug whatever it concludes. Never infer access from an id alone.
 
-2. **Route handlers depend on the `Repository` interface, not on MongoDB.** Importing the `mongodb` package outside `repository.ts` is wrong — see [ADR 0003](docs/decisions/0003-repository-interface.md). `MemoryRepository` exists so the suite runs without a database; a change that only works against Mongo breaks it.
+2. **Route handlers depend on the `Repository` interface, not on MongoDB.** Importing the `mongodb` package outside `repository.ts` is wrong — see [ADR 0003](docs/decisions/0003-repository-interface.md). `MemoryRepository` exists so the suite runs without a database; a change that only works against Mongo breaks it. The same rule holds for `redis` and `cache.ts` — and `Cache` is a *separate* port on purpose: it is evictable and may throw, so every call site must have a fallback that does more work, never one that enforces less. See [ADR 0009](docs/decisions/0009-redis-for-ephemeral-counters.md).
 
 3. **No `any`.** ESLint is configured with `@typescript-eslint/no-explicit-any: error`. If a type is genuinely hard to express, write the awkward type and a comment explaining why — not an escape hatch.
 
@@ -155,7 +156,7 @@ A new dependency, a new data model relationship, or a new trust boundary needs a
 | Suite | Where | Runner | Notes |
 | --- | --- | --- | --- |
 | API integration | `apps/api/src/app.test.ts` | vitest (node) | `supertest` against `createApp()` + `MemoryRepository` |
-| API units | `apps/api/src/*.test.ts` | vitest (node) | `repository`, `turn`, `openapi` |
+| API units | `apps/api/src/*.test.ts` | vitest (node) | `repository`, `turn`, `openapi`, `cache` |
 | Durable Object | `apps/realtime/src/index.test.ts` | `@cloudflare/vitest-pool-workers` | needs workerd — excluded from the root vitest config on purpose |
 | Web units | `apps/web/lib/*.test.ts` | vitest (node) | `peer-mesh`, `sound`, `call-shortcuts` |
 | Browser | `apps/web/components/*.spec.ts` | Playwright | run with `npm run test:browser`, not `npm test` |

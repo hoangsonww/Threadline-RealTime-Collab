@@ -123,7 +123,7 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 | Method & path | Auth | Notes                                                                                                          |
 | ------------- | ---- | -------------------------------------------------------------------------------------------------------------- |
-| `GET /health` | none | Liveness only. Reports that the process is serving requests; it does **not** check MongoDB, so a healthy response does not by itself prove an authenticated request would succeed. |
+| `GET /health` | none | Liveness only. Reports that the process is serving requests; it does **not** check MongoDB, so a healthy response does not by itself prove an authenticated request would succeed. The `cache` field (`ready`/`unavailable`/`disabled`) reports the optional ephemeral store — all three values are healthy, see [`operations.md`](operations.md#cache-on-the-apis-health). |
 | `GET /openapi.json` | none | The versioned OpenAPI document these tables describe.                                                     |
 | `GET /api-docs`, `GET /api-docs/redoc` | none | Swagger UI and ReDoc, rendered from that same document.                               |
 

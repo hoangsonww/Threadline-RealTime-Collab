@@ -115,6 +115,23 @@ spec:
                   name: threadline-secrets
                   key: SENTRY_DSN
                   optional: true
+            # Optional — ephemeral cache for rate-limit windows and session
+            # bookkeeping. It carries a password, so it is a Secret rather than
+            # a ConfigMap value. Absent (or unreachable), the API starts anyway
+            # and those operations go to MongoDB, so this must stay `optional`
+            # — see docs/decisions/0009-redis-for-ephemeral-counters.md.
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: threadline-secrets
+                  key: REDIS_URL
+                  optional: true
+            - name: REDIS_KEY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: threadline-runtime
+                  key: REDIS_KEY_PREFIX
+                  optional: true
           startupProbe:
             httpGet:
               path: /health
