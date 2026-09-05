@@ -161,6 +161,8 @@ kubectl -n threadline-production create secret generic threadline-secrets \
   --from-literal=AUTH_DELIVERY_SECRET="$(openssl rand -hex 32)"
 ```
 
+`REDIS_KEY_PREFIX` is in the base ConfigMap rather than the Secret — it is a namespace, not a credential — and it is spelled out there rather than left to the code's default because a Redis shared with another application is exactly the case where a prefix earns its place. It is inert without `REDIS_URL`.
+
 `REDIS_URL` is optional and, like `SENTRY_DSN`, referenced as an `optional: true` secret key so the pod starts identically without it. Add it — `--from-literal=REDIS_URL='rediss://default:<password>@<host>:6379'` — only if you are running a Redis for the cache described in [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md); without it, rate limits and session bookkeeping use MongoDB. It belongs in the Secret rather than the ConfigMap because it embeds a password.
 
 `SENTRY_DSN` is deliberately not in that command — `api-deployment.yaml` references it as an `optional: true` secret key, so the pod starts identically whether or not it's present. Add it the same way, `--from-literal=SENTRY_DSN='https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>'`, only if you want error/performance monitoring active; the container never fails to start over a missing key.
