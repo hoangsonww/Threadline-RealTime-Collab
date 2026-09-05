@@ -7,7 +7,10 @@ graph TD
     subgraph api["apps/api — vitest (Node environment)"]
         A1["app.test.ts"]
         A2["createApp() + MemoryRepository()<br/>+ supertest — full HTTP requests,<br/>zero mocking of Express or the repository"]
+        A3["cache.test.ts"]
+        A4["RedisCache over a scriptable stub —<br/>NOSCRIPT fallback, stalls, disconnects,<br/>and the non-blocking connect, with no server"]
         A1 --> A2
+        A3 --> A4
     end
     subgraph rt["apps/realtime — vitest (workerd, via @cloudflare/vitest-pool-workers)"]
         R1["index.test.ts"]
@@ -58,6 +61,7 @@ What's covered, concretely:
 - **Rate limiting actually trips a limit and asserts `429`**: 12 failed logins in a row against the same route correctly get blocked on the 13th, and — the actual regression this test guards — a request to a _different_ rate-limited route (`/v1/auth/register`) immediately afterward still succeeds, proving the two routes have independent buckets rather than sharing one (see [`security.md`](security.md#rate-limits) for the bug this would have caught). A sibling test does the same for `POST /v1/join`'s own 10/15min bucket.
 - **The optional cache never becomes a way around a limit.** With a `MemoryCache` injected, the counting happens there and `Repository.incrementRateLimit` is asserted never to be called; with a cache whose every method throws, the 429 still arrives — from MongoDB — with its `Retry-After` header. The pairing is the point: the fast path must be fast, and the degraded path must still be a limit. See [`security.md`](security.md#where-the-counters-actually-live).
 - **Collapsing `lastUsedAt` writes does not extend a credential's life.** Three authenticated requests produce exactly one `updateSession` write, and then the session is revoked *while its touch-claim is still live* and the very next request must be `401`. That second assertion is the whole safety argument for the optimization: only the write is cached, never the authorization decision.
+- **The Redis adapter is tested against a stub rather than a server**, because the behaviour that matters is what it does when Redis misbehaves and none of that is reachable against a healthy one: a forgotten script (`NOSCRIPT` → `EVAL`, then back to `EVALSHA`), an `OOM` reply, a reply it cannot trust, a disconnected client, a command that never returns, and a second `close()` — which the driver's own `destroy()` throws on. One test asserts `createRedisCache` returns without blocking on an unreachable server; that is a regression guard for a real bug, since `connect()` retries rather than rejecting and awaiting it made an unreachable Redis block the API's boot indefinitely.
 - **`cache` on `/health` is asserted in all its states** — `disabled` with no cache configured, `ready` with one — because it is what an operator reads to tell "degraded to MongoDB" from "broken".
 - **Registration creates no organization**, and every organization-scoped page correctly has nothing to show until the account explicitly creates or joins one (`GET /v1/auth/me` returns `organizations: []`, and an org-scoped room the account has no membership in returns `403`, not a silent empty list).
 - **Workspace creation and join-by-code**, end to end: `POST /v1/orgs` never includes `joinCode` in its own response (asserted directly against the response body, not just inferred); `POST /v1/join` accepts a code case-insensitively and with incidental whitespace, rejects an unknown code with `404`, and rejects a code for a workspace the caller already belongs to with `409`.

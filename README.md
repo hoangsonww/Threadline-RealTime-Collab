@@ -157,6 +157,7 @@ Threadline provides a single, unified workspace for a live call and its durable 
 | Node.js              | Runtime for `apps/api`; also the local dev runtime for tooling                                                                                                             |
 | Express              | REST framework for `apps/api`, wrapped in a pure `createApp()` factory so the same code boots identically in tests, Docker, Kubernetes, and Vercel                         |
 | MongoDB (Atlas)      | Durable datastore in production, behind the `Repository` interface — never imported directly by route handlers                                                             |
+| Redis                | **Optional** ephemeral store for rate-limit windows and session `lastUsedAt` bookkeeping, behind a `Cache` port kept deliberately separate from `Repository` — unset `REDIS_URL` and both fall back to MongoDB, see [ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md)   |
 | Cloudflare Workers   | Hosts `apps/realtime`'s fetch handler, which routes WebSocket upgrades to the right Durable Object                                                                         |
 | Durable Objects      | One authoritative, in-memory instance per room for presence and signaling — the one piece of state that can't just be "more instances of a stateless server"               |
 | Vercel               | Hosts `apps/web`, and in this project's own live deployment, `apps/api` as well                                                                                            |
@@ -190,14 +191,19 @@ graph LR
     Web --> API["apps/api<br/>Express"]
     Browser -->|"signed room ticket<br/>WebSocket"| RT["apps/realtime<br/>Cloudflare Durable Objects"]
     API --> DB[("MongoDB Atlas")]
+    API -.->|"optional: rate-limit windows,<br/>session touches — falls back to Mongo"| Redis[("Redis")]
     RT -->|"durable event webhook"| API
     Browser <-.->|"WebRTC: audio, video,<br/>screen share, files"| Browser
+
+    style DB fill:#123524,stroke:#52e0a2,color:#fff
+    style Redis fill:#2b2140,stroke:#8a63ff,color:#fff
 ```
 
 - The browser talks to `apps/web` over HTTPS with a session cookie or PAT.
 - `apps/web` proxies the API through a same-origin rewrite, so the session cookie stays first-party even though the API is a separate Vercel project.
 - The browser opens a WebSocket **directly** to the Cloudflare Worker, authenticated by a short-lived, single-purpose signed ticket — not the session cookie.
 - The Durable Object never talks to MongoDB. It only hands events to the API over an authenticated webhook, retrying if that fails.
+- Redis is the only dashed arrow for a reason: it holds nothing that cannot be recomputed. Every operation behind it falls back to MongoDB when it is unset, unreachable, or slow, and `apps/realtime` has no Redis dependency at all.
 - WebRTC media (audio/video/screen/files) flows peer-to-peer once signaling completes — never through a server.
 - Full breakdown: [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`docs/architecture.md`](docs/architecture.md).
 
@@ -299,9 +305,10 @@ Concrete numbers, not marketing — what actually happens as usage grows, and wh
 | WebRTC mesh bandwidth per participant | O(n − 1) upload connections for a room of _n_ people — a 6-person room means 5 simultaneous outbound video/audio streams from each participant's browser. Fine at the small-team scale this product targets; a 20-person room would mean 19 outbound streams per participant, which most consumer upload bandwidth can't sustain. See [ADR-0002](docs/decisions/0002-webrtc-mesh-not-sfu.md) for the SFU alternative and why it wasn't chosen.        |
 | Durable Object idle cost              | Zero ongoing compute for a room with no active WebSocket connections — Cloudflare hibernates the object between messages (`state.acceptWebSocket()`), so an idle-but-connected room costs nothing until the next message arrives. A brand-new room's Durable Object is created lazily, on the first request that names its ID.                                                                                                                        |
 | API request latency                   | Serverless cold start on Vercel for `apps/api` (a few hundred ms on a cold instance, low single-digit ms once warm) plus one MongoDB Atlas round trip per request that touches the database — every ABAC check re-queries membership rather than caching it, which is a deliberate correctness trade-off (see [Engineering principles](#engineering-principles)), not an oversight.                                                                   |
-| Rate limits                           | Login/register/password-reset: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. All backed by an atomic Mongo counter, not process-local memory, so the limit holds across every serverless instance handling that IP — see [`docs/security.md`](docs/security.md#rate-limits).                                             |
+| Rate limits                           | Login/register/password-reset: 5–12 requests per window per hashed IP. `POST /v1/join` (a caller-supplied secret checked against every organization in the system): 10 per 15 minutes. Backed by shared state — an atomic Redis `INCR` where `REDIS_URL` is set, an atomic Mongo counter otherwise — never process-local memory, so the limit holds across every serverless instance handling that IP. See [`docs/security.md`](docs/security.md#rate-limits), and the row below for what the Redis path costs. |
 | Horizontal scaling (Kubernetes)       | The stateless web/API tier autoscales 2–10 replicas via HPA on CPU, with a PodDisruptionBudget and a soft topology-spread preference so replicas don't collapse onto one node. `apps/realtime` doesn't scale this way at all — it isn't stateless, and Cloudflare's Durable Object placement (one instance per room, globally) is the scaling model, not replica count. See [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md). |
 | Room-event history                    | The in-memory timeline broadcast to connected clients keeps the most recent 200 events per room session; the durable `RoomEvent` collection in MongoDB is unbounded and is what the activity feed and timeline actually read from after a reload.                                                                                                                                                                                                     |
+| Ephemeral cache (`REDIS_URL`)         | Removes a Mongo write from every rate-limited request and, via a 60-second claim, from every authenticated request's `lastUsedAt` bump. **Measured cost on serverless:** a cold Vercel instance serves its first requests before its Redis socket is ready and falls back to Mongo, so the two stores hold separate counts and the _effective_ login limit measured against the live deployment was ~20 attempts rather than 12. Correct, bounded, and per-IP, but genuinely looser — the fix is an HTTP-based Redis with no connection state, not a tuning knob. Unset `REDIS_URL` and the limit is exactly 12 again. See [ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md). |
 
 ## Real incidents found operating this
 
@@ -450,6 +457,7 @@ Threadline/
 │   │   └── src/
 │   │       ├── domain.ts       entity types (User, Room, Session, PAT, ...)
 │   │       ├── repository.ts   Repository interface + Memory/Mongo implementations
+│   │       ├── cache.ts        Cache port + Memory/Redis implementations (optional, evictable)
 │   │       ├── policy.ts       ABAC decision logic
 │   │       ├── application.ts  createApp() factory, routes, middleware
 │   │       ├── security.ts     hashing, tokens, cookies
@@ -475,7 +483,7 @@ Threadline/
 │   ├── ISSUE_TEMPLATE/          Bug, feature, and documentation issue forms
 │   ├── PULL_REQUEST_TEMPLATE.md
 │   ├── CODEOWNERS               Security-sensitive paths get an explicit owner
-├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB)
+├── compose.yaml               Local Docker Compose stack (web + API + realtime + MongoDB + Redis)
 ├── Makefile                   Task runner — `make help` lists everything
 ├── typedoc.json               Generated API reference configuration
 ├── AGENTS.md                  Conventions for coding agents (authoritative)

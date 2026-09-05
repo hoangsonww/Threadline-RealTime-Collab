@@ -99,6 +99,8 @@ graph TB
     style RT fill:#2b2140,stroke:#8a63ff,color:#fff
 ```
 
+There is deliberately no Redis in that diagram: `REDIS_URL` is optional, and the zero-cost path leaves it unset so rate limits and session bookkeeping run on Atlas. Adding one is a later, separate decision — see the three checks above and [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
+
 Four different providers, zero shared infrastructure, and the browser only ever sees two origins directly (`Web`, over HTTPS, and `RT`, over WebSocket — which doesn't carry the session cookie at all, only its own signed ticket). `API` is only ever reached server-side, through the rewrite — which is the entire reason the rewrite exists: without it, a session cookie set by Render would not be sent back on a request to a `*.vercel.app` page, because they're different sites.
 
 ### Keep browser authentication same-origin

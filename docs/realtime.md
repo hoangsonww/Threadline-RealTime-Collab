@@ -2,6 +2,8 @@
 
 This is the plane most of Threadline's actual complexity lives in: one Cloudflare Durable Object per room coordinating presence and WebRTC signaling over hibernatable WebSockets, plus a browser-side mesh (`apps/web/lib/peer-mesh.ts`) that turns that signaling into real peer-to-peer audio, video, screen share, and file transfer. Nothing here touches MongoDB directly — the Durable Object's only connection to the durable-records plane is a fire-and-forget webhook (see [`architecture.md`](architecture.md#durable-event-hand-off)).
 
+Nothing here touches Redis either, and that is a decision rather than an omission. Presence needs exactly one authoritative owner per room, which is what a Durable Object is and what a pub/sub cache is not — [ADR-0001](decisions/0001-durable-objects-for-realtime.md). It also could not work: `apps/realtime` runs on workerd, which exposes no Node TCP socket, so neither `node-redis` nor `ioredis` runs in this plane at all, and a hibernating Durable Object holding a connection would be wrong even if one did. The optional Redis in [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) belongs to `apps/api` only.
+
 ## Table of contents
 
 - [RoomDurableObject](#roomdurableobject)

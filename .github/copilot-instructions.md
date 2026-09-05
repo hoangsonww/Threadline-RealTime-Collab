@@ -7,7 +7,7 @@
 Three independently deployable services that **do not trust each other's enforcement**:
 
 - `apps/web` — Next.js on Vercel. The client.
-- `apps/api` — Express 5 on Node with MongoDB. Identity, authorization, persistence.
+- `apps/api` — Express 5 on Node with MongoDB, plus an optional Redis cache. Identity, authorization, persistence.
 - `apps/realtime` — Cloudflare Worker with one Durable Object per room. Signalling, presence, fan-out.
 
 The API signs a room ticket; the realtime tier verifies it **independently**. A check that looks redundant across services is almost certainly load-bearing. Do not suggest removing one.
@@ -16,12 +16,13 @@ The API signs a room ticket; the realtime tier verifies it **independently**. A 
 
 1. **Authorization goes through `apps/api/src/policy.ts`** — `canRoom`, `canOrganization`, `canInviteToOrganization`. Never infer access from an id alone, and never inline a role comparison in a route handler.
 2. **New `Repository` methods must be implemented in both `MemoryRepository` and `MongoRepository`.** Missing the first fails every test; missing the second fails only in production.
-3. **Never import `mongodb` outside `apps/api/src/repository.ts`.**
-4. **No `any`.** ESLint treats `@typescript-eslint/no-explicit-any` as an error.
-5. **Type-only imports use `import type`.**
-6. **No secrets in `NEXT_PUBLIC_*`** — those are compiled into the client bundle.
-7. **A new endpoint needs a test for its 403**, not only its 200.
-8. **A behavior change needs its `docs/` update in the same change.**
+3. **Never import `mongodb` outside `apps/api/src/repository.ts`, or `redis` outside `apps/api/src/cache.ts`.**
+4. **`Cache` is not `Repository`.** The repository is the store of record; the cache is evictable and may throw. Every `Cache` call site needs a fallback that does *more* work — never one that enforces less. Nothing authorization-related is ever cached. See [ADR-0009](../docs/decisions/0009-redis-for-ephemeral-counters.md).
+5. **No `any`.** ESLint treats `@typescript-eslint/no-explicit-any` as an error.
+6. **Type-only imports use `import type`.**
+7. **No secrets in `NEXT_PUBLIC_*`** — those are compiled into the client bundle.
+8. **A new endpoint needs a test for its 403**, not only its 200.
+9. **A behavior change needs its `docs/` update in the same change.**
 
 ## Style
 

@@ -50,4 +50,5 @@ Placement is a judgment call, not a formula — TURN and the `apps/web` test sui
 
 ## Explicitly out of scope (decided, not forgotten)
 
+- **Redis for presence, fan-out, or anything in `apps/realtime`.** Settled twice, in opposite directions, for good reasons: [ADR-0001](decisions/0001-durable-objects-for-realtime.md) rejected it for presence because a room needs one authoritative owner and a cache does not provide one, and [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) accepted it in `apps/api` for ephemeral counters, which have no owner to elect. The realtime plane additionally cannot use it — workerd has no Node TCP socket.
 - **Server-side live streaming (HLS/RTMP-style broadcast to many viewers).** Evaluated and deliberately not pursued: it would need infrastructure (transcoding, either Cloudflare Stream or a self-hosted pipeline) that doesn't fit the project's current Vercel + Cloudflare Durable Objects + MongoDB Atlas constraints without adding a paid, non-free-tier dependency. The room's WebRTC mesh remains the only live-video path.

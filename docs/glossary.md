@@ -16,6 +16,7 @@ Terms as this codebase actually uses them — not always the industry-general de
 
 ## C
 
+- **`Cache`** (port) — The second storage port in `apps/api`, beside `Repository` and deliberately not part of it. Two operations only: `incrementWindow` (a fixed rate-limit window) and `claim` (a "did this already happen recently" flag). Everything behind it is **evictable and may throw**, so every call site must have a fallback that does more work rather than enforcing less. Implemented by `MemoryCache` (tests, single-process dev) and `RedisCache`. See [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
 - **Classification** (room) — `internal` or `confidential`. Only matters when `visibility` is `organization`: a `confidential` room additionally requires explicit `RoomMembership` even for regular org members (org owners/admins still get in via their elevated role). Doesn't apply to `restricted` rooms, which already require explicit membership regardless.
 - **Credential** — The `passwordHash`/`emailVerifiedAt` record, stored as a table separate from `User` so a `User` object can be handled/logged without any risk of a hash traveling with it. `emailVerifiedAt` can no longer be set — email verification was removed because nothing could deliver its mail — so it is null for every account except one that verified before the removal, whose timestamp is retained rather than rewritten. The field survives because the OIDC `email_verified` claim is derived from it.
 
@@ -57,6 +58,8 @@ Terms as this codebase actually uses them — not always the industry-general de
 - **Presence** — The live participant list for a room, broadcast to everyone connected whenever it changes (join, leave, screen-share toggle). Distinct from the _durable_ `RoomEvent` log — presence is ephemeral and never persisted on its own.
 
 ## R
+
+- **Redis** — Optional, enabled by `REDIS_URL`. Holds only ephemeral counters: rate-limit windows and 60-second session/PAT "recently recorded" claims. It is **not** a store of record — under `allkeys-lru` any key can be evicted at any moment — and nothing authorization-related is ever cached in it. `apps/realtime` has no Redis dependency and cannot have one (workerd has no Node TCP socket); presence remains a Durable Object concern per [ADR-0001](decisions/0001-durable-objects-for-realtime.md). See [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
 
 - **Repository** — The `apps/api/src/repository.ts` interface (`getUser`, `createRoom`, `listRoomEvents`, `incrementRateLimit`, …) with two implementations: `MemoryRepository` (tests, local dev with no `MONGODB_URI`) and `MongoRepository` (production). Route handlers in `application.ts` depend only on the interface.
 - **Restricted room** (`visibility: "restricted"`) — Requires explicit `RoomMembership` to read/join at all, regardless of classification. Org owners/admins can still intervene via their elevated effective role. Currently has no membership-revoke UI — see [`roadmap.md`](roadmap.md).

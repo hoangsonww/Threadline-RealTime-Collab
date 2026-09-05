@@ -29,6 +29,9 @@ Live on the deployed API: [Swagger UI](https://threadline-app-api.vercel.app/api
 
 ## Three ways to authenticate
 
+> [!NOTE]
+> `lastUsedAt` on a session or personal access token is accurate to within 60 seconds, not to the request, when `REDIS_URL` is configured — the write is collapsed behind a short claim so that reading an endpoint does not cost a database write. The credential itself is still read and re-checked on **every** request, so revocation remains immediate. See [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
+
 ```mermaid
 flowchart TD
     Start(["Who's calling?"]) --> Browser{"Browser with a<br/>Threadline session?"}

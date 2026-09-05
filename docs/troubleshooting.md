@@ -19,6 +19,8 @@ Real problems hit while developing and testing this codebase, not a generic chec
 - [`npm run typecheck` fails only in `apps/realtime`, complaining about `cloudflare:test`](#npm-run-typecheck-fails-only-in-appsrealtime-complaining-about-cloudflaretest)
 - [`apps/realtime` tests fail with "Isolated storage failed" / a `.sqlite-shm` assertion error](#appsrealtime-tests-fail-with-isolated-storage-failed--a-sqlite-shm-assertion-error)
 - [`npm run format:check` fails on files that look fine](#npm-run-formatcheck-fails-on-files-that-look-fine)
+- [`/health` reports `cache: "unavailable"`](#health-reports-cache-unavailable)
+- [Rate limits allow more attempts than the documented number](#rate-limits-allow-more-attempts-than-the-documented-number)
 - [Wrangler prints a compatibility-date warning at every command](#wrangler-prints-a-compatibility-date-warning-at-every-command)
 
 ## Where to start
@@ -127,6 +129,28 @@ flowchart TD
 **Cause:** New files added outside an editor with format-on-save (or edited via a script) don't get Prettier's formatting automatically. `npm run lint` (ESLint) and `npm run format:check` (Prettier) are separate checks — passing one doesn't imply the other.
 
 **Fix:** `npx prettier --write <files>` before committing, or just run `npm run format` at the repo root.
+
+## `/health` reports `cache: "unavailable"`
+
+**Cause:** `REDIS_URL` is set but the connection is not currently up. This is **not an outage** — every operation behind the cache has already fallen back to MongoDB, and the service is fully functional, just paying the pre-[ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) cost. It is also expected transiently on a serverless platform: a cold instance answers its first requests before its Redis socket finishes connecting.
+
+`disabled` means something different and equally fine — no `REDIS_URL` is configured at all.
+
+**Fix:** Usually nothing. If it stays `unavailable` on a warm instance, check the Redis provider, then look for `Redis is unreachable` in the API logs — it's logged once when an outage starts and once (`Redis reconnected`) when it ends, never per request. No restart is needed; the driver reconnects on its own. If those two lines interleave repeatedly, the connection is flapping rather than down, which is a different problem.
+
+## Rate limits allow more attempts than the documented number
+
+**Cause:** Redis and MongoDB are counting separately. `rateLimitBucket()` uses Redis when the instance's socket is ready and falls back to Mongo when it isn't, and neither store can see the other's tally — so on a platform that cold-starts instances constantly, the attempts split across two counters and the effective limit is the sum of both thresholds rather than one. Measured against the live Vercel deployment, login allowed roughly 20 attempts instead of 12.
+
+Two related, smaller cases: a Redis outage mid-window discards whatever Redis had counted, and eviction under `allkeys-lru` can drop a live counter, both restarting that window.
+
+**Fix:** Pick one.
+
+- **Unset `REDIS_URL`.** The limit is exactly the documented number again, enforced by Mongo's TTL index, which never drops a live bucket. The code stays deployed and inert.
+- **Use an HTTP-based Redis** (for example Upstash). With no connection state, every invocation uses the same store and the split disappears. This is the actual fix rather than a trade-off.
+- **Accept it**, if the write reduction matters more than the exact threshold. It is still bounded, still per-IP, and passwords are Argon2id.
+
+See [`security.md`](security.md#where-the-counters-actually-live).
 
 ## Wrangler prints a compatibility-date warning at every command
 

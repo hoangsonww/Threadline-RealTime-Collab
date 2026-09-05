@@ -115,14 +115,21 @@ Every rate-limited endpoint shared one bucket keyed only by IP, and that one buc
 
 ```mermaid
 flowchart TB
-    subgraph after["After: Repository.incrementRateLimit, keyed by request.baseUrl"]
+    subgraph after["After: shared state, keyed by request.baseUrl"]
         direction TB
         L2["POST /v1/auth/login"] -->|"req.baseUrl === '/v1/auth/login'"| KL["key: '/v1/auth/login:iphash'"]
         R2["POST /v1/auth/register"] -->|"req.baseUrl === '/v1/auth/register'"| KR["key: '/v1/auth/register:iphash'"]
-        KL --> DB[("Mongo rate_limits collection<br/>atomic $inc pipeline update<br/>shared across every instance")]
-        KR --> DB
+        KL --> RL{{"rateLimitBucket()"}}
+        KR --> RL
+        RL -->|"REDIS_URL set<br/>and answering"| RED[("Redis<br/>atomic INCR + PEXPIRE<br/>evictable under allkeys-lru")]
+        RL -.->|"unset, unreachable,<br/>slow, or erroring"| DB[("Mongo rate_limits collection<br/>atomic $inc pipeline update<br/>TTL index never drops a live bucket")]
     end
+
+    style RED fill:#2b2140,stroke:#8a63ff,color:#fff
+    style DB fill:#123524,stroke:#52e0a2,color:#fff
 ```
+
+Both stores are shared across every serverless instance, so the property this diagram exists to show is unchanged. The dashed arrow is the important one: it degrades toward the **stricter** store, never toward an unlimited endpoint.
 
 Four independent, correctly-isolated buckets, consistent no matter which of Vercel's serverless instances happens to serve a given request. See [`operations.md`](operations.md#incident-rate-limiter-shared-one-bucket-across-every-endpoint) for how this was actually found.
 

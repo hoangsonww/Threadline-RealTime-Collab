@@ -30,6 +30,8 @@ npm run dev
 
 Prefer a container? [`.devcontainer/`](.devcontainer/) provides the full toolchain plus a MongoDB sidecar, with `MONGODB_URI` already pointed at it — so the API persists by default in there, unlike on the host.
 
+Nothing above needs Redis. `apps/api` uses it only when `REDIS_URL` is set, and without it the rate limiter and session bookkeeping go straight to the repository exactly as before — so the default local loop is unchanged. `npm run docker:up` does start a Redis alongside MongoDB if you want to exercise that path; stop that one container and the API keeps working, which is the behaviour [ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md) exists to guarantee.
+
 See the [root README](README.md#running-it-locally) for what each of the three services needs and where they run. `npm install` also installs the `husky` hooks (below) — no separate setup step for them.
 
 When something doesn't work, run `npm run doctor` before assuming it's a code defect. It checks Node against `engines`, dependency consistency, the git hooks, your local env files, and whether ports 3000/4000/8787/27017 are free — and prints the remedy for anything it finds, not just the finding.

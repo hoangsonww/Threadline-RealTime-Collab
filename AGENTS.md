@@ -136,6 +136,13 @@ Types: `feat fix perf refactor docs test build ci style chore revert`. Scopes: `
 5. Add an integration test in `app.test.ts` — via `supertest` against `createApp()` with a `MemoryRepository`. Cover the authorized path **and** the forbidden path. A new endpoint whose 403 is untested is not finished.
 6. Update [`docs/api.md`](docs/api.md).
 
+### A new `Cache` operation
+
+1. Add the method to the `Cache` **interface** in `cache.ts`, then implement it in **both** `MemoryCache` and `RedisCache`.
+2. **Decide its degradation before using it.** Every call site must have a fallback that does *more* work, never one that enforces less — `rateLimitBucket` falls back to the repository, `shouldRecordUse` falls back to writing unconditionally. "It returns a sensible default" is not that analysis; see the worked example in [ADR 0009](docs/decisions/0009-redis-for-ephemeral-counters.md).
+3. Never cache an authorization decision. The credential is read from the repository on every request, and that is what keeps revocation immediate.
+4. Test it against a stub client, not a live server — the behaviour that matters is what happens when Redis misbehaves.
+
 ### A new realtime message
 
 1. Extend the message handling in `apps/realtime/src/index.ts`.
@@ -180,6 +187,7 @@ A change is finished when all of these are true:
 - **`npm test` does not run Playwright.** Browser specs are `*.spec.ts` and run only under `npm run test:browser`.
 - **`MONGODB_URI` empty means in-memory.** `npm run dev:api:local` sets it empty on purpose, so the API starts with `MemoryRepository` and no database. Data disappears on restart — that is expected, not a bug.
 - **`worker-configuration.d.ts` is generated** by `wrangler types` as part of the realtime `typecheck` script. Never hand-edit it; it is also excluded from Prettier and ESLint.
+- **`createRedisCache()` must not `await` the connection.** `node-redis` retries rather than rejecting an unreachable server, so awaiting it blocks the API's boot indefinitely. The un-awaited promise is deliberate — do not "tidy" it.
 - **`apps/api/src/application.ts` is ~1,800 lines.** Read the region around the routes you are changing. Do not restructure it as a side effect of an unrelated change.
 - **Prettier ignores `*.md`.** Markdown formatting is intentionally hand-managed. Do not "fix" it.
 - **The root `dev` script needs three ports free** — 3000, 4000, 8787. `make ports` shows what is holding them; `npm run doctor` checks them among other things.

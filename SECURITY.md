@@ -104,6 +104,7 @@ These paths are owned in [`.github/CODEOWNERS`](.github/CODEOWNERS) specifically
 | [`apps/api/src/policy.ts`](apps/api/src/policy.ts) | Every ABAC decision — `canRoom` and `canOrganization` |
 | [`apps/api/src/security.ts`](apps/api/src/security.ts) | Sessions, tokens, hashing, and the ticket-signing primitives |
 | [`apps/api/src/turn.ts`](apps/api/src/turn.ts) | Time-boxed TURN credential derivation |
+| [`apps/api/src/cache.ts`](apps/api/src/cache.ts) | The optional Redis cache behind rate limiting. Nothing authorization-related is cached here, and every caller falls back to MongoDB — a report showing otherwise is exactly the kind that matters |
 | [`apps/realtime/src/index.ts`](apps/realtime/src/index.ts) | Independent ticket verification at the realtime boundary |
 | [`docs/security.md`](docs/security.md) | The written trust model those files implement |
 

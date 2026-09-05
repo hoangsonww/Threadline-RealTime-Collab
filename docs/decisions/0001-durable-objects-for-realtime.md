@@ -57,3 +57,7 @@ flowchart TD
 - The Durable Object is hibernatable (see [ADR-0005](0005-sqlite-hibernatable-durable-object.md)), so idle rooms cost near-nothing.
 - Local development needs `wrangler dev`'s local Durable Object emulation (`npm run dev:realtime:local`) — this is a real, if imperfect, local emulator, not a second production implementation that could drift from Cloudflare's actual behavior. See [`../troubleshooting.md`](../troubleshooting.md) for a known local-only networking quirk in this emulation.
 - The Durable Object never talks to MongoDB directly; it hands durable events to the API over an authenticated webhook (see [`../architecture.md`](../architecture.md#durable-event-hand-off)), keeping the database credential and connection pool entirely out of the Workers runtime.
+
+## Scope of the Redis rejection
+
+This record rejects Redis as a **coordination** primitive for room presence and fan-out. It does not say the project may never depend on Redis: [ADR-0009](0009-redis-for-ephemeral-counters.md) later accepted it in `apps/api` for ephemeral rate-limit counters, which need no single owner and are allowed to be lost. Both decisions stand. `apps/realtime` still has no Redis dependency, and could not have one — workerd exposes no Node TCP socket.

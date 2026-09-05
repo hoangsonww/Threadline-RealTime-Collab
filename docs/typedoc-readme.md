@@ -12,7 +12,7 @@ It is **not** the place to start. Start with [the repository README](https://git
 
 | Package | Runtime | What it owns |
 | --- | --- | --- |
-| **`@threadline/api`** | Node (Express 5) | Identity, authorization, and durable persistence. Every ABAC decision in the system is made here, in `policy.ts`. |
+| **`@threadline/api`** | Node (Express 5) | Identity, authorization, and durable persistence, plus an optional ephemeral cache. Every ABAC decision in the system is made here, in `policy.ts`. |
 | **`@threadline/realtime`** | Cloudflare Workers (workerd) | One Durable Object per room: WebRTC signalling, presence, and the live event fan-out. Verifies room tickets independently rather than trusting the API's word. |
 | **`@threadline/web`** | Browser (Next.js) | The client. Only `lib/` is documented here — the App Router pages and the component tree are a view hierarchy, not a module API, and [`docs/frontend.md`](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/frontend.md) covers them instead. |
 
@@ -25,6 +25,7 @@ The symbols where that matters most:
 - **`policy`** — `canRoom` and `canOrganization` are the only sanctioned way to make an authorization decision about a room or organization resource. A route handler that decides for itself is a bug, whatever it concludes.
 - **`security`** — session handling, hashing, and the room-ticket signing primitives. The ticket signed here is verified again, independently, inside the Durable Object.
 - **`repository`** — the persistence port. Route handlers depend on this interface rather than on MongoDB, which is the decision recorded in [ADR 0003](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/decisions/0003-repository-interface.md).
+- **`cache`** — the *other* persistence port, and the distinction is the point: `repository` is the store of record, `cache` is evictable and may throw. A symbol here never decides authorization, and every caller of it falls back to the repository. See [ADR 0009](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/decisions/0009-redis-for-ephemeral-counters.md).
 - **`domain`** — the shared vocabulary. If a term here disagrees with [`docs/glossary.md`](https://github.com/hoangsonww/Threadline-RealTime-Collab/blob/main/docs/glossary.md), the type wins and the glossary is stale.
 
 ## Related documentation

@@ -31,7 +31,7 @@ Threadline is not a monolith split into arbitrary services. Each plane owns a di
 | Plane | Implementation | Owns | Does not own |
 | --- | --- | --- | --- |
 | Experience | [apps/web](apps/web) — Next.js App Router, React client components | Navigation, rendering, browser device state, WebRTC peer objects, ephemeral UI state | User sessions, authorization decisions, room history, room presence |
-| Durable application | [apps/api](apps/api) — Express 5, MongoDB repository | Identity, sessions, organizations, membership, room metadata, calendar, audit data, OIDC, durable event history | WebSocket connections, WebRTC media, per-room live presence |
+| Durable application | [apps/api](apps/api) — Express 5, MongoDB repository, optional Redis cache | Identity, sessions, organizations, membership, room metadata, calendar, audit data, OIDC, durable event history | WebSocket connections, WebRTC media, per-room live presence, anything that must survive cache eviction |
 | Live coordination | [apps/realtime](apps/realtime) — Cloudflare Worker and one Durable Object per room | Socket membership, signaling relay, a bounded recent-event cache, retry queue for durable delivery | MongoDB access, general browser authentication, media forwarding |
 | Direct peer data plane | Browser WebRTC mesh | Audio, video, screen streams, SCTP file data channels | Authorization, durable storage, signaling rendezvous |
 
@@ -46,8 +46,10 @@ flowchart TB
 
     subgraph Durable["Durable application plane: apps/api"]
         API["Express API<br/>auth, ABAC, REST, OIDC"]
-        Repo["Repository interface"]
+        Repo["Repository interface<br/>store of record"]
         Mongo[("MongoDB<br/>durable records")]
+        Cache["Cache port<br/>ephemeral, evictable, optional"]
+        Redis[("Redis<br/>rate-limit windows,<br/>session touch claims")]
     end
 
     subgraph Live["Live coordination plane: apps/realtime"]
@@ -62,6 +64,8 @@ flowchart TB
     Browser --> UI
     UI -->|"HTTPS: cookie or PAT"| API
     API --> Repo --> Mongo
+    API -.->|"tried first for<br/>counters and touches"| Cache -.-> Redis
+    Cache -.->|"unset, unreachable, or slow"| Repo
     UI -->|"WebSocket: short-lived room ticket"| Worker --> RoomDO
     RoomDO <--> DOStore
     RoomDO -->|"authenticated durable-event webhook"| API
@@ -69,6 +73,7 @@ flowchart TB
     Mesh -.->|"ICE candidate gathering;<br/>TURN only when configured"| Relay
 
     style Mongo fill:#123524,stroke:#52e0a2,color:#fff
+    style Redis fill:#2b2140,stroke:#8a63ff,color:#fff
     style RoomDO fill:#2b2140,stroke:#8a63ff,color:#fff
     style Mesh fill:#1c2b3a,stroke:#5ca4ff,color:#fff
 ~~~
@@ -79,6 +84,7 @@ The practical result is intentionally asymmetric:
 - A room always has one logical realtime coordinator, addressed as the Durable Object ID generated from its room ID.
 - Live media does not traverse the web app, API, Worker, or Durable Object.
 - MongoDB is the authoritative history and authorization record; a Durable Object only keeps a bounded local cache and a delivery outbox.
+- Redis, where configured, holds only values that are cheap to lose: fixed-window rate-limit counters and 60-second "already recorded" claims. Nothing reads it to make an authorization decision, and every path through it falls back to MongoDB.
 
 ## Design goals and boundaries
 
@@ -87,6 +93,8 @@ The practical result is intentionally asymmetric:
 A conventional stateless Express service is a poor owner for a room's live participant map. With more than one API instance, an in-memory map would split the room across instances. Redis, sticky sessions, leader election, or a managed realtime broker could compensate, but each introduces another distributed coordination system to operate.
 
 Durable Objects provide the primitive Threadline actually requires: a single, addressable, serialized owner for a room. The API therefore remains horizontally scalable and database-backed, while realtime state has one owner without Threadline implementing its own room-leader layer.
+
+Note the scope of that rejection: it is about **presence**, which needs a single authoritative owner per room. `apps/api` does optionally use Redis for ephemeral counters ([ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md)), and the two are not in tension — a counter has no owner to elect. `apps/realtime` has no Redis dependency and cannot have one: workerd exposes no Node TCP socket.
 
 The WebRTC mesh makes a different trade: it eliminates a media server for small collaborative rooms, at the cost of quadratic total peer connections. That trade is deliberate and bounded; it is not an SFU replacement.
 
@@ -137,6 +145,7 @@ Threadline/
 │   │   ├── src/application.ts  App factory, middleware, routes, OIDC
 │   │   ├── src/policy.ts       Organization and room ABAC decisions
 │   │   ├── src/repository.ts   Repository contract; memory and Mongo adapters
+│   │   ├── src/cache.ts        Cache contract; memory and Redis adapters (optional)
 │   │   ├── src/domain.ts       Durable domain types and scopes
 │   │   ├── src/security.ts     Hashing, tokens, JWK signing
 │   │   └── src/index.ts        Environment validation and runtime boot
@@ -249,6 +258,8 @@ Threadline keeps several kinds of state, each with an explicit owner and recover
 | Recent live room events | Durable Object SQLite key recent_events | Bounded to latest 250 | Sent as latest 100 in room.ready; convenience cache, not system history |
 | Pending durable-event deliveries | Durable Object SQLite keys prefixed delivery: | Until accepted by API | Retried by a 30-second Durable Object alarm |
 | Durable room event timeline | MongoDB via API | Durable | API event listing and organization activity read this history |
+| Rate-limit window counters | Redis when `REDIS_URL` is set, else MongoDB | Bounded by the window (15 min – 1 hour) | Evictable under `allkeys-lru`; a lost counter restarts the window, and the API falls back to the Mongo counter whenever Redis is unreachable |
+| Session/PAT "recently recorded" claims | Redis when `REDIS_URL` is set | 60 seconds | Purely an optimization — a lost claim causes one extra `lastUsedAt` write, never a stale authorization |
 | A/V, screen media, files | Browser peer mesh | Connection/session | Direct transfer; deliberately not stored by Threadline |
 
 ~~~mermaid
@@ -795,6 +806,8 @@ sequenceDiagram
 | INTERNAL_INGEST_SECRET / PERSISTENCE_SECRET | API runtime and Worker secret | Runtime / Worker secret | Same secret under different names; authenticates durable event hand-off |
 | PERSISTENCE_WEBHOOK | Worker variable | Worker deploy | Public API internal-ingest URL |
 | AUTH_DELIVERY_WEBHOOK and AUTH_DELIVERY_SECRET | API runtime | Runtime | Optional outbound delivery for the mailed reset link. Unset means no mail is sent at all; account recovery is unaffected because it runs on recovery codes |
+| REDIS_URL | API runtime | Runtime | Optional ephemeral cache for rate-limit windows and session touches. Carries a password, so it is a secret; never goes in NEXT_PUBLIC_* and is never logged. Unset, unreachable, or slow, every operation behind it falls back to MongoDB and the API boots either way |
+| REDIS_KEY_PREFIX | API runtime | Runtime | Namespaces every key (default threadline:) so a Redis shared with another application stays attributable. Does not partition the memory budget |
 | SENTRY_DSN / NEXT_PUBLIC_SENTRY_DSN | API runtime / web build | Respective lifecycle | Optional monitoring; SDKs remain inert without DSNs |
 
 ~~~mermaid
@@ -829,6 +842,8 @@ For a non-preview production API boot:
 - Additional origins must be HTTPS, except loopback HTTP for a deliberate hybrid-development exception.
 - If an account-action delivery webhook is configured, its delivery secret is required.
 
+REDIS_URL is deliberately not on that list. The API never awaits its connection at boot — node-redis retries rather than rejecting an unreachable server, so awaiting it would let a cache outage block startup indefinitely. The cache reports itself unavailable until the socket is ready, callers fall back to MongoDB in the meantime, and it starts serving with no restart once Redis answers.
+
 The in-memory repository and automatically generated signing key are allowed only outside production. This ensures a production restart cannot silently discard state or change its signing key.
 
 ## Reliability and observability
@@ -837,7 +852,7 @@ The in-memory repository and automatically generated signing key are allowed onl
 
 | Endpoint / check | Proves | Does not prove |
 | --- | --- | --- |
-| API GET /health | Process booted and passed startup validation | Cross-plane secrets match; a real room can be joined |
+| API GET /health | Process booted and passed startup validation; `cache` reports whether the optional Redis is answering (`ready` / `unavailable` / `disabled`) | Cross-plane secrets match; a real room can be joined. None of the three `cache` values is an outage — `unavailable` means callers are paying the MongoDB cost |
 | Worker GET /health | Worker is deployed and routable | Ticket verification works; persistence webhook works |
 | Web GET / | Web build serves | Public environment variables were embedded correctly |
 | End-to-end room smoke test | Auth, API rewrite, ticket, Worker, and socket behavior agree | Media can traverse every customer network; event retry duplicates are absent |
@@ -868,6 +883,8 @@ The API initializes Sentry before other app modules. Unexpected route failures a
 | API ingest unavailable | Current users continue to see live broadcasts | DO retains delivery records and retries every 30 seconds |
 | Ingest secret mismatch | Live room works but every durable delivery is rejected and retried | Correct matching secret; queued deliveries retry |
 | Durable Object hibernates | No intended user-visible interruption | Rebuild participant map from socket attachments and reload cached events |
+| Redis unreachable or unset | None. Rate limits and `lastUsedAt` writes go to MongoDB instead | `/health` reports `cache: unavailable`; the connection is retried in the background and resumes with no restart |
+| Redis evicts a live counter | The affected caller's rate-limit window restarts early | Bounded to one window; provision headroom, or unset `REDIS_URL` to use MongoDB's TTL index, which never drops a live bucket |
 | Direct peer path fails | Live media/files may not connect despite room presence and chat | Configure TURN and pass ICE servers into PeerMesh |
 
 ## Testing and delivery
@@ -912,6 +929,7 @@ The largest quality gap is browser automation. The repository has manually valid
 | Optional account-action delivery | The API can issue reset/verification actions without a configured email service; the endpoint response remains privacy-preserving but no message is delivered |
 | Audit records have no read UI | Sensitive actions are captured for future operations work but are not visible to administrators in the product |
 | Defined messages/artifacts PAT scopes are unused | They can be selected on a PAT, but no current REST endpoint checks them because chat and files are live-only |
+| Rate-limit counters split across two stores when Redis is enabled | A serverless instance that has not finished connecting counts in MongoDB while a warm one counts in Redis, and neither store sees the other's tally. Measured against the live Vercel deployment, the effective login limit was ~20 attempts rather than 12. Still bounded and per-IP, but genuinely looser; an HTTP-based Redis with no connection state removes the split, and unsetting `REDIS_URL` restores the exact limit |
 
 The accompanying ADRs explain why the four most consequential choices were accepted:
 
@@ -921,6 +939,7 @@ The accompanying ADRs explain why the four most consequential choices were accep
 - [ADR-0004: three authentication surfaces](docs/decisions/0004-three-auth-surfaces.md)
 - [ADR-0005: SQLite-backed hibernatable Durable Object](docs/decisions/0005-sqlite-hibernatable-durable-object.md)
 - [ADR-0006: self-service workspace membership](docs/decisions/0006-self-service-workspace-membership.md)
+- [ADR-0009: a separate `Cache` port for ephemeral counters](docs/decisions/0009-redis-for-ephemeral-counters.md)
 
 ## Further reading
 
