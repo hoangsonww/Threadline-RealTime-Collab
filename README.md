@@ -615,6 +615,7 @@ There is some `apps/web` coverage — the WebRTC mesh, the sound engine, and CSS
 | [`docs/deployment.md`](docs/deployment.md)                               | Production deployment across Vercel, Cloudflare, and Atlas; zero-cost preview setup                       |
 | [`docs/containers-and-kubernetes.md`](docs/containers-and-kubernetes.md) | Docker Compose local stack and Kubernetes production deployment                                           |
 | [`docs/operations.md`](docs/operations.md)                               | Runbook: health checks, incident triage, full record of every real incident                               |
+| [`docs/releases.md`](docs/releases.md)                                   | How releases are cut, what each one contains, and how to verify one                                       |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                     | PR process, coding conventions, what gates a merge                                                        |
 | [`SECURITY.md`](SECURITY.md)                                             | Private vulnerability disclosure, scope, response timeline, safe harbor                                   |
 | [`AGENTS.md`](AGENTS.md)                                                 | Conventions and invariants for coding agents — the authoritative version                                  |

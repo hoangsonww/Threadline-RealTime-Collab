@@ -114,6 +114,18 @@ make verify-commit MSG="feat(api): add a room export endpoint"
 
 CI re-checks both the pull request title and every commit the PR introduces. The title matters independently because a squash merge takes its subject from it.
 
+## How your commit becomes a release
+
+You do not cut releases here, and you should not tag anything by hand. Merging to `main` with green CI is the whole process: if the commits since the last tag include a `feat`, `fix`, `perf`, or `revert`, a tagged GitHub Release appears with generated notes and artifacts attached. Anything else — `docs`, `chore`, `ci`, `style`, `test`, `build`, `refactor` — releases nothing.
+
+That makes the type in your commit header consequential rather than cosmetic: it chooses the version number, and your subject line is published verbatim in the notes. Check what yours will do before merging:
+
+```bash
+make release-plan
+```
+
+Details, artifacts, and recovery steps: [`docs/releases.md`](docs/releases.md).
+
 ## Opening the PR
 
 - Keep the PR description focused on _why_, with a short test plan — what you ran, what you observed. If the change fixes a bug, describe the symptom before the fix, the way the incidents in [`docs/operations.md`](docs/operations.md#incidents) are written up.

@@ -20,6 +20,7 @@ Each ADR here captures a decision already made in this codebase — the context,
 | [0007](0007-no-email-verification-without-a-mail-provider.md) | Remove email verification rather than ship a flow that silently sends nothing     |
 | [0008](0008-recovery-codes-not-knowledge-based-reset.md) | Recovery codes for account recovery, not knowledge-based reset |
 | [0009](0009-redis-for-ephemeral-counters.md) | A separate `Cache` port for ephemeral counters, backed by Redis, never load-bearing |
+| [0010](0010-releases-derived-from-commit-history.md) | Releases derived from commit history, cut automatically from green CI |
 
 ## Adding a new ADR
 

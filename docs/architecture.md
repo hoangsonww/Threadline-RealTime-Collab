@@ -431,6 +431,7 @@ That same serverless shape is what makes the Redis path here a measured trade ra
 - [`frontend.md`](frontend.md) — `apps/web` route tree, session-gate flow, theme system, component inventory
 - [`api.md`](api.md) — REST surface, auth model, ABAC policy in detail, OIDC provider
 - [`realtime.md`](realtime.md) — Durable Object internals, WebSocket protocol, WebRTC mesh
+- [`releases.md`](releases.md) — how a merge to `main` becomes a tagged release with artifacts
 - [`security.md`](security.md) — trust boundaries, secrets, session/token lifecycle, rate limits
 - [`testing.md`](testing.md) — how the test suite is structured and what it actually proves
 - [`glossary.md`](glossary.md) — every domain term used across these docs, alphabetically

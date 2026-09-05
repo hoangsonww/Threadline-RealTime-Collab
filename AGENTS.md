@@ -80,6 +80,7 @@ npm run build            # production build for every workspace
 npm run docs             # TypeDoc → docs/api-reference/ (published: https://hoangsonww.github.io/Threadline-RealTime-Collab/)
 npm run docs:links       # verify every relative markdown link still resolves
 npm run openapi          # write openapi.json from the live spec builder
+npm run release:plan     # what the next release would be, and why — same script CI runs
 
 make help                # every available target, grouped
 ```
@@ -120,6 +121,8 @@ docs: record the bounded history contract and where its guarantee is asserted
 ```
 
 Types: `feat fix perf refactor docs test build ci style chore revert`. Scopes: `api realtime web infra docker k8s ci build deps docs security seo dx agents test release`. The hook at `.husky/commit-msg` enforces this; `node scripts/verify-commit-message.mjs --message "…"` checks a message without committing.
+
+**Commit types decide the version.** `feat` cuts a minor, `fix`/`perf`/`revert` cut a patch, `!` or a `BREAKING CHANGE:` footer cuts a major, and everything else releases nothing — see [ADR 0010](docs/decisions/0010-releases-derived-from-commit-history.md). Run `npm run release:plan` if you are unsure what a commit will do.
 
 **Branches:** `type/short-description` — `fix/rate-limit-key`, `feat/room-membership-revoke`.
 
