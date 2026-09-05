@@ -24,7 +24,7 @@ SHELL := /usr/bin/env bash
         typecheck test test-watch test-browser test-coverage coverage \
         build docs docs-serve docs-watch docs-check docs-links \
         docker-up docker-down docker-build docker-logs \
-        k8s-validate openapi \
+        k8s-validate openapi release-plan release-notes \
         hooks verify-commit verify-staged \
         ci audit outdated update-check \
         ports kill-ports info
@@ -163,6 +163,14 @@ docs-links: ## Verify every relative markdown link resolves
 
 openapi: ## Write the OpenAPI specification to openapi.json
 	@npm run --silent openapi
+
+##@ Releases
+
+release-plan: ## Show what the next release would be, and why
+	@npm run --silent release:plan
+
+release-notes: ## Print just the generated release notes for the next release
+	@npm run --silent release:notes
 
 ##@ Containers and deployment
 

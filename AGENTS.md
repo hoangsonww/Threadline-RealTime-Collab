@@ -39,6 +39,7 @@ apps/api/src/
   policy.ts          EVERY authorization decision. canOrganization / canRoom / effectiveRoomRole
   security.ts        sessions, hashing, token and room-ticket primitives
   repository.ts      the Repository interface + MemoryRepository and MongoRepository
+  cache.ts           the Cache port + MemoryCache and RedisCache — ephemeral, evictable, optional
   application.ts     createApp(options) — all routes. The largest file; read the region you need
   openapi.ts         createOpenApiDocument() — the OpenAPI 3.1 spec
   api-docs.ts        Swagger UI and ReDoc rendering
@@ -79,6 +80,7 @@ npm run build            # production build for every workspace
 npm run docs             # TypeDoc → docs/api-reference/ (published: https://hoangsonww.github.io/Threadline-RealTime-Collab/)
 npm run docs:links       # verify every relative markdown link still resolves
 npm run openapi          # write openapi.json from the live spec builder
+npm run release:plan     # what the next release would be, and why — same script CI runs
 
 make help                # every available target, grouped
 ```
@@ -91,7 +93,7 @@ Violating any of these will be caught in review, and most are caught by CI first
 
 1. **Authorization goes through `apps/api/src/policy.ts`.** If a route reads or writes a room or organization resource, it calls `canRoom` / `canOrganization` / `canInviteToOrganization`. A handler that decides for itself is a bug whatever it concludes. Never infer access from an id alone.
 
-2. **Route handlers depend on the `Repository` interface, not on MongoDB.** Importing the `mongodb` package outside `repository.ts` is wrong — see [ADR 0003](docs/decisions/0003-repository-interface.md). `MemoryRepository` exists so the suite runs without a database; a change that only works against Mongo breaks it.
+2. **Route handlers depend on the `Repository` interface, not on MongoDB.** Importing the `mongodb` package outside `repository.ts` is wrong — see [ADR 0003](docs/decisions/0003-repository-interface.md). `MemoryRepository` exists so the suite runs without a database; a change that only works against Mongo breaks it. The same rule holds for `redis` and `cache.ts` — and `Cache` is a *separate* port on purpose: it is evictable and may throw, so every call site must have a fallback that does more work, never one that enforces less. See [ADR 0009](docs/decisions/0009-redis-for-ephemeral-counters.md).
 
 3. **No `any`.** ESLint is configured with `@typescript-eslint/no-explicit-any: error`. If a type is genuinely hard to express, write the awkward type and a comment explaining why — not an escape hatch.
 
@@ -120,6 +122,8 @@ docs: record the bounded history contract and where its guarantee is asserted
 
 Types: `feat fix perf refactor docs test build ci style chore revert`. Scopes: `api realtime web infra docker k8s ci build deps docs security seo dx agents test release`. The hook at `.husky/commit-msg` enforces this; `node scripts/verify-commit-message.mjs --message "…"` checks a message without committing.
 
+**Commit types decide the version.** `feat` cuts a minor, `fix`/`perf`/`revert` cut a patch, `!` or a `BREAKING CHANGE:` footer cuts a major, and everything else releases nothing — see [ADR 0010](docs/decisions/0010-releases-derived-from-commit-history.md). Run `npm run release:plan` if you are unsure what a commit will do.
+
 **Branches:** `type/short-description` — `fix/rate-limit-key`, `feat/room-membership-revoke`.
 
 **Formatting is not yours to decide.** Prettier, 120 columns, double quotes, semicolons, trailing commas. `*.md` is deliberately excluded from Prettier — do not reformat markdown.
@@ -134,6 +138,13 @@ Types: `feat fix perf refactor docs test build ci style chore revert`. Scopes: `
 4. Document the operation in `openapi.ts`, including its required scope.
 5. Add an integration test in `app.test.ts` — via `supertest` against `createApp()` with a `MemoryRepository`. Cover the authorized path **and** the forbidden path. A new endpoint whose 403 is untested is not finished.
 6. Update [`docs/api.md`](docs/api.md).
+
+### A new `Cache` operation
+
+1. Add the method to the `Cache` **interface** in `cache.ts`, then implement it in **both** `MemoryCache` and `RedisCache`.
+2. **Decide its degradation before using it.** Every call site must have a fallback that does *more* work, never one that enforces less — `rateLimitBucket` falls back to the repository, `shouldRecordUse` falls back to writing unconditionally. "It returns a sensible default" is not that analysis; see the worked example in [ADR 0009](docs/decisions/0009-redis-for-ephemeral-counters.md).
+3. Never cache an authorization decision. The credential is read from the repository on every request, and that is what keeps revocation immediate.
+4. Test it against a stub client, not a live server — the behaviour that matters is what happens when Redis misbehaves.
 
 ### A new realtime message
 
@@ -155,7 +166,7 @@ A new dependency, a new data model relationship, or a new trust boundary needs a
 | Suite | Where | Runner | Notes |
 | --- | --- | --- | --- |
 | API integration | `apps/api/src/app.test.ts` | vitest (node) | `supertest` against `createApp()` + `MemoryRepository` |
-| API units | `apps/api/src/*.test.ts` | vitest (node) | `repository`, `turn`, `openapi` |
+| API units | `apps/api/src/*.test.ts` | vitest (node) | `repository`, `turn`, `openapi`, `cache` |
 | Durable Object | `apps/realtime/src/index.test.ts` | `@cloudflare/vitest-pool-workers` | needs workerd — excluded from the root vitest config on purpose |
 | Web units | `apps/web/lib/*.test.ts` | vitest (node) | `peer-mesh`, `sound`, `call-shortcuts` |
 | Browser | `apps/web/components/*.spec.ts` | Playwright | run with `npm run test:browser`, not `npm test` |
@@ -179,6 +190,7 @@ A change is finished when all of these are true:
 - **`npm test` does not run Playwright.** Browser specs are `*.spec.ts` and run only under `npm run test:browser`.
 - **`MONGODB_URI` empty means in-memory.** `npm run dev:api:local` sets it empty on purpose, so the API starts with `MemoryRepository` and no database. Data disappears on restart — that is expected, not a bug.
 - **`worker-configuration.d.ts` is generated** by `wrangler types` as part of the realtime `typecheck` script. Never hand-edit it; it is also excluded from Prettier and ESLint.
+- **`createRedisCache()` must not `await` the connection.** `node-redis` retries rather than rejecting an unreachable server, so awaiting it blocks the API's boot indefinitely. The un-awaited promise is deliberate — do not "tidy" it.
 - **`apps/api/src/application.ts` is ~1,800 lines.** Read the region around the routes you are changing. Do not restructure it as a side effect of an unrelated change.
 - **Prettier ignores `*.md`.** Markdown formatting is intentionally hand-managed. Do not "fix" it.
 - **The root `dev` script needs three ports free** — 3000, 4000, 8787. `make ports` shows what is holding them; `npm run doctor` checks them among other things.

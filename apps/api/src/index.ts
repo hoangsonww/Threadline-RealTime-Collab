@@ -1,6 +1,7 @@
 import "./instrument.js";
 import express from "express";
 import { createApp } from "./application.js";
+import { createRedisCache } from "./cache.js";
 import { MemoryRepository, MongoRepository, type Repository } from "./repository.js";
 import { OidcSigner } from "./security.js";
 import { createIceServerProvider } from "./turn.js";
@@ -78,6 +79,14 @@ async function createConfiguredApp() {
           throw new Error("MONGODB_URI is required in production.");
         })()
       : new MemoryRepository();
+  // Optional everywhere, including production, and deliberately not awaited on
+  // the network: `createRedisCache` returns a cache that reports itself
+  // unavailable until the socket is ready, so an unreachable Redis costs the
+  // fallback path rather than the boot. Every caller of it already has a working
+  // path through the repository.
+  const cache = process.env.REDIS_URL
+    ? createRedisCache(process.env.REDIS_URL, { keyPrefix: process.env.REDIS_KEY_PREFIX })
+    : undefined;
   const actionBaseUrl = (process.env.AUTH_ACTION_ORIGIN ?? webOrigin).replace(/\/$/, "");
   const deliveryWebhook = process.env.AUTH_DELIVERY_WEBHOOK;
   const actionDeliverySecret = process.env.AUTH_DELIVERY_SECRET;
@@ -87,6 +96,7 @@ async function createConfiguredApp() {
   return createApp(
     {
       repository,
+      cache,
       issuer,
       webOrigin,
       additionalWebOrigins,

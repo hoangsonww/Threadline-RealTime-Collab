@@ -25,7 +25,7 @@ Install Docker Desktop, then run this from the repository root:
 npm run docker:up
 ```
 
-Open `http://localhost:3000`. Compose starts all four services and waits for MongoDB and the API health checks before starting dependent services.
+Open `http://localhost:3000`. Compose starts all five services and waits for MongoDB, Redis, and the API health checks before starting dependent services.
 
 ```mermaid
 graph TB
@@ -34,17 +34,22 @@ graph TB
         api["api<br/>Express"]
         realtime["realtime<br/>wrangler dev (local Worker + DO)"]
         mongo[("mongo<br/>named volume: mongo-data")]
+        redis[("redis<br/>64mb, allkeys-lru, no persistence")]
     end
     Browser -->|"localhost:3000"| web
     web -->|"/api/identity/* rewrite"| api
     Browser -->|"WebSocket"| realtime
     api -->|"healthcheck gate"| mongo
+    api -->|"healthcheck gate,<br/>falls back to mongo"| redis
     realtime -.->|"ingest webhook,<br/>dev secrets only"| api
 
     style mongo fill:#123524,stroke:#52e0a2,color:#fff
+    style redis fill:#2b2140,stroke:#8a63ff,color:#fff
 ```
 
-`depends_on` with `condition: service_healthy` is what makes "waits for health checks" literal — `web` and `realtime` don't start until `api`'s `/health` responds, and `api` doesn't start until Mongo accepts connections. This is the same topology as production (three planes, one Mongo), just with the Cloudflare Worker's local emulator standing in for the deployed one.
+`depends_on` with `condition: service_healthy` is what makes "waits for health checks" literal — `web` and `realtime` don't start until `api`'s `/health` responds, and `api` doesn't start until Mongo and Redis accept connections. This is the same topology as production (three planes, one Mongo, one Redis), just with the Cloudflare Worker's local emulator standing in for the deployed one.
+
+The Redis container is capped at 64 MB with `allkeys-lru` and no persistence on purpose. It is a cache, so losing it is a supported state — stop the container and the API keeps working, counting rate limits in MongoDB instead, with `GET /health` reporting `cache: "unavailable"`. That is worth trying once: it is the production failure mode, reproducible in one command.
 
 | Service  | Address                        | Purpose                                                          |
 | -------- | ------------------------------ | ---------------------------------------------------------------- |
@@ -52,6 +57,7 @@ graph TB
 | API      | `http://localhost:4000/health` | Express API backed by the Compose MongoDB database               |
 | Realtime | `http://localhost:8787/health` | Wrangler local Worker and Durable Object runtime                 |
 | MongoDB  | internal only                  | Durable development data in the `mongo-data` named volume        |
+| Redis    | internal only                  | Ephemeral rate-limit windows and session-touch claims; nothing durable |
 
 The Compose configuration contains only intentionally non-secret development keys. It does not read your Cloudflare, Atlas, OIDC, or email credentials. Stop it with `npm run docker:down`. If you also want to discard the local MongoDB data, run `docker compose down --volumes`; that action deletes the Compose database volume.
 
@@ -154,6 +160,10 @@ kubectl -n threadline-production create secret generic threadline-secrets \
   --from-literal=AUTH_DELIVERY_WEBHOOK='https://your-email-worker.example/send' \
   --from-literal=AUTH_DELIVERY_SECRET="$(openssl rand -hex 32)"
 ```
+
+`REDIS_KEY_PREFIX` is in the base ConfigMap rather than the Secret — it is a namespace, not a credential — and it is spelled out there rather than left to the code's default because a Redis shared with another application is exactly the case where a prefix earns its place. It is inert without `REDIS_URL`.
+
+`REDIS_URL` is optional and, like `SENTRY_DSN`, referenced as an `optional: true` secret key so the pod starts identically without it. Add it — `--from-literal=REDIS_URL='rediss://default:<password>@<host>:6379'` — only if you are running a Redis for the cache described in [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md); without it, rate limits and session bookkeeping use MongoDB. It belongs in the Secret rather than the ConfigMap because it embeds a password.
 
 `SENTRY_DSN` is deliberately not in that command — `api-deployment.yaml` references it as an `optional: true` secret key, so the pod starts identically whether or not it's present. Add it the same way, `--from-literal=SENTRY_DSN='https://<key>@o<org-id>.ingest.us.sentry.io/<project-id>'`, only if you want error/performance monitoring active; the container never fails to start over a missing key.
 

@@ -5,10 +5,16 @@ Threadline uses three production runtimes by design.
 | Component       | Target                     | Required configuration                                                                                                                                          | Optional                                                                  |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `apps/web`      | Vercel                     | `NEXT_PUBLIC_API_ORIGIN`, `NEXT_PUBLIC_REALTIME_ORIGIN`                                                                                                         | `NEXT_PUBLIC_SITE_URL` (canonical origin), `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN` (source maps) |
-| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET` | `AUTH_DELIVERY_WEBHOOK` + `AUTH_DELIVERY_SECRET` (both, or neither — without them no mail is sent, which affects only the mailed reset link; account recovery runs on recovery codes), `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`                         |
+| `apps/api`      | Any always-on Node 22 host | `MONGODB_URI`, `OIDC_ISSUER`, `WEB_ORIGIN`, `OIDC_PRIVATE_JWK`, `ROOM_TICKET_SECRET`, `INTERNAL_INGEST_SECRET` | `AUTH_DELIVERY_WEBHOOK` + `AUTH_DELIVERY_SECRET` (both, or neither — without them no mail is sent, which affects only the mailed reset link; account recovery runs on recovery codes), `SENTRY_DSN`, `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`, `REDIS_URL` + `REDIS_KEY_PREFIX`                         |
 | `apps/realtime` | Cloudflare Workers         | `ROOM_TICKET_SECRET`, `PERSISTENCE_WEBHOOK=<api>/v1/internal/room-events`, `PERSISTENCE_SECRET`                                                                 | —                                                                         |
 
 Every "Optional" variable above is additive only — omitting all of them leaves Sentry inert (both SDKs no-op without a DSN) and never fails a build or a boot. See [`security.md`](security.md#error-monitoring-sentry) for exactly what each does and doesn't capture.
+
+`REDIS_URL` deserves one paragraph of its own because it is the only optional variable that changes where data lives. Set, the API counts rate-limit windows and collapses `lastUsedAt` writes in Redis instead of MongoDB ([ADR-0009](decisions/0009-redis-for-ephemeral-counters.md)); unset, unreachable, or slow, all of that goes to MongoDB and the service behaves exactly as it did before. It is never fatal — the API boots without waiting on the connection, serves from MongoDB until Redis answers, and starts using it the moment it does, with no restart. Three things worth checking before pointing production at an instance:
+
+- **Region.** Redis has to be near the API. A cross-region instance makes every cached call slower than the MongoDB call it replaces, which inverts the entire benefit. Measure from the deployed service, not from a laptop.
+- **Connection count.** `apps/api` on a serverless platform holds one connection per warm instance. An instance with a low `maxclients` will start rejecting connections under exactly the concurrency that made caching attractive — at which point every call falls back to MongoDB, correctly but with a wasted round trip first. On serverless, prefer a Redis with a generous client limit, or an HTTP-based one.
+- **Whether it is shared.** `maxmemory-policy allkeys-lru` evicts across the whole keyspace, so another application's traffic can evict Threadline's rate-limit counters. `REDIS_KEY_PREFIX` (default `threadline:`) keeps the keys attributable but does not partition the memory budget. See [`security.md`](security.md#where-the-counters-actually-live) for what eviction costs.
 
 For Docker Compose and Kubernetes—including one or more clusters—see [`containers-and-kubernetes.md`](containers-and-kubernetes.md). Kubernetes self-hosts only the stateless web/API plane; Cloudflare remains the production owner of room Durable Objects.
 
@@ -92,6 +98,8 @@ graph TB
     style API fill:#1c2b3a,stroke:#5ca4ff,color:#fff
     style RT fill:#2b2140,stroke:#8a63ff,color:#fff
 ```
+
+There is deliberately no Redis in that diagram: `REDIS_URL` is optional, and the zero-cost path leaves it unset so rate limits and session bookkeeping run on Atlas. Adding one is a later, separate decision — see the three checks above and [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
 
 Four different providers, zero shared infrastructure, and the browser only ever sees two origins directly (`Web`, over HTTPS, and `RT`, over WebSocket — which doesn't carry the session cookie at all, only its own signed ticket). `API` is only ever reached server-side, through the rewrite — which is the entire reason the rewrite exists: without it, a session cookie set by Render would not be sent back on a request to a `*.vercel.app` page, because they're different sites.
 

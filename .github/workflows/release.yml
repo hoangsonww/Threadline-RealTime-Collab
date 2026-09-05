@@ -1,0 +1,317 @@
+name: Release
+
+# Releases are cut from green CI, not by hand.
+#
+# `workflow_run` rather than `push` is the whole design. A release must never be
+# able to exist for a commit that failed lint, typecheck, tests, or the container
+# build — and gating on the pipeline's *conclusion* is the only way to state that
+# as a rule rather than a habit. It also guarantees the `:<sha>` images this
+# workflow re-tags have already been pushed, so nothing here rebuilds them.
+on:
+  workflow_run:
+    workflows: ["CI / CD Pipeline"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Compute the plan and build artifacts, but create no tag or release"
+        type: boolean
+        default: true
+
+env:
+  NODE_VERSION: 22
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 1 — Decide whether there is anything to release
+  # ──────────────────────────────────────────────────────────────
+  plan:
+    name: "🧮 Plan release"
+    # A failed or cancelled pipeline must not produce a release. Manual runs skip
+    # the check because there is no pipeline conclusion to consult.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should-release: ${{ steps.plan.outputs.should-release }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      bump: ${{ steps.plan.outputs.bump }}
+      previous-tag: ${{ steps.plan.outputs.previous-tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve the commit being released
+        id: resolve
+        # On a workflow_run event `github.sha` is the default branch tip, which is
+        # not necessarily the commit the pipeline actually passed on. Releasing the
+        # wrong commit is exactly the class of silent mistake this repository has
+        # already been bitten by once (see docs/operations.md — deploying from the
+        # wrong branch), so the triggering SHA is resolved explicitly.
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          # Tags and full history: the planner derives the version from both.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Compute the next version from the commit history
+        id: plan
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/next-version.mjs --json > plan.json
+          cat plan.json
+          {
+            echo "should-release=$(jq -r .shouldRelease plan.json)"
+            echo "version=$(jq -r .version plan.json)"
+            echo "tag=$(jq -r .tag plan.json)"
+            echo "bump=$(jq -r .bump plan.json)"
+            echo "previous-tag=$(jq -r '.previousTag // "none"' plan.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      # The notes travel as an artifact rather than a job output: they are
+      # multi-line contributor-authored text, and an artifact keeps them out of
+      # expression interpolation entirely.
+      - name: Save the notes for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: plan.json
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          {
+            echo "### Release plan"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${{ steps.resolve.outputs.sha }}\` |"
+            echo "| Previous release | ${{ steps.plan.outputs.previous-tag }} |"
+            echo "| Bump | ${{ steps.plan.outputs.bump }} |"
+            echo "| Next release | ${{ steps.plan.outputs.tag }} |"
+            echo "| Will release | ${{ steps.plan.outputs.should-release }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 2 — Build everything that ships with the release
+  # ──────────────────────────────────────────────────────────────
+  artifacts:
+    name: "📦 Build release artifacts"
+    needs: [plan]
+    if: needs.plan.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - run: npm ci
+
+      - name: Generate the OpenAPI document
+        # Gitignored in the repository because it is generated, which makes a
+        # release the only place it is pinned to a version anyone can refer back to.
+        run: npm run openapi
+
+      - name: Generate the API reference
+        run: npm run docs
+
+      - name: Render the production Kubernetes manifests
+        # Rendered with this release's real images substituted in, so the attached
+        # file is appliable as-is rather than a template with `your-organization`
+        # and a hardcoded tag still in it.
+        #
+        # The overlay is edited before rendering rather than sed-ing the output:
+        # `images:` is a kustomize transformer, so rewriting it here is the
+        # supported way to retarget every reference at once, and it cannot miss an
+        # occurrence the way a text substitution over rendered YAML can.
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          cd infra/kubernetes/overlays/production
+          python3 - <<'PY'
+          import os, re, pathlib
+          owner, version = os.environ["OWNER"], os.environ["VERSION"]
+          path = pathlib.Path("kustomization.yaml")
+          text = path.read_text()
+          for image in ("threadline-api", "threadline-web"):
+              text = re.sub(
+                  rf'(  - name: {image}\n    newName: )\S+(\n    newTag: )"[^"]*"',
+                  rf'\1ghcr.io/{owner}/{image}\2"{version}"',
+                  text,
+              )
+          path.write_text(text)
+          print(text)
+          PY
+          kubectl kustomize . > "$GITHUB_WORKSPACE/kubernetes-production.yaml"
+          cd "$GITHUB_WORKSPACE"
+          grep -n "image:" kubernetes-production.yaml
+          # The rendered file must not still advertise the placeholder registry.
+          if grep -q "your-organization" kubernetes-production.yaml; then
+            echo "::error::rendered manifests still reference the placeholder registry"
+            exit 1
+          fi
+          git checkout -- infra/kubernetes/overlays/production/kustomization.yaml
+
+      - name: Generate a CycloneDX SBOM
+        # `npm sbom` ships with npm itself, so this adds no dependency for a
+        # supply-chain artifact that auditors and scanners both consume.
+        #
+        # The root manifest is private and deliberately carries no version, which
+        # `npm sbom` refuses ("Purl can only be generated for version types"). It
+        # is set here, in the throwaway checkout only, so the document reports the
+        # version actually being released. Committing a root version instead would
+        # guarantee it drifts from the tags and make the SBOM quietly wrong.
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm pkg set "version=${VERSION}"
+          npm sbom --sbom-format cyclonedx --sbom-type application > sbom.cdx.json
+          git checkout -- package.json
+
+      - name: Assemble the bundle
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          mv openapi.json "dist/threadline-openapi-v${VERSION}.json"
+          mv kubernetes-production.yaml "dist/threadline-kubernetes-production-v${VERSION}.yaml"
+          mv sbom.cdx.json "dist/threadline-sbom-v${VERSION}.cdx.json"
+          tar -czf "dist/threadline-api-reference-v${VERSION}.tar.gz" -C docs api-reference
+          # Checksums are generated last, from inside dist, so the file lists bare
+          # names rather than paths and `sha256sum -c` works after a plain download.
+          cd dist && sha256sum ./* > checksums.txt && cat checksums.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: dist/
+          retention-days: 7
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 3 — Tag, publish, and attach
+  # ──────────────────────────────────────────────────────────────
+  publish:
+    name: "🚀 Publish release"
+    needs: [plan, artifacts]
+    if: needs.plan.outputs.should-release == 'true' && inputs.dry-run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: plan
+
+      - name: Refuse to overwrite an existing tag
+        # Re-running this workflow must be safe. Without this the second run would
+        # move an existing tag, which silently changes what a released version
+        # means for anyone who already pulled it.
+        run: |
+          if git rev-parse -q --verify "refs/tags/${{ needs.plan.outputs.tag }}" >/dev/null; then
+            echo "::error::${{ needs.plan.outputs.tag }} already exists — refusing to move it."
+            exit 1
+          fi
+
+      - name: Attest the artifact bundle
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+
+      - name: Write the release notes to a file
+        # Via a file, never an inline string: release notes are assembled from
+        # commit subjects, which are contributor-authored text. Interpolating them
+        # into a shell command would make a commit message able to run code here.
+        run: jq -r .notes plan/plan.json > notes.md
+
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --target "$SHA" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            dist/*
+          echo "Released $TAG from $SHA" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────────────────────────────────────────────────────
+  #  Stage 4 — Point the published images at the release
+  # ──────────────────────────────────────────────────────────────
+  images:
+    name: "🏷️ Tag released images"
+    needs: [plan, publish]
+    if: needs.plan.outputs.should-release == 'true' && inputs.dry-run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [threadline-web, threadline-api, threadline-realtime]
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Re-tag the tested image
+        # `imagetools create` copies the manifest rather than rebuilding, so the
+        # image behind v1.2.0 is byte-identical to the one CI actually tested.
+        # Rebuilding here would produce a different image than the one that passed.
+        env:
+          REPO: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          MAJOR="${VERSION%%.*}"
+          MINOR="${VERSION%.*}"
+          docker buildx imagetools create \
+            --tag "${REPO}:${VERSION}" \
+            --tag "${REPO}:${MINOR}" \
+            --tag "${REPO}:${MAJOR}" \
+            "${REPO}:${SHA}"
+          echo "Tagged ${REPO} with ${VERSION}, ${MINOR}, and ${MAJOR}" >> "$GITHUB_STEP_SUMMARY"

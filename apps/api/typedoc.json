@@ -4,7 +4,7 @@
   "tsconfig": "./tsconfig.json",
 
   // The documented surface is what another module could legitimately import:
-  // the domain vocabulary, the persistence port, the authorization decision
+  // the domain vocabulary, the two storage ports, the authorization decision
   // function, the security primitives, and the app factory. `index.ts` is a
   // process entry point rather than an API, and `instrument.ts` runs for its
   // side effects before anything else is loaded.
@@ -13,6 +13,7 @@
     "src/policy.ts",
     "src/security.ts",
     "src/repository.ts",
+    "src/cache.ts",
     "src/application.ts",
     "src/turn.ts",
     "src/openapi.ts",

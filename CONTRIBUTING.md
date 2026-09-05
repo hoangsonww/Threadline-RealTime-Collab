@@ -30,9 +30,11 @@ npm run dev
 
 Prefer a container? [`.devcontainer/`](.devcontainer/) provides the full toolchain plus a MongoDB sidecar, with `MONGODB_URI` already pointed at it — so the API persists by default in there, unlike on the host.
 
+Nothing above needs Redis. `apps/api` uses it only when `REDIS_URL` is set, and without it the rate limiter and session bookkeeping go straight to the repository exactly as before — so the default local loop is unchanged. `npm run docker:up` does start a Redis alongside MongoDB if you want to exercise that path; stop that one container and the API keeps working, which is the behaviour [ADR-0009](docs/decisions/0009-redis-for-ephemeral-counters.md) exists to guarantee.
+
 See the [root README](README.md#running-it-locally) for what each of the three services needs and where they run. `npm install` also installs the `husky` hooks (below) — no separate setup step for them.
 
-When something doesn't work, run `npm run doctor` before assuming it's a code defect. It checks Node against `engines`, dependency consistency, the git hooks, your local env files, and whether ports 3000/4000/8787/27017 are free — and prints the remedy for anything it finds, not just the finding.
+When something doesn't work, run `npm run doctor` before assuming it's a code defect. It checks Node against `engines`, dependency consistency, the git hooks, your local env files, and whether ports 3000/4000/8787/27017/6379 are free — and prints the remedy for anything it finds, not just the finding.
 
 `make help` lists every available task.
 
@@ -111,6 +113,18 @@ make verify-commit MSG="feat(api): add a room export endpoint"
 ```
 
 CI re-checks both the pull request title and every commit the PR introduces. The title matters independently because a squash merge takes its subject from it.
+
+## How your commit becomes a release
+
+You do not cut releases here, and you should not tag anything by hand. Merging to `main` with green CI is the whole process: if the commits since the last tag include a `feat`, `fix`, `perf`, or `revert`, a tagged GitHub Release appears with generated notes and artifacts attached. Anything else — `docs`, `chore`, `ci`, `style`, `test`, `build`, `refactor` — releases nothing.
+
+That makes the type in your commit header consequential rather than cosmetic: it chooses the version number, and your subject line is published verbatim in the notes. Check what yours will do before merging:
+
+```bash
+make release-plan
+```
+
+Details, artifacts, and recovery steps: [`docs/releases.md`](docs/releases.md).
 
 ## Opening the PR
 

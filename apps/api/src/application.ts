@@ -7,6 +7,7 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { z } from "zod";
 import { apiDocsCsp, renderRedocDocs, renderSwaggerDocs } from "./api-docs.js";
+import type { Cache } from "./cache.js";
 import { scopes, type Organization, type Scope, type Session, type User } from "./domain.js";
 import { createOpenApiDocument } from "./openapi.js";
 import { canInviteToOrganization, canOrganization, canRoom, effectiveRoomRole } from "./policy.js";
@@ -30,6 +31,16 @@ import type { OidcSigner } from "./security.js";
 const sessionCookie = "threadline_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 const refreshLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+/**
+ * How stale `lastUsedAt` is allowed to become before it is written through again.
+ *
+ * Every authenticated request used to write this field, which made a database
+ * write the price of reading anything at all. The value is only ever rendered as
+ * a relative time in the sessions and tokens lists, so a minute of staleness is
+ * invisible there, while the write it removes is not. Requires `options.cache`;
+ * without one, every request writes through as before.
+ */
+const useRecordIntervalMs = 60 * 1000;
 const passwordSchema = z.string().min(10, "Password must contain at least 10 characters.").max(128);
 const emailSchema = z
   .string()
@@ -101,6 +112,15 @@ const ingestedRoomEventSchema = z
 
 export type AppOptions = {
   repository: Repository;
+  /**
+   * Optional ephemeral store for rate-limit windows and session-touch claims.
+   *
+   * Omitted, every one of those operations goes to the repository exactly as it
+   * did before — the cache is a cost optimization, never a correctness
+   * requirement. See [`cache.ts`](cache.ts) and
+   * [ADR 0009](../../../docs/decisions/0009-redis-for-ephemeral-counters.md).
+   */
+  cache?: Cache;
   issuer: string;
   webOrigin: string;
   additionalWebOrigins?: string[];
@@ -175,9 +195,28 @@ export function createApp(options: AppOptions, app = express()) {
   app.use(express.urlencoded({ extended: false }));
   app.use(cookieParser());
 
-  // Backed by the repository (not local memory) because serverless deployments run
+  // Backed by shared state (not local memory) because serverless deployments run
   // many concurrent, short-lived instances that would otherwise each keep their own
   // uncoordinated counters, making an in-process Map an unreliable, easily-bypassed limit.
+  //
+  // Redis when it is configured and answering, the repository otherwise. The
+  // fallback direction is the security-relevant part: the repository is the
+  // *stricter* of the two — its TTL index never drops a live bucket, whereas a
+  // cache under memory pressure can evict one mid-window — so degrading toward it
+  // narrows the limit rather than widening it. There is no path here that skips
+  // the count entirely.
+  const rateLimitBucket = async (key: string, windowMs: number) => {
+    if (options.cache) {
+      try {
+        return await options.cache.incrementWindow(key, windowMs);
+      } catch {
+        // Deliberately silent: the cache logs its own connection failures once
+        // per disconnect, and re-logging here would emit a line per request for
+        // the entire duration of an outage.
+      }
+    }
+    return options.repository.incrementRateLimit(key, windowMs);
+  };
   const rateLimit =
     (limit: number, windowMs: number) => async (request: Request, response: Response, next: NextFunction) => {
       try {
@@ -186,9 +225,16 @@ export function createApp(options: AppOptions, app = express()) {
         // of which route matched — baseUrl is the literal mounted path instead, which
         // is what actually distinguishes one rate-limited route from another.
         const key = `${request.baseUrl}:${ipHash(request)}`;
-        const bucket = await options.repository.incrementRateLimit(key, windowMs);
+        const bucket = await rateLimitBucket(key, windowMs);
         if (bucket.count > limit) {
-          response.set("Retry-After", String(Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000)));
+          // Clamped because the window can elapse between reading the bucket and
+          // writing this header — the store returns a resetAt computed at read
+          // time, and a slow reply or a bucket on the edge of expiry then makes
+          // the difference zero or negative. RFC 9110 delta-seconds must be a
+          // non-negative integer, so the unclamped value emitted "Retry-After: -1",
+          // which a client is entitled to reject or treat as "never retry".
+          const retryAfterSeconds = Math.max(1, Math.ceil((bucket.resetAt.getTime() - Date.now()) / 1000));
+          response.set("Retry-After", String(retryAfterSeconds));
           return clientError(response, 429, "rate_limited", "Too many attempts. Please try again shortly.");
         }
         next();
@@ -214,6 +260,25 @@ export function createApp(options: AppOptions, app = express()) {
     next();
   });
 
+  /**
+   * Whether this request should write `lastUsedAt` through to the repository.
+   *
+   * Only the *write* is collapsed. The credential itself is still read from the
+   * repository on every single request, so a revoked session or token stops
+   * working immediately — nothing about authorization is cached here, and that
+   * is the reason this is safe to skip at all.
+   */
+  const shouldRecordUse = async (kind: "session" | "pat", credentialId: string) => {
+    if (!options.cache) return true;
+    try {
+      return await options.cache.claim(`use:${kind}:${credentialId}`, useRecordIntervalMs);
+    } catch {
+      // An unreachable cache means we cannot tell whether it was recorded
+      // recently, so record it — the fallback costs a write, never a stale field.
+      return true;
+    }
+  };
+
   const authenticate = async (request: Request): Promise<SessionAuthContext | undefined> => {
     const token = request.cookies[sessionCookie] as string | undefined;
     if (!token) return undefined;
@@ -221,8 +286,10 @@ export function createApp(options: AppOptions, app = express()) {
     if (!session || session.revokedAt || session.expiresAt <= now()) return undefined;
     const user = await options.repository.getUserById(session.userId);
     if (!user) return undefined;
-    session.lastUsedAt = now();
-    await options.repository.updateSession(session);
+    if (await shouldRecordUse("session", session.id)) {
+      session.lastUsedAt = now();
+      await options.repository.updateSession(session);
+    }
     return { kind: "session", user, session };
   };
 
@@ -233,8 +300,10 @@ export function createApp(options: AppOptions, app = express()) {
     if (!token || token.revokedAt || (token.expiresAt && token.expiresAt <= now())) return undefined;
     const user = await options.repository.getUserById(token.userId);
     if (!user) return undefined;
-    token.lastUsedAt = now();
-    await options.repository.updatePat(token);
+    if (await shouldRecordUse("pat", token.id)) {
+      token.lastUsedAt = now();
+      await options.repository.updatePat(token);
+    }
     return { kind: "pat", user, token: { id: token.id, scopes: token.scopes } };
   };
 
@@ -418,7 +487,13 @@ export function createApp(options: AppOptions, app = express()) {
       .set("Cache-Control", "no-store")
       .json(createOpenApiDocument({ serverUrl: apiOrigin(request), issuer: options.issuer })),
   );
-  app.get("/health", (_request, response) => response.json({ status: "ok", service: "threadline-api" }));
+  // `cache` reports whether the optional ephemeral store is answering, so an
+  // operator can tell "degraded to MongoDB" apart from "healthy" without reading
+  // logs. It discloses nothing exploitable: degrading tightens the rate limit
+  // rather than loosening it.
+  app.get("/health", (_request, response) =>
+    response.json({ status: "ok", service: "threadline-api", cache: options.cache?.status() ?? "disabled" }),
+  );
 
   app.post("/v1/auth/register", async (request, response, next) => {
     try {

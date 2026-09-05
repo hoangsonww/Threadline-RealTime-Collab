@@ -57,9 +57,25 @@ const SECRET_PATTERNS = [
   },
 ];
 
-/** Values that look like secrets but are documentation, defaults, or fixtures. */
+/**
+ * Values that look like secrets but are documentation, defaults, or fixtures.
+ *
+ * `passphrase` and `correct-horse-battery` are here because the API suite's
+ * account fixtures use them 35 times over, and without them this guard blocks
+ * every commit that touches `apps/api/src/app.test.ts` — which it did, silently,
+ * from the day it was added: the hook landed two days after the last change to
+ * that file, so nothing staged it again until now. A guard that fires on the
+ * repository's own test data is the "cries wolf" failure this file's own header
+ * warns about, and the cost of it is that someone reaches for `--no-verify` and
+ * stops reading what the hook says at all.
+ *
+ * Note what this does *not* relax: every high-confidence pattern above (private
+ * key blocks, cloud credentials, provider tokens, a MongoDB URI with a password)
+ * still fires anywhere, test file or not. Only the deliberately fuzzy
+ * "assigned secret literal" heuristic honours this list.
+ */
 const PLACEHOLDER =
-  /change[-_ ]?me|example|placeholder|your[-_]|redacted|dummy|sample|fixture|\.\.\.|^<.*>$|^\$\{|xxx+|^(?:development|dev|local|test|testing|fake|mock)[-_]/i;
+  /change[-_ ]?me|example|placeholder|your[-_]|redacted|dummy|sample|fixture|passphrase|correct-horse-battery|\.\.\.|^<.*>$|^\$\{|xxx+|^(?:development|dev|local|test|testing|fake|mock)[-_]/i;
 
 /** Extensions worth scanning line-by-line. Everything else is treated as opaque. */
 const TEXTUAL =

@@ -29,6 +29,9 @@ Live on the deployed API: [Swagger UI](https://threadline-app-api.vercel.app/api
 
 ## Three ways to authenticate
 
+> [!NOTE]
+> `lastUsedAt` on a session or personal access token is accurate to within 60 seconds, not to the request, when `REDIS_URL` is configured — the write is collapsed behind a short claim so that reading an endpoint does not cost a database write. The credential itself is still read and re-checked on **every** request, so revocation remains immediate. See [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
+
 ```mermaid
 flowchart TD
     Start(["Who's calling?"]) --> Browser{"Browser with a<br/>Threadline session?"}
@@ -123,7 +126,7 @@ Same room, same endpoint, same code path — the only input that changed is each
 
 | Method & path | Auth | Notes                                                                                                          |
 | ------------- | ---- | -------------------------------------------------------------------------------------------------------------- |
-| `GET /health` | none | Liveness only. Reports that the process is serving requests; it does **not** check MongoDB, so a healthy response does not by itself prove an authenticated request would succeed. |
+| `GET /health` | none | Liveness only. Reports that the process is serving requests; it does **not** check MongoDB, so a healthy response does not by itself prove an authenticated request would succeed. The `cache` field (`ready`/`unavailable`/`disabled`) reports the optional ephemeral store — all three values are healthy, see [`operations.md`](operations.md#cache-on-the-apis-health). |
 | `GET /openapi.json` | none | The versioned OpenAPI document these tables describe.                                                     |
 | `GET /api-docs`, `GET /api-docs/redoc` | none | Swagger UI and ReDoc, rendered from that same document.                               |
 

@@ -47,6 +47,7 @@ graph TB
 
     PEER["Other participant's<br/>browser (WebRTC peer)"]
     ATLAS[("MongoDB Atlas")]
+    REDIS[("Redis<br/>(optional, evictable)")]
     TURN["TURN/STUN service<br/>(operator-provided)"]
 
     UI -- "HTTPS, session cookie or PAT" --> WEB
@@ -57,18 +58,21 @@ graph TB
     RTC -. "media + data channel,<br/>peer-to-peer, no server" .-> PEER
     RTC -. "via TURN when direct<br/>P2P is blocked" .-> TURN
     API -- "reads/writes" --> ATLAS
+    API -. "rate-limit windows + session touches;<br/>falls back to Atlas when absent or down" .-> REDIS
     DO -- "POST /v1/internal/room-events<br/>x-threadline-ingest secret" --> API
 
     style DO fill:#2b2140,stroke:#8a63ff,color:#fff
     style ATLAS fill:#123524,stroke:#52e0a2,color:#fff
+    style REDIS fill:#2b2140,stroke:#8a63ff,color:#fff
     style RTC fill:#1c2b3a,stroke:#5ca4ff,color:#fff
 ```
 
-Three things to notice:
+Four things to notice:
 
 1. **The Durable Object never talks to MongoDB.** It only knows how to relay signals, hold ~100 recent events in its own storage for fast reconnects, and forward every event to the API over HTTP. If that webhook is unreachable, it retries via a Durable Object alarm rather than blocking the room.
 2. **WebRTC media never touches a server.** Camera, mic, screen share, and file transfer all flow peer-to-peer once signaling completes. The Worker only ever sees SDP offers/answers and ICE candidates — never a media byte.
-3. **The web app can proxy the API through itself.** `THREADLINE_API_ORIGIN` + the `/api/identity/*` rewrite let the browser's session cookie stay first-party to the Vercel domain even when the API is deployed to a different host (Render, a second Vercel project, etc.). See [`deployment.md`](deployment.md) for when to use this.
+3. **Redis is optional and never load-bearing.** It holds rate-limit windows and 60-second session-touch claims — nothing that cannot be recomputed. Unset, unreachable, or slow, every one of those operations falls back to MongoDB. The Durable Object has no Redis dependency at all.
+4. **The web app can proxy the API through itself.** `THREADLINE_API_ORIGIN` + the `/api/identity/*` rewrite let the browser's session cookie stay first-party to the Vercel domain even when the API is deployed to a different host (Render, a second Vercel project, etc.). See [`deployment.md`](deployment.md) for when to use this.
 
 ## Trust boundaries at a glance
 
@@ -134,6 +138,7 @@ graph LR
             apiApp["application.ts<br/>(createApp — all routes)"]
             apiIndex["index.ts<br/>(env parsing, boot, listen)"]
             apiRepo["repository.ts<br/>(Repository interface)"]
+            apiCache["cache.ts<br/>(Cache port — optional, evictable)"]
             apiPolicy["policy.ts<br/>(ABAC decisions)"]
             apiSec["security.ts<br/>(hashing, JWTs, OIDC signer)"]
             apiDocs["openapi.ts + api-docs.ts<br/>(/openapi.json, /api-docs)"]
@@ -146,17 +151,20 @@ graph LR
     webComp -->|"WebSocket"| rtIndex
     rtIndex -->|"webhook"| apiApp
     apiApp --> apiRepo
+    apiApp -.-> apiCache
+    apiCache -.->|"on miss, error, or absence"| apiRepo
     apiApp --> apiPolicy
     apiApp --> apiSec
 ```
 
 - `apps/web` is a single Next.js app. Nothing under `app/app/**` renders without first passing through `WorkspaceGate`, which blocks on `GET /v1/auth/me` before showing any authenticated route.
 - `apps/api` deliberately keeps `createApp()` (in `application.ts`) separate from `index.ts`. `createApp` takes plain options and returns a configured Express instance with no listener — that's what makes it possible to boot the exact same app in-process for tests (`supertest`) and hand it to Vercel's Node runtime, Docker, or a bare `app.listen()`.
+- `cache.ts` is a **second** port beside `repository.ts`, not part of it. The repository is the store of record; the cache is evictable and may throw, and keeping the two types apart is what stops a route treating an evictable value as durable. Only these two files may import their respective drivers. See [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md).
 - `apps/realtime` is one file. `RoomDurableObject` is the entire live-coordination plane; see [`realtime.md`](realtime.md) for its internals.
 
 ## Data model
 
-Everything below lives in MongoDB in production and in an equivalent in-memory `Map`-backed repository for local development and tests — both implement the same `Repository` interface in `apps/api/src/repository.ts`, so route handlers never know which one is running.
+Everything below is durable state and lives in MongoDB in production (the ephemeral rate-limit and session-touch keys described in [ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) are deliberately **not** part of this model — nothing here is ever stored in Redis), and in an equivalent in-memory `Map`-backed repository for local development and tests — both implement the same `Repository` interface in `apps/api/src/repository.ts`, so route handlers never know which one is running.
 
 ```mermaid
 erDiagram
@@ -378,6 +386,7 @@ Full rationale, alternatives considered, and consequences for each of these live
 | Three separate auth surfaces (session cookie, PAT, first-party OIDC)                 | The product has three real callers: a browser (needs CSRF-safe cookies), trusted automation/CLIs (needs revocable scoped tokens, not the user's own password), and other first-party Threadline surfaces that want a standard identity token (needs OIDC so nothing bespoke has to be built twice).              | A single API-key scheme for everything. Simpler on day one, but conflates "a human is in a browser" with "a script is running unattended," which is exactly the distinction CSRF protection depends on. | [0004](decisions/0004-three-auth-surfaces.md)                |
 | SQLite-backed, hibernatable Durable Object storage                                   | Hibernation lets an idle-but-connected room cost near-zero compute; SQLite storage gives transactional guarantees for the undelivered-event queue during an outage.                                                                                                                                              | Plain key-value storage, and/or non-hibernatable sockets. Simpler code, but keeps every room's Durable Object resident (and billed) for the life of every connection, idle or not.                      | [0005](decisions/0005-sqlite-hibernatable-durable-object.md) |
 | `createApp()` takes an injected `Repository` and returns a listener-less Express app | The same function boots identically in Vercel's Node runtime, a Docker container, `kubectl`-managed pods, and `supertest` in CI. `index.ts` is the only file that knows about `process.env` or `app.listen()`.                                                                                                   | Framework-specific serverless handlers per platform. Would require re-implementing routing/middleware per target instead of once.                                                                       | —                                                            |
+| A separate `Cache` port for ephemeral counters, backed by Redis                       | Rate-limit windows and `lastUsedAt` bookkeeping are written to be discarded, so they don't belong in the store of record. `Cache` is optional at every level and every call site degrades toward the repository — never toward less enforcement. Nothing about authorization is cached.                          | Adding the two operations to `Repository`. One port instead of two, but it removes the type-level distinction between "durable" and "evictable" — and that distinction is the safety property.          | [0009](decisions/0009-redis-for-ephemeral-counters.md)       |
 
 ## Live deployment topology
 
@@ -398,6 +407,7 @@ graph TB
     end
 
     atlas[("MongoDB Atlas")]
+    redis[("Redis<br/>optional ephemeral cache")]
 
     Browser -->|"HTTPS"| webApp
     webApp -->|"/api/identity/* rewrite<br/>(same-origin cookie)"| apiApp
@@ -405,18 +415,23 @@ graph TB
     worker --> do
     do -->|"ingest webhook"| apiApp
     apiApp --> atlas
+    apiApp -.->|"when REDIS_URL is set"| redis
 
     style vercel fill:#0e1a12,stroke:#52e0a2,color:#fff
     style cf fill:#2b2140,stroke:#8a63ff,color:#fff
+    style redis fill:#2b2140,stroke:#8a63ff,color:#fff
 ```
 
-Because `apps/api` runs as Vercel serverless functions here rather than a long-lived Node process, it has no in-process state at all between requests — which is exactly why the rate limiter is backed by `Repository.incrementRateLimit` (an atomic Mongo operation) instead of an in-memory `Map`. A `Map` would silently reset per cold-started instance, making the limit inconsistent across concurrent requests. See [`security.md`](security.md#rate-limits).
+Because `apps/api` runs as Vercel serverless functions here rather than a long-lived Node process, it has no in-process state at all between requests — which is exactly why the rate limiter is backed by shared state (an atomic Redis `INCR`, or `Repository.incrementRateLimit` against Mongo) instead of an in-memory `Map`. A `Map` would silently reset per cold-started instance, making the limit inconsistent across concurrent requests. See [`security.md`](security.md#rate-limits).
+
+That same serverless shape is what makes the Redis path here a measured trade rather than a free win: a cold instance serves its first requests before its Redis socket is ready and counts in Mongo, while a warm one counts in Redis, and the two tallies are independent. Against this deployment the effective login limit came out around 20 attempts instead of 12. It is bounded and per-IP, but it is looser — see the trade-offs table in [`../ARCHITECTURE.md`](../ARCHITECTURE.md#architectural-trade-offs-and-current-limitations).
 
 ## Where to go next
 
 - [`frontend.md`](frontend.md) — `apps/web` route tree, session-gate flow, theme system, component inventory
 - [`api.md`](api.md) — REST surface, auth model, ABAC policy in detail, OIDC provider
 - [`realtime.md`](realtime.md) — Durable Object internals, WebSocket protocol, WebRTC mesh
+- [`releases.md`](releases.md) — how a merge to `main` becomes a tagged release with artifacts
 - [`security.md`](security.md) — trust boundaries, secrets, session/token lifecycle, rate limits
 - [`testing.md`](testing.md) — how the test suite is structured and what it actually proves
 - [`glossary.md`](glossary.md) — every domain term used across these docs, alphabetically

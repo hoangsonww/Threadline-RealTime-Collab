@@ -827,8 +827,17 @@ export function createOpenApiDocument({ serverUrl, issuer }: OpenApiDocumentOpti
       schemas: {
         Health: {
           type: "object",
-          required: ["status", "service"],
-          properties: { status: { type: "string", const: "ok" }, service: { type: "string", const: "threadline-api" } },
+          required: ["status", "service", "cache"],
+          properties: {
+            status: { type: "string", const: "ok" },
+            service: { type: "string", const: "threadline-api" },
+            cache: {
+              type: "string",
+              enum: ["ready", "unavailable", "disabled"],
+              description:
+                "State of the optional ephemeral cache. `disabled` means no `REDIS_URL` is configured; `unavailable` means it is configured but not answering, and rate limits and session bookkeeping are being served from MongoDB instead. The service is healthy in all three states.",
+            },
+          },
         },
         Error: {
           type: "object",

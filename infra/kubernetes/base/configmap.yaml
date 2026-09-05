@@ -12,3 +12,9 @@ data:
   WEB_ORIGIN: https://threadline.example.invalid
   OIDC_ISSUER: https://threadline.example.invalid/api/identity
   AUTH_ACTION_ORIGIN: https://threadline.example.invalid
+  # Namespaces every cache key so a Redis shared with another application stays
+  # attributable. Matches the default the code applies when this is unset, and is
+  # spelled out here because a shared instance is the case where it matters —
+  # a prefix keeps keys identifiable, though it does not partition the memory
+  # budget. Inert without REDIS_URL. See docs/decisions/0009-redis-for-ephemeral-counters.md
+  REDIS_KEY_PREFIX: "threadline:"

@@ -5,6 +5,7 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
 ## Table of contents
 
 - [Monitoring and health checks](#monitoring-and-health-checks)
+  - [`cache` on the API's `/health`](#cache-on-the-apis-health)
 - [Incident response process](#incident-response-process)
 - [Incidents](#incidents)
   - [Incident: room tickets always rejected — `ROOM_TICKET_SECRET` mismatch](#incident-room-tickets-always-rejected--room_ticket_secret-mismatch)
@@ -29,7 +30,7 @@ This is a runbook, not a wishlist: how to tell whether the deployed system is ac
 
 | Plane           | Endpoint              | Proves                                       | Does **not** prove                                                                    |
 | --------------- | --------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `apps/api`      | `GET /health`         | The process booted, config passed validation | `WEB_ORIGIN` is correct, secrets match the other planes, Mongo indexes exist          |
+| `apps/api`      | `GET /health`         | The process booted, config passed validation, and whether the ephemeral cache is answering (`cache`) | `WEB_ORIGIN` is correct, secrets match the other planes, Mongo indexes exist          |
 | `apps/realtime` | `GET /health`         | The Worker is deployed and routable          | `ROOM_TICKET_SECRET`/`PERSISTENCE_SECRET` match the API, `PERSISTENCE_WEBHOOK` is set |
 | `apps/web`      | `GET /` returns `200` | The build succeeded and static assets serve  | `NEXT_PUBLIC_API_ORIGIN`/`NEXT_PUBLIC_REALTIME_ORIGIN` were set at build time         |
 
@@ -47,6 +48,20 @@ flowchart LR
     H -- no --> I["persistence webhook is misconfigured —<br/>see Incidents below"]
     H -- yes --> J["genuinely healthy"]
 ```
+
+### `cache` on the API's `/health`
+
+`GET /health` on `apps/api` returns `cache: "ready" | "unavailable" | "disabled"`. **None of the three is an outage**, and paging on any of them is wrong:
+
+| Value | Means | What to do |
+| --- | --- | --- |
+| `disabled` | No `REDIS_URL` is configured | Nothing. This is the supported default; rate limits and session bookkeeping run on MongoDB. |
+| `ready` | Redis is connected and answering | Nothing. |
+| `unavailable` | `REDIS_URL` is set but the connection is down | Not urgent — every affected call has already fallen back to MongoDB and the service is fully functional, just paying the pre-[ADR-0009](decisions/0009-redis-for-ephemeral-counters.md) cost. Check the Redis provider, then look for `Redis is unreachable` in the API logs. |
+
+Two behaviours are worth knowing before they surprise someone. First, **no restart is needed to recover**: `createRedisCache()` never blocks the boot on the connection, so an API that started while Redis was down reads `unavailable`, serves every request from MongoDB, and flips to `ready` on its own within seconds of Redis coming back. `disabled` therefore always means "no `REDIS_URL`", never "we gave up". Second, rate-limit counters do not survive the switch between stores in either direction: a caller mid-window when Redis drops — or returns — gets a fresh budget, bounded to one window. Both are recorded in [`security.md`](security.md#where-the-counters-actually-live).
+
+The logging is deliberately quiet about it. One line when an outage starts (`Redis is unreachable, so rate limits and session bookkeeping are falling back to MongoDB`) and one when it ends (`Redis reconnected; the cache is serving again`) — not one per reconnect attempt, and never one per request. If those two lines are interleaving repeatedly, the connection is flapping rather than down, which is a different problem.
 
 Every step past "all `/health` checks pass" in this flowchart is exactly the closed-loop test used to find real incidents #1, #3, and #4 below — a plain curl-based script that registers an account, creates a room, opens a WebSocket, and checks whether a message sent through it is actually still there on a later, independent request.
 
