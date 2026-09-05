@@ -34,7 +34,7 @@ Nothing above needs Redis. `apps/api` uses it only when `REDIS_URL` is set, and 
 
 See the [root README](README.md#running-it-locally) for what each of the three services needs and where they run. `npm install` also installs the `husky` hooks (below) — no separate setup step for them.
 
-When something doesn't work, run `npm run doctor` before assuming it's a code defect. It checks Node against `engines`, dependency consistency, the git hooks, your local env files, and whether ports 3000/4000/8787/27017 are free — and prints the remedy for anything it finds, not just the finding.
+When something doesn't work, run `npm run doctor` before assuming it's a code defect. It checks Node against `engines`, dependency consistency, the git hooks, your local env files, and whether ports 3000/4000/8787/27017/6379 are free — and prints the remedy for anything it finds, not just the finding.
 
 `make help` lists every available task.
 

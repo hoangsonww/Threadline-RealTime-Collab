@@ -178,19 +178,28 @@ const ports = [
   [4000, "apps/api"],
   [8787, "apps/realtime"],
   [27017, "MongoDB"],
+  [6379, "Redis"],
 ];
 
 for (const [port, owner] of ports) {
-  // Sequential on purpose: four probes with a 400 ms timeout each is fast
+  // Sequential on purpose: five probes with a 400 ms timeout each is fast
   // enough, and checking them in parallel would report ports as free when the
   // real cause is that the machine is briefly refusing connections under load.
   const busy = await portInUse(port);
-  if (busy) {
+  // Redis is optional and nothing in `npm run dev` binds it, so a listener there
+  // is a service you already started rather than a conflict to resolve. Reporting
+  // it as a warning would train people to ignore this section.
+  const optional = port === 6379;
+  if (busy && optional) {
+    ok(`Port ${port}`, `a ${owner} is listening — the API will use it if REDIS_URL points here`);
+  } else if (busy) {
     warn(
       `Port ${port}`,
       `already in use (${owner} expects it)`,
       `lsof -ti:${port} | xargs kill  — or leave it if that is your own stack`,
     );
+  } else if (optional) {
+    ok(`Port ${port}`, `free — no local ${owner}, so rate limits and session touches use MongoDB`);
   } else {
     ok(`Port ${port}`, `free (${owner})`);
   }
